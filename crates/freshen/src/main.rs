@@ -8,12 +8,15 @@ use freshen_lib::{Platform, Registry, Runner};
 
 mod cli;
 
+#[cfg(feature = "test-harness")]
+mod test_steps;
+
 use cli::Cli;
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let options = cli.run_options();
-    let registry = Registry::new();
+    let registry = build_registry();
 
     let Some(platform) = Platform::current() else {
         eprintln!("freshen: unsupported operating system");
@@ -31,4 +34,13 @@ fn main() -> ExitCode {
     let summary = Runner::with_options(steps, options).run();
     print!("{summary}");
     summary.exit_code()
+}
+
+fn build_registry() -> Registry {
+    let registry = Registry::new();
+
+    #[cfg(feature = "test-harness")]
+    let registry = test_steps::with_probe_steps(registry);
+
+    registry
 }

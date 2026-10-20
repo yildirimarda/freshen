@@ -19,6 +19,8 @@
 
 Unit and integration tests for the Rust implementation live in the Cargo
 workspace (`cargo test --all-features`); this script keeps only the
-repository-level checks. PLAN.md Milestone 2 adds a stub-based harness (fake
-`brew`, `uv`, `mise`, `docker`, `colima` on `PATH`) that asserts the order of
-calls. Tests must never invoke the real tools.
+repository-level checks. The stub-based integration harness lives in
+`crates/freshen/tests/`: it runs the built binary with temporary stub `brew`,
+`uv`, `mise`, `docker` and `colima` executables on `PATH` and asserts the order
+they were called. The binary is built with the `test-harness` feature, so run
+the Rust tests with `--all-features`. Tests must never invoke the real tools.

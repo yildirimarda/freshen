@@ -13,6 +13,9 @@ readme.workspace = true
 name = "freshen"
 path = "src/main.rs"
 
+[features]
+test-harness = []
+
 [dependencies]
 clap = { version = "~4.5", features = ["derive"] }
 freshen-lib = { path = "../freshen-lib" }
