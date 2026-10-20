@@ -7,12 +7,14 @@
 pub mod platform;
 pub mod process;
 pub mod registry;
+pub mod runner;
 pub mod step;
 pub mod system;
 
 pub use platform::Platform;
 pub use process::{Backoff, CommandSpec, OutputStream, ProcessError, ProcessOutput};
 pub use registry::{Registry, RegistryError};
+pub use runner::{RunSummary, Runner, SkipReason, StepResult, StepStatus};
 pub use step::{CheckReport, Detection, Operation, OutdatedItem, Step, StepError, StepId};
 pub use system::{
     Arch, Distro, HostProbe, OsInfo, Privilege, SystemInfo, SystemProbe, Terminal, TerminalApp,
