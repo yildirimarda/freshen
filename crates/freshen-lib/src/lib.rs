@@ -5,6 +5,7 @@
 //! wrapper around this library. One module per step.
 
 pub mod apps;
+pub mod check;
 pub mod containers;
 pub mod homebrew;
 pub mod listing;
@@ -22,6 +23,7 @@ pub use apps::{
     find_running_apps, quit_apps, quit_choice, reopen_apps, AppScan, AppSystem, MacAppSystem,
     QuitChoice, QuitPolicy, RunningApp,
 };
+pub use check::{CheckResult, CheckStatus, CheckSummary};
 pub use containers::{
     parse_compose_projects, parse_standalone_containers, ComposeProject, StandaloneContainer,
 };

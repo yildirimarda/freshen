@@ -36,6 +36,12 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    if cli.check {
+        let summary = Runner::with_options(steps, options).check();
+        print!("{summary}");
+        return summary.exit_code();
+    }
+
     let summary = Runner::with_options(steps, options).run();
     print!("{summary}");
     summary.exit_code()

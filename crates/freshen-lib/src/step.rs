@@ -91,6 +91,19 @@ impl OutdatedItem {
     }
 }
 
+impl fmt::Display for OutdatedItem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.name)?;
+        if let Some(current) = &self.current {
+            write!(f, " {current}")?;
+        }
+        if let Some(latest) = &self.latest {
+            write!(f, " -> {latest}")?;
+        }
+        Ok(())
+    }
+}
+
 /// Read-only result of [`Step::check`].
 ///
 /// An empty report means the step is up to date. The check must not change

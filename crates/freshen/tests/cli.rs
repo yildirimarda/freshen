@@ -31,6 +31,7 @@ fn help_lists_every_flag() {
     let text = stdout(&output);
     for flag in [
         "--dry-run",
+        "--check",
         "--list-steps",
         "--only",
         "--skip",
@@ -74,6 +75,18 @@ fn dry_run_with_every_builtin_step_excluded_plans_nothing() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(stdout(&output).contains("0 ok, 0 planned, 0 skipped, 0 failed"));
+}
+
+#[test]
+fn check_with_every_builtin_step_excluded_reports_up_to_date() {
+    let output = run(&[
+        "--check",
+        "--skip",
+        "brew,brew-formulae,brew-casks,brew-autoremove,brew-cleanup,brew-reopen,colima-stop,colima-start,docker,uv,mise",
+    ]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(stdout(&output), "Everything is up to date.\n");
 }
 
 #[test]

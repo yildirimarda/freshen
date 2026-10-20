@@ -16,6 +16,10 @@ pub struct Cli {
     #[arg(long)]
     pub dry_run: bool,
 
+    /// Report outdated items without changing anything; exit 2 when updates are pending.
+    #[arg(long)]
+    pub check: bool,
+
     /// List every known step, whether it was detected and why it would be skipped.
     #[arg(long)]
     pub list_steps: bool,
@@ -72,6 +76,7 @@ mod tests {
         let options = cli.run_options();
 
         assert!(!cli.list_steps);
+        assert!(!cli.check);
         assert!(!options.is_dry_run());
         assert!(!options.assume_yes());
         assert!(!options.force_kill());
@@ -83,6 +88,7 @@ mod tests {
         let cli = parse(&[
             "freshen",
             "--dry-run",
+            "--check",
             "--list-steps",
             "--only",
             "brew",
@@ -94,6 +100,7 @@ mod tests {
         let options = cli.run_options();
 
         assert!(cli.list_steps);
+        assert!(cli.check);
         assert!(options.is_dry_run());
         assert!(options.assume_yes());
         assert!(options.force_kill());
@@ -143,6 +150,7 @@ mod tests {
 
         for flag in [
             "--dry-run",
+            "--check",
             "--list-steps",
             "--only",
             "--skip",

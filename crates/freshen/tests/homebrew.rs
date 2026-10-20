@@ -570,3 +570,85 @@ fn no_zellij_warning_outside_a_session_or_when_zellij_is_current() {
         );
     }
 }
+
+#[test]
+fn check_reports_outdated_versions_and_exits_2() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_script(
+        "brew",
+        r#"case "$*" in
+  "outdated --formula")
+    printf 'jq (1.7.1) < 1.8.0\nnode (20.10.0) < 20.11.0\n'
+    ;;
+  "outdated --cask --greedy")
+    printf 'firefox (121.0) != 122.0\n'
+    ;;
+esac"#,
+    );
+
+    let output = run(&tools, &["--check", "--only", "brew-formulae,brew-casks"]);
+
+    assert_eq!(output.status.code(), Some(2), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.calls(),
+        ["brew outdated --formula", "brew outdated --cask --greedy"]
+    );
+
+    let text = stdout(&output);
+    assert!(text.contains("Homebrew formulae:"), "output: {text}");
+    assert!(text.contains("jq 1.7.1 -> 1.8.0"), "output: {text}");
+    assert!(text.contains("node 20.10.0 -> 20.11.0"), "output: {text}");
+    assert!(text.contains("firefox 121.0 -> 122.0"), "output: {text}");
+    assert!(
+        text.contains("3 update(s) pending across 2 step(s)."),
+        "output: {text}"
+    );
+}
+
+#[test]
+fn check_exits_zero_when_homebrew_is_up_to_date() {
+    let tools = StubTools::new(&["brew"]);
+
+    let output = run(&tools, &["--check", "--only", "brew-formulae,brew-casks"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.calls(),
+        ["brew outdated --formula", "brew outdated --cask --greedy"]
+    );
+    assert_eq!(stdout(&output), "Everything is up to date.\n");
+}
+
+#[test]
+fn check_skips_a_missing_tool_and_never_calls_it() {
+    let tools = StubTools::new(&[]);
+
+    let output = run(&tools, &["--check", "--only", "brew-formulae"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(tools.calls().is_empty());
+    assert_eq!(stdout(&output), "Everything is up to date.\n");
+}
+
+#[test]
+fn check_reports_a_failed_query_with_exit_1() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_script(
+        "brew",
+        r#"case "$*" in
+  "outdated --formula")
+    exit 1
+    ;;
+esac"#,
+    );
+
+    let output = run(&tools, &["--check", "--only", "brew-formulae"]);
+
+    assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
+    assert_eq!(tools.calls(), ["brew outdated --formula"]);
+    assert!(
+        stdout(&output).contains("failed during check"),
+        "output: {}",
+        stdout(&output)
+    );
+}

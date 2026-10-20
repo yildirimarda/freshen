@@ -73,7 +73,7 @@ Goal: one tool for macOS, Linux and Windows, written in Rust and shipped as a si
 
 The "deep detail" that sets the tool apart: updates should be predictable, reversible and never leave the machine half-changed.
 
-- [ ] `--check` mode: query every detected step read-only and print what is outdated (names, current -> new version) without changing anything; exit code 0 when up to date, 2 when updates are pending
+- [x] `--check` mode: query every detected step read-only and print what is outdated (names, current -> new version) without changing anything; exit code 0 when up to date, 2 when updates are pending
 - [ ] Before/after version diff in the summary for every step (what actually changed), with `--json` and `--markdown` report output
 - [ ] Pre-upgrade snapshot: record installed versions per step (brew list --versions, brew bundle dump, uv tool list, mise ls, package lists) to a timestamped file so a rollback is possible
 - [ ] Rollback hints in the summary: print the exact commands to return to the previous versions recorded in the snapshot

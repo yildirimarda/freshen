@@ -185,10 +185,47 @@ fn lines(output: &str) -> Vec<String> {
 }
 
 fn outdated(step: StepId, args: &[&str]) -> Result<CheckReport, StepError> {
-    let output = run_brew(step, CommandSpec::new("brew").args(["outdated"]).args(args))?;
+    let output = CommandSpec::new("brew")
+        .args(["outdated"])
+        .args(args)
+        .run()
+        .map_err(|error| StepError::check(step, error.to_string()))?;
     Ok(CheckReport::from_items(
-        lines(output.stdout()).into_iter().map(OutdatedItem::new),
+        lines(output.stdout())
+            .iter()
+            .map(|line| parse_outdated(line)),
     ))
+}
+
+/// Parses one line of `brew outdated` output.
+///
+/// Homebrew prints `name (current) < latest` for formulae and
+/// `name (current) != latest` for casks, but older versions and some taps
+/// print only the name. Both forms are accepted so `--check` still reports the
+/// item when the versions are missing.
+fn parse_outdated(line: &str) -> OutdatedItem {
+    let line = line.trim();
+    let Some((name, rest)) = line.split_once(" (") else {
+        return OutdatedItem::new(line);
+    };
+    let Some((current, rest)) = rest.split_once(')') else {
+        return OutdatedItem::new(line);
+    };
+
+    let item = OutdatedItem::new(name).with_current(current);
+    match latest_version(rest.trim()) {
+        Some(latest) => item.with_latest(latest),
+        None => item,
+    }
+}
+
+fn latest_version(rest: &str) -> Option<&str> {
+    let rest = rest
+        .strip_prefix("< ")
+        .or_else(|| rest.strip_prefix("!= "))
+        .or_else(|| rest.strip_prefix("== "))?;
+    let latest = rest.split_whitespace().next()?;
+    (!latest.is_empty()).then_some(latest)
 }
 
 fn report_cask_apps(apps: &[String]) {
@@ -252,7 +289,7 @@ impl Step for FormulaeStep {
     }
 
     fn check(&self) -> Result<CheckReport, StepError> {
-        outdated(FORMULAE, &["--formula", "--quiet"])
+        outdated(FORMULAE, &["--formula"])
     }
 
     fn run(&self) -> Result<(), StepError> {
@@ -355,7 +392,7 @@ impl Step for CasksStep {
     }
 
     fn check(&self) -> Result<CheckReport, StepError> {
-        outdated(CASKS, &["--cask", "--greedy", "--quiet"])
+        outdated(CASKS, &["--cask", "--greedy"])
     }
 
     fn run(&self) -> Result<(), StepError> {
@@ -531,7 +568,8 @@ impl Step for ReopenStep {
 #[cfg(test)]
 mod tests {
     use super::{
-        cask_app_artifacts, installed_app_paths, register, CaskError, CASKS, FORMULAE, REOPEN,
+        cask_app_artifacts, installed_app_paths, parse_outdated, register, CaskError, CASKS,
+        FORMULAE, REOPEN,
     };
     use crate::platform::Platform;
     use crate::registry::Registry;
@@ -544,6 +582,37 @@ mod tests {
             .iter()
             .map(|step| step.id())
             .collect()
+    }
+
+    #[test]
+    fn parses_formula_and_cask_outdated_lines_with_versions() {
+        let formula = parse_outdated("jq (1.7.1) < 1.8.0");
+        assert_eq!(formula.name(), "jq");
+        assert_eq!(formula.current(), Some("1.7.1"));
+        assert_eq!(formula.latest(), Some("1.8.0"));
+
+        let cask = parse_outdated("firefox (121.0) != 122.0");
+        assert_eq!(cask.name(), "firefox");
+        assert_eq!(cask.current(), Some("121.0"));
+        assert_eq!(cask.latest(), Some("122.0"));
+    }
+
+    #[test]
+    fn parses_outdated_lines_without_versions() {
+        let item = parse_outdated("node");
+
+        assert_eq!(item.name(), "node");
+        assert_eq!(item.current(), None);
+        assert_eq!(item.latest(), None);
+    }
+
+    #[test]
+    fn parses_tap_names_and_extra_suffixes() {
+        let item = parse_outdated("user/tap/tool (0.9.0) < 1.0.0 (auto_updates)");
+
+        assert_eq!(item.name(), "user/tap/tool");
+        assert_eq!(item.current(), Some("0.9.0"));
+        assert_eq!(item.latest(), Some("1.0.0"));
     }
 
     #[test]
