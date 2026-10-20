@@ -58,6 +58,7 @@ Goal: one tool for macOS, Linux and Windows, written in Rust and shipped as a si
 - [ ] Port the warnings: processes still running on an old Node version (with the app that started them) and zellij upgraded from inside a zellij session
 - [ ] Remove the zsh implementation once parity tests pass and document the migration in README and CHANGELOG
 - [ ] Add a CI job that checks the code compiles against the MSRV (`rust-version` in the workspace manifest) with `cargo check --workspace`, so an accidental use of a newer language feature fails before release
+- [ ] Validate the step graph in the registry: unknown prerequisite/conflict ids and dependency cycles fail with a clear message, covered by tests
 
 ## Milestone 3: Safety and Reliability
 
