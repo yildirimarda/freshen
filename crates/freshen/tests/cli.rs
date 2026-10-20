@@ -47,7 +47,7 @@ fn list_steps_lists_the_builtin_homebrew_steps() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
-    assert!(text.contains("Steps (5):"), "listing: {text}");
+    assert!(text.contains("Steps (6):"), "listing: {text}");
     assert!(text.contains("brew"), "listing: {text}");
     assert!(text.contains("brew-casks"), "listing: {text}");
 }
@@ -65,7 +65,7 @@ fn dry_run_with_every_builtin_step_excluded_plans_nothing() {
     let output = run(&[
         "--dry-run",
         "--skip",
-        "brew,brew-formulae,brew-casks,brew-autoremove,brew-cleanup",
+        "brew,brew-formulae,brew-casks,brew-autoremove,brew-cleanup,brew-reopen",
     ]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));

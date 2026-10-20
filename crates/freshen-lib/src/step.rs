@@ -16,6 +16,7 @@
 
 use std::fmt;
 
+use crate::options::RunOptions;
 use crate::platform::Platform;
 
 /// Stable identifier of a step, e.g. `"brew"` or `"uv"`.
@@ -247,6 +248,15 @@ pub trait Step {
     /// Performs the upgrade.
     fn run(&self) -> Result<(), StepError>;
 
+    /// Performs the upgrade with the options of the current run.
+    ///
+    /// Steps that prompt the user or kill processes use this to honour
+    /// `--yes` and `--force-kill`. The default ignores the options and calls
+    /// [`Step::run`], so a step only overrides it when it needs them.
+    fn run_with_options(&self, _options: &RunOptions) -> Result<(), StepError> {
+        self.run()
+    }
+
     /// Removes leftovers after the upgrade. Defaults to doing nothing.
     fn cleanup(&self) -> Result<(), StepError> {
         Ok(())
@@ -272,6 +282,7 @@ pub trait Step {
 #[cfg(test)]
 mod tests {
     use super::{CheckReport, Detection, Operation, OutdatedItem, Step, StepError, StepId};
+    use crate::options::RunOptions;
     use crate::platform::Platform;
     use std::cell::Cell;
 
@@ -444,6 +455,15 @@ mod tests {
 
         assert_eq!(step.run_calls.get(), 1);
         assert_eq!(step.cleanup_calls.get(), 1);
+    }
+
+    #[test]
+    fn run_with_options_defaults_to_run() {
+        let step = FakeStep::new("brew", "Homebrew");
+
+        assert!(step.run_with_options(&RunOptions::new()).is_ok());
+
+        assert_eq!(step.run_calls.get(), 1);
     }
 
     #[test]

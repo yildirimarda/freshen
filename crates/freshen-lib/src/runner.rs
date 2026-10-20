@@ -334,22 +334,23 @@ impl<'a> Runner<'a> {
     /// Runs every step and returns the collected results.
     #[must_use]
     pub fn run(&self) -> RunSummary {
-        let dry_run = self.options.is_dry_run();
         RunSummary::from_results(
             self.steps
                 .iter()
-                .map(|step| run_step(*step, dry_run))
+                .map(|step| run_step(*step, &self.options))
                 .collect(),
         )
     }
 }
 
-fn run_step(step: &dyn Step, dry_run: bool) -> StepResult {
+fn run_step(step: &dyn Step, options: &RunOptions) -> StepResult {
     let started = Instant::now();
     match step.detect() {
         Ok(Detection::NotInstalled) => StepResult::skipped(step, started.elapsed()),
-        Ok(Detection::Installed) if dry_run => StepResult::planned(step, started.elapsed()),
-        Ok(Detection::Installed) => match step.run() {
+        Ok(Detection::Installed) if options.is_dry_run() => {
+            StepResult::planned(step, started.elapsed())
+        }
+        Ok(Detection::Installed) => match step.run_with_options(options) {
             Ok(()) => match step.cleanup() {
                 Ok(()) => StepResult::ok(step, started.elapsed()),
                 Err(error) => StepResult::failed(step, started.elapsed(), error),

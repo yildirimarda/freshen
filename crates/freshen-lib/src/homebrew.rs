@@ -6,14 +6,21 @@
 //! command instead of aborting the rest of the block.
 //!
 //! Casks are inspected with `brew info --cask --json=v2` before the upgrade so
-//! the app artifacts a cask will replace are known. Only the artifact names are
-//! collected here; quitting and reopening the running apps is a separate step.
+//! the app artifacts a cask will replace are known. Running apps are quit
+//! before the upgrade and reopened after cleanup through [`crate::apps`].
 
+use std::cell::RefCell;
 use std::env;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use serde_json::Value;
 
+use crate::apps::{
+    find_running_apps, quit_apps, quit_choice, reopen_apps, MacAppSystem, QuitChoice, QuitPolicy,
+};
+use crate::options::RunOptions;
 use crate::platform::Platform;
 use crate::process::{CommandSpec, ProcessOutput};
 use crate::registry::Registry;
@@ -24,21 +31,39 @@ const FORMULAE: StepId = "brew-formulae";
 const CASKS: StepId = "brew-casks";
 const AUTOREMOVE: StepId = "brew-autoremove";
 const CLEANUP: StepId = "brew-cleanup";
+const REOPEN: StepId = "brew-reopen";
 
 const HOMEBREW_PLATFORMS: [Platform; 2] = [Platform::Macos, Platform::Linux];
+
+/// Bundle ids of the apps that were quit and still need to be reopened.
+#[derive(Clone, Default)]
+struct ReopenQueue(Rc<RefCell<Vec<String>>>);
+
+impl ReopenQueue {
+    fn extend(&self, bundle_ids: impl IntoIterator<Item = String>) {
+        self.0.borrow_mut().extend(bundle_ids);
+    }
+
+    fn take(&self) -> Vec<String> {
+        std::mem::take(&mut *self.0.borrow_mut())
+    }
+}
 
 /// Registers every Homebrew step, in the order the zsh script runs them.
 ///
 /// Prerequisites make the ordering explicit: formulae after the update, casks
-/// after formulae, autoremove and cleanup last.
+/// after formulae, autoremove and cleanup last, and the quit apps are reopened
+/// only after cleanup.
 #[must_use]
 pub fn register(registry: Registry) -> Registry {
+    let reopen = ReopenQueue::default();
     registry
         .with(UpdateStep)
         .with(FormulaeStep)
-        .with(CasksStep)
+        .with(CasksStep::new(reopen.clone()))
         .with(AutoremoveStep)
         .with(CleanupStep)
+        .with(ReopenStep::new(reopen))
 }
 
 /// A failure while reading Homebrew cask metadata.
@@ -246,7 +271,67 @@ impl Step for FormulaeStep {
     }
 }
 
-struct CasksStep;
+struct CasksStep {
+    reopen: ReopenQueue,
+}
+
+impl CasksStep {
+    fn new(reopen: ReopenQueue) -> Self {
+        Self { reopen }
+    }
+
+    fn quit_running_apps(&self, apps: &[String], options: &RunOptions) -> QuitChoice {
+        let mut roots = vec![PathBuf::from("/Applications")];
+        if let Some(home) = env::var_os("HOME") {
+            roots.push(PathBuf::from(home).join("Applications"));
+        }
+        let installed = installed_app_paths(apps, &roots);
+        let self_bundle_id = env::var("__CFBundleIdentifier")
+            .ok()
+            .filter(|bundle_id| !bundle_id.is_empty());
+        let system = MacAppSystem;
+        let scan = find_running_apps(&system, &installed, self_bundle_id.as_deref());
+
+        for name in scan.protected() {
+            println!(
+                "warning: {name} is the terminal running this script, not quitting it (restart it manually after the upgrade)."
+            );
+        }
+
+        if scan.is_empty() {
+            return QuitChoice::Quit;
+        }
+
+        println!("Running apps that will be quit and reopened:");
+        for app in scan.running() {
+            println!("   - {}", app.name());
+        }
+
+        let choice = if options.assume_yes() {
+            QuitChoice::Quit
+        } else {
+            ask_quit_choice()
+        };
+
+        if choice != QuitChoice::Quit {
+            return choice;
+        }
+
+        let policy = QuitPolicy::from_env(options.force_kill());
+        let reopen_ids = quit_apps(&system, scan.running(), &policy);
+        self.reopen.extend(reopen_ids);
+        QuitChoice::Quit
+    }
+}
+
+fn ask_quit_choice() -> QuitChoice {
+    print!("Quit these apps and upgrade casks? [Y]es / [s]kip quitting / [n]o: ");
+    let _ = io::stdout().flush();
+
+    let mut answer = String::new();
+    let _ = io::stdin().read_line(&mut answer);
+    quit_choice(&answer)
+}
 
 impl Step for CasksStep {
     fn id(&self) -> StepId {
@@ -266,6 +351,10 @@ impl Step for CasksStep {
     }
 
     fn run(&self) -> Result<(), StepError> {
+        self.run_with_options(&RunOptions::new())
+    }
+
+    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
         let outdated = run_brew(
             CASKS,
             CommandSpec::new("brew").args(["outdated", "--cask", "--greedy", "--quiet"]),
@@ -283,12 +372,21 @@ impl Step for CasksStep {
         for cask in &casks {
             info = info.arg(cask);
         }
+        let mut choice = QuitChoice::Quit;
         match info.run() {
             Ok(output) => match cask_app_artifacts(output.stdout()) {
-                Ok(apps) => report_cask_apps(&apps),
+                Ok(apps) => {
+                    report_cask_apps(&apps);
+                    choice = self.quit_running_apps(&apps, options);
+                }
                 Err(error) => eprintln!("freshen: could not read cask metadata: {error}"),
             },
             Err(error) => eprintln!("freshen: could not inspect casks: {error}"),
+        }
+
+        if choice == QuitChoice::SkipCasks {
+            println!("warning: Cask upgrade skipped by user.");
+            return Ok(());
         }
 
         run_brew(
@@ -375,9 +473,58 @@ impl Step for CleanupStep {
     }
 }
 
+struct ReopenStep {
+    reopen: ReopenQueue,
+}
+
+impl ReopenStep {
+    fn new(reopen: ReopenQueue) -> Self {
+        Self { reopen }
+    }
+}
+
+impl Step for ReopenStep {
+    fn id(&self) -> StepId {
+        REOPEN
+    }
+
+    fn display_name(&self) -> &str {
+        "Homebrew app reopen"
+    }
+
+    fn detect(&self) -> Result<Detection, StepError> {
+        Ok(detect_brew())
+    }
+
+    fn check(&self) -> Result<CheckReport, StepError> {
+        Ok(CheckReport::up_to_date())
+    }
+
+    fn run(&self) -> Result<(), StepError> {
+        let bundle_ids = self.reopen.take();
+        if bundle_ids.is_empty() {
+            return Ok(());
+        }
+
+        println!("Reopening apps that were quit");
+        reopen_apps(&MacAppSystem, &bundle_ids);
+        Ok(())
+    }
+
+    fn prerequisites(&self) -> &'static [StepId] {
+        &[CLEANUP]
+    }
+
+    fn platforms(&self) -> &'static [Platform] {
+        &HOMEBREW_PLATFORMS
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{cask_app_artifacts, installed_app_paths, register, CaskError, CASKS, FORMULAE};
+    use super::{
+        cask_app_artifacts, installed_app_paths, register, CaskError, CASKS, FORMULAE, REOPEN,
+    };
     use crate::platform::Platform;
     use crate::registry::Registry;
     use crate::step::StepId;
@@ -401,6 +548,7 @@ mod tests {
                 "brew-casks",
                 "brew-autoremove",
                 "brew-cleanup",
+                "brew-reopen",
             ]
         );
         assert_eq!(
@@ -411,6 +559,7 @@ mod tests {
                 "brew-casks",
                 "brew-autoremove",
                 "brew-cleanup",
+                "brew-reopen",
             ]
         );
     }
@@ -424,6 +573,17 @@ mod tests {
             .unwrap_or_else(|| panic!("casks step is not registered"));
 
         assert_eq!(casks.prerequisites(), [FORMULAE]);
+    }
+
+    #[test]
+    fn reopen_runs_after_cleanup() {
+        let registry = register(Registry::new());
+        let reopen = registry
+            .steps()
+            .find(|step| step.id() == REOPEN)
+            .unwrap_or_else(|| panic!("reopen step is not registered"));
+
+        assert_eq!(reopen.prerequisites(), ["brew-cleanup"]);
     }
 
     #[test]
