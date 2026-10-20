@@ -26,12 +26,12 @@ use crate::process::{CommandSpec, ProcessOutput};
 use crate::registry::Registry;
 use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
 
-const BREW: StepId = "brew";
-const FORMULAE: StepId = "brew-formulae";
+pub(crate) const BREW: StepId = "brew";
+pub(crate) const FORMULAE: StepId = "brew-formulae";
 const CASKS: StepId = "brew-casks";
 const AUTOREMOVE: StepId = "brew-autoremove";
 const CLEANUP: StepId = "brew-cleanup";
-const REOPEN: StepId = "brew-reopen";
+pub(crate) const REOPEN: StepId = "brew-reopen";
 
 const HOMEBREW_PLATFORMS: [Platform; 2] = [Platform::Macos, Platform::Linux];
 
