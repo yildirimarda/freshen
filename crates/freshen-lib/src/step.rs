@@ -8,8 +8,8 @@
 //! * [`Step::cleanup`] — remove leftovers after a successful run.
 //!
 //! [`Step::prerequisites`] and [`Step::conflicts`] name other steps by id.
-//! The registry uses prerequisites to order a run; conflicts are checked by
-//! the run planner before anything is executed.
+//! The registry uses prerequisites to order a run; the runner uses conflicts
+//! to skip the later of two conflicting steps before anything is executed.
 //!
 //! Steps are object-safe: the registry stores `Box<dyn Step>` and dispatches
 //! through the trait without knowing the concrete type.

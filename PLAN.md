@@ -67,6 +67,7 @@ Goal: one tool for macOS, Linux and Windows, written in Rust and shipped as a si
 - [ ] Extend the stub harness with scripted stdin so the interactive quit prompt (yes / skip quitting / skip casks) is covered end to end
 - [ ] Remove the deprecated `update-all.sh` compatibility shim and replace the zsh syntax step in `.github/workflows/ci.yml` with a check for the shim (requires a human to apply the workflow change, since agents cannot edit `.github/workflows/`)
 - [ ] Make the Rust test targets compile on the MSRV and extend the MSRV CI job to `cargo check --workspace --all-targets`; the runner tests currently compare `ExitCode` values, which only implements `PartialEq` after 1.81
+- [ ] Show conflict skips in `--list-steps` so the listing names the same reason the run summary reports when two selected steps conflict, covered by tests
 
 ## Milestone 3: Safety and Reliability
 
