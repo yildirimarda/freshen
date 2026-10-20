@@ -13,7 +13,7 @@ pub fn version() -> &'static str {
 }
 
 /// Major and minor feature release the library was compiled against, e.g. `"0.1"`.
-pub fn feature_release() -> &'static str {
+pub fn feature_release() -> String {
     let version = version();
     let mut parts = version.splitn(3, '.');
     let major = parts.next().unwrap_or("0");
@@ -28,31 +28,21 @@ mod tests {
 
     #[test]
     fn version_is_semver() {
-        let mut parts = version().split('.');
-        let major: u64 = parts
-            .next()
-            .expect("version has a major component")
-            .parse()
-            .expect("major component is a number");
-        let minor: u64 = parts
-            .next()
-            .expect("version has a minor component")
-            .parse()
-            .expect("minor component is a number");
-        assert!(major > 0 || minor > 0, "version must be non-zero");
-        assert_eq!(
-            parts.next().is_some(),
-            true,
-            "version has a patch component"
+        let parts: Vec<&str> = version().split('.').collect();
+        assert!(
+            parts.len() >= 3,
+            "version {} must have major.minor.patch components",
+            version()
         );
+        let major: u64 = parts[0].parse().unwrap_or(u64::MAX);
+        let minor: u64 = parts[1].parse().unwrap_or(u64::MAX);
+        assert!(major > 0 || minor > 0, "version must be non-zero");
+        assert!(parts[2].parse::<u64>().is_ok(), "patch must be a number");
     }
 
     #[test]
     fn feature_release_is_major_minor_of_version() {
-        let expected_prefix = format!("{}.", {
-            let mut parts = version().split('.');
-            parts.next().expect("version has a major component")
-        });
+        let expected_prefix = format!("{}.", version().split('.').next().unwrap_or(""));
         assert!(
             feature_release().starts_with(expected_prefix.as_str()),
             "feature release {} must derive from version {}",
