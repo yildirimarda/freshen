@@ -5,7 +5,9 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use freshen_lib::{
-    list_steps, HostPreflightProbe, Platform, PreflightReport, Registry, RunLock, Runner,
+    list_steps, wait_for_package_managers, HostPackageManagerProbe, HostPreflightProbe,
+    PackageManagerConfig, PackageManagerProbe, Platform, PreflightReport, Registry, RunLock,
+    Runner, WaitOutcome,
 };
 
 mod cli;
@@ -68,6 +70,12 @@ fn main() -> ExitCode {
             eprint!("{report}");
             return ExitCode::from(3);
         }
+
+        if options.package_manager().is_enabled() {
+            if let Some(code) = wait_for_package_managers_or_abort(options.package_manager()) {
+                return code;
+            }
+        }
     }
 
     let summary = Runner::with_options(steps, options).run();
@@ -99,6 +107,40 @@ fn run_preflight(options: &freshen_lib::RunOptions) -> PreflightReport {
     }
 
     PreflightReport::run(&HostPreflightProbe, options.preflight())
+}
+
+fn package_manager_probe() -> Box<dyn PackageManagerProbe> {
+    #[cfg(feature = "test-harness")]
+    if let Some(probe) = test_steps::package_manager_probe() {
+        return Box::new(probe);
+    }
+
+    Box::new(HostPackageManagerProbe)
+}
+
+fn wait_for_package_managers_or_abort(config: &PackageManagerConfig) -> Option<ExitCode> {
+    let probe = package_manager_probe();
+    let outcome = wait_for_package_managers(probe.as_ref(), config);
+
+    let WaitOutcome::Busy { waited, processes } = outcome else {
+        return None;
+    };
+
+    let processes = processes
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if waited.is_zero() {
+        eprintln!("freshen: another package manager is running: {processes}");
+    } else {
+        eprintln!(
+            "freshen: another package manager is still running after waiting {:.1}s: {processes}",
+            waited.as_secs_f64()
+        );
+    }
+
+    Some(ExitCode::from(3))
 }
 
 fn preflight_skipped() -> bool {

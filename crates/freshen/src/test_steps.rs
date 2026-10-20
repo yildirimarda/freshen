@@ -8,12 +8,13 @@
 //! `PATH`.
 
 use freshen_lib::{
-    BatteryStatus, CheckReport, CommandSpec, Detection, Platform, PreflightProbe, Registry, Step,
-    StepError, StepId,
+    BatteryStatus, CheckReport, CommandSpec, Detection, PackageManagerProbe, PackageManagerProcess,
+    Platform, PreflightProbe, Registry, Step, StepError, StepId,
 };
 
 const ENV_VAR: &str = "FRESHEN_TEST_STEPS";
 const PREFLIGHT_ENV_VAR: &str = "FRESHEN_TEST_PREFLIGHT";
+const PACKAGE_MANAGER_ENV_VAR: &str = "FRESHEN_TEST_PACKAGE_MANAGERS";
 
 const IDS: [StepId; 16] = [
     "probe-0", "probe-1", "probe-2", "probe-3", "probe-4", "probe-5", "probe-6", "probe-7",
@@ -111,6 +112,36 @@ impl PreflightProbe for ScriptedPreflightProbe {
 
     fn metered_connection(&self) -> Option<bool> {
         self.metered
+    }
+}
+
+/// A package manager probe built from `FRESHEN_TEST_PACKAGE_MANAGERS`.
+///
+/// The value is a semicolon-separated list of `name:pid` entries, for example
+/// `brew:1234;apt:5678`. An empty value means no package manager is running.
+pub fn package_manager_probe() -> Option<ScriptedPackageManagerProbe> {
+    let value = std::env::var(PACKAGE_MANAGER_ENV_VAR).ok()?;
+    let processes = value
+        .split(';')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            let (name, pid) = entry.split_once(':').unwrap_or((entry, "0"));
+            PackageManagerProcess::new(name.trim(), pid.trim().parse().unwrap_or_default())
+        })
+        .collect();
+
+    Some(ScriptedPackageManagerProbe { processes })
+}
+
+/// Package manager processes scripted by an integration test.
+pub struct ScriptedPackageManagerProbe {
+    processes: Vec<PackageManagerProcess>,
+}
+
+impl PackageManagerProbe for ScriptedPackageManagerProbe {
+    fn running_package_managers(&self) -> Vec<PackageManagerProcess> {
+        self.processes.clone()
     }
 }
 

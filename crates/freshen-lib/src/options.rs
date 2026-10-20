@@ -8,6 +8,7 @@
 use std::collections::HashSet;
 use std::fmt;
 
+use crate::package_manager::PackageManagerConfig;
 use crate::platform::Platform;
 use crate::preflight::PreflightConfig;
 use crate::registry::{Registry, RegistryError};
@@ -185,6 +186,7 @@ pub struct RunOptions {
     force_kill: bool,
     selection: StepSelection,
     preflight: PreflightConfig,
+    package_manager: PackageManagerConfig,
 }
 
 impl RunOptions {
@@ -230,6 +232,13 @@ impl RunOptions {
         self
     }
 
+    /// Replaces the other-package-manager check configuration.
+    #[must_use]
+    pub fn with_package_manager(mut self, package_manager: PackageManagerConfig) -> Self {
+        self.package_manager = package_manager;
+        self
+    }
+
     /// Returns `true` when `--dry-run` is set.
     #[must_use]
     pub fn is_dry_run(&self) -> bool {
@@ -258,6 +267,12 @@ impl RunOptions {
     #[must_use]
     pub fn preflight(&self) -> &PreflightConfig {
         &self.preflight
+    }
+
+    /// Configuration for waiting on another package manager process.
+    #[must_use]
+    pub fn package_manager(&self) -> &PackageManagerConfig {
+        &self.package_manager
     }
 
     /// Builds the ordered list of steps this run should execute on `platform`.

@@ -27,9 +27,10 @@ pub const DEFAULT_MIN_FREE_DISK_BYTES: u64 = 1024 * 1024 * 1024;
 /// Default battery threshold, in percent.
 pub const DEFAULT_MIN_BATTERY_PERCENT: u8 = 20;
 
-/// Environment variable that disables every preflight check when set to a
-/// truthy value. Used by the stub test harness so unrelated runs never touch
-/// the host network or battery.
+/// Environment variable that disables every pre-run check when set to a
+/// truthy value: the preflight checks and the other-package-manager check.
+/// Used by the stub test harness so unrelated runs never touch the host
+/// network, battery or process table.
 pub const SKIP_ENV: &str = "FRESHEN_SKIP_PREFLIGHT";
 
 /// One of the checks that can run before an update.
