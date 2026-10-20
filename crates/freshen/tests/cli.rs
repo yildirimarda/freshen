@@ -42,16 +42,18 @@ fn help_lists_every_flag() {
 }
 
 #[test]
-fn list_steps_lists_the_builtin_homebrew_steps() {
+fn list_steps_lists_every_builtin_step() {
     let output = run(&["--list-steps"]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
-    assert!(text.contains("Steps (9):"), "listing: {text}");
+    assert!(text.contains("Steps (11):"), "listing: {text}");
     assert!(text.contains("brew"), "listing: {text}");
     assert!(text.contains("brew-casks"), "listing: {text}");
     assert!(text.contains("colima-stop"), "listing: {text}");
     assert!(text.contains("docker"), "listing: {text}");
+    assert!(text.contains("uv"), "listing: {text}");
+    assert!(text.contains("mise"), "listing: {text}");
 }
 
 #[test]
@@ -67,7 +69,7 @@ fn dry_run_with_every_builtin_step_excluded_plans_nothing() {
     let output = run(&[
         "--dry-run",
         "--skip",
-        "brew,brew-formulae,brew-casks,brew-autoremove,brew-cleanup,brew-reopen,colima-stop,colima-start,docker",
+        "brew,brew-formulae,brew-casks,brew-autoremove,brew-cleanup,brew-reopen,colima-stop,colima-start,docker,uv,mise",
     ]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));

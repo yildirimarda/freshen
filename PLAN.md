@@ -129,6 +129,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Handle elevation: detect admin rights, request elevation only for steps that need it, and support running un-elevated with those steps skipped
 - [ ] Support PowerShell 7 and Windows PowerShell 5.1 as launching shells, and `cmd.exe` shims
 - [ ] Add a Windows CI job running the unit tests and a smoke test against stub package managers
+- [ ] Resolve Windows executable names through `PATHEXT` during step detection so `uv` and `mise` are found as `uv.exe`/`mise.exe`, covered by tests with an injected lookup
 
 ## Milestone 7: Language and Developer Tooling
 
@@ -146,6 +147,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Add shell tooling: oh-my-zsh, zinit, antidote, tmux plugin manager (tpm), fisher
 - [ ] Add cloud/DevOps CLIs: `gh extension upgrade --all`, `kubectl krew upgrade`, `helm repo update`, AWS CLI v2 (non-brew installs), `gcloud components update`, `az upgrade`
 - [ ] Add git-related upkeep: `git lfs` self-check, global pre-commit hook repos (`pre-commit autoupdate` for opted-in repo paths)
+- [ ] Implement read-only `check()` for the uv and mise steps (`uv tool list --outdated`, `mise outdated`) so `--check` reports pending tool updates instead of always reporting them up to date, covered by recorded transcripts
 
 ## Milestone 8: Containers and Services
 
