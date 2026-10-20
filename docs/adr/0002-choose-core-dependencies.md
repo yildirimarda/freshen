@@ -19,6 +19,8 @@ Add these dependencies, all MSRV-compatible with the workspace's
 
 - `clap` (with `derive`) — the `freshen` binary's command-line interface.
 - `serde` (with `derive`) + `toml` — the config file schema and parsing.
+- `serde_json` — parsing the JSON transcripts Homebrew emits
+  (`brew info --cask --json=v2`, `docker compose ls --format json`).
 - `thiserror` in `freshen-lib` and `anyhow` in the `freshen` binary — errors.
 - `ctrlc` — SIGINT/SIGTERM handling with cleanup.
 - `which` — locating tools on `PATH`.

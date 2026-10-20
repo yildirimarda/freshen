@@ -4,6 +4,7 @@
 //! Every step of a run lives here; the `freshen` binary crate is a thin CLI
 //! wrapper around this library. One module per step.
 
+pub mod homebrew;
 pub mod listing;
 pub mod options;
 pub mod platform;

@@ -61,6 +61,7 @@ impl StubTools {
     }
 
     /// Runs the binary with `FRESHEN_TEST_STEPS` set to `steps`.
+    #[allow(dead_code)]
     pub fn run(&self, steps: &str, args: &[&str]) -> Output {
         self.command()
             .env("FRESHEN_TEST_STEPS", steps)
@@ -76,6 +77,38 @@ impl StubTools {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(error) => panic!("failed to read stub log {}: {error}", self.log.display()),
         }
+    }
+
+    /// The temporary home directory the binary runs with.
+    #[allow(dead_code)]
+    pub fn home(&self) -> &std::path::Path {
+        &self.dir
+    }
+
+    /// Replaces the stub for `tool` with a shell script body.
+    ///
+    /// The standard invocation logging is kept, and `body` runs afterwards, so
+    /// a test can return recorded command output without reaching the real
+    /// tool. Only available on Unix, where the Homebrew steps run.
+    #[cfg(unix)]
+    #[allow(dead_code)]
+    pub fn set_script(&self, tool: &str, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let script = format!(
+            "#!/bin/sh\n\
+             {{\n\
+               printf '%s' '{tool}'\n\
+               for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
+               printf '\\n'\n\
+             }} >> \"${{FRESHEN_STUB_LOG:?FRESHEN_STUB_LOG is not set}}\"\n\
+             {body}\n"
+        );
+        let path = self.dir.join(tool);
+        fs::write(&path, script)
+            .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", path.display()));
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+            .unwrap_or_else(|error| panic!("failed to make stub executable: {error}"));
     }
 
     fn path(&self) -> std::ffi::OsString {
