@@ -33,7 +33,8 @@ pub use registry::{Registry, RegistryError};
 pub use runner::{RunSummary, Runner, SkipReason, StepResult, StepStatus};
 pub use step::{CheckReport, Detection, Operation, OutdatedItem, Step, StepError, StepId};
 pub use system::{
-    Arch, Distro, HostProbe, OsInfo, Privilege, SystemInfo, SystemProbe, Terminal, TerminalApp,
+    Arch, Distro, Environment, HostProbe, OsInfo, Privilege, SystemInfo, SystemProbe, Terminal,
+    TerminalApp,
 };
 
 /// Major and minor feature release this binary implements, e.g. `"0.1"`.
