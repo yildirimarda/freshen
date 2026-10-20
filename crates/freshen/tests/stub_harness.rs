@@ -72,3 +72,27 @@ fn a_tool_missing_from_the_stub_path_is_never_replaced_by_the_real_one() {
     assert!(tools.calls().is_empty());
     assert!(stdout(&output).contains("1 failed"));
 }
+
+#[test]
+fn a_failing_step_is_recorded_and_the_run_continues_to_exit_1() {
+    let tools = StubTools::new(&["brew"]);
+
+    let output = tools.run(
+        "freshen-definitely-not-a-real-tool --upgrade;brew update",
+        &[],
+    );
+
+    assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
+    assert_eq!(tools.calls(), ["brew update"]);
+
+    let text = stdout(&output);
+    assert!(
+        text.contains("1 ok, 0 planned, 0 skipped, 1 failed"),
+        "summary: {text}"
+    );
+    let failed_line = text
+        .lines()
+        .find(|line| line.contains("freshen-definitely-not-a-real-tool"))
+        .unwrap_or_else(|| panic!("summary does not list the failed step: {text}"));
+    assert!(failed_line.contains("failed"), "summary: {text}");
+}
