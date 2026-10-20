@@ -40,6 +40,21 @@ impl Platform {
             Self::Windows => "windows",
         }
     }
+
+    /// Looks up a platform by the name reported by the operating system.
+    ///
+    /// Accepts the values of [`std::env::consts::OS`] and the lowercase names
+    /// returned by [`Platform::as_str`]. Returns `None` for an operating
+    /// system freshen does not support.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "macos" => Some(Self::Macos),
+            "linux" => Some(Self::Linux),
+            "windows" => Some(Self::Windows),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for Platform {
@@ -93,5 +108,19 @@ mod tests {
                 1
             );
         }
+    }
+
+    #[test]
+    fn from_name_round_trips_every_platform() {
+        for platform in Platform::ALL {
+            assert_eq!(Platform::from_name(platform.as_str()), Some(platform));
+        }
+    }
+
+    #[test]
+    fn from_name_rejects_unknown_operating_systems() {
+        assert_eq!(Platform::from_name("freebsd"), None);
+        assert_eq!(Platform::from_name("MacOS"), None);
+        assert_eq!(Platform::from_name(""), None);
     }
 }
