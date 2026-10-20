@@ -5,10 +5,12 @@
 //! wrapper around this library. One module per step.
 
 pub mod platform;
+pub mod process;
 pub mod registry;
 pub mod step;
 
 pub use platform::Platform;
+pub use process::{Backoff, CommandSpec, OutputStream, ProcessError, ProcessOutput};
 pub use registry::{Registry, RegistryError};
 pub use step::{CheckReport, Detection, Operation, OutdatedItem, Step, StepError, StepId};
 
