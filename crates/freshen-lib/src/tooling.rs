@@ -18,6 +18,7 @@ use crate::platform::Platform;
 use crate::process::CommandSpec;
 use crate::registry::Registry;
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
+use crate::warnings::warn_about_stale_node_processes;
 
 /// Installed uv tools and the uv cache.
 pub const UV: StepId = "uv";
@@ -117,6 +118,8 @@ impl Step for MiseStep {
         if let Err(error) = CommandSpec::new("mise").args(["prune", "-y"]).run() {
             failures.push(error.to_string());
         }
+
+        warn_about_stale_node_processes();
 
         finish(MISE, failures)
     }
