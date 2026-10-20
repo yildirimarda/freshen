@@ -200,4 +200,6 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 
 ## Discovered
 
+- [ ] Add the Cargo workspace checks promised by `tests/README.md` to `tests/run-tests.sh`: the workspace sets an MSRV (`rust-version`), `rust-toolchain.toml` pins an exact channel with `rustfmt`/`clippy`, and every crate under `crates/` inherits the workspace MSRV and lints
+
 <!-- The agent appends newly found work here. -->

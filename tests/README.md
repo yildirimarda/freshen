@@ -13,6 +13,9 @@
   sets an MSRV (`rust-version`), `rust-toolchain.toml` pins an exact channel
   with `rustfmt`/`clippy`, and every crate under `crates/` inherits the
   workspace MSRV and lints
+- `deny.toml` (cargo-deny) is valid TOML with a `licenses` allow-list and an
+  `advisories` section, and the `cargo-deny` job in `ci-proposals/rust.yml`
+  runs both `cargo deny check licenses` and `cargo deny check advisories`
 
 Unit and integration tests for the Rust implementation live in the Cargo
 workspace (`cargo test --all-features`); this script keeps only the
