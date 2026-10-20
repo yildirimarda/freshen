@@ -1,0 +1,25 @@
+# Cargo Deny configuration: https://embarkstudios.github.io/cargo-deny/
+# Checked in CI against the whole dependency tree (see ci-proposals/rust.yml).
+# Decide once here instead of per-PR: a new dependency must fit the allow-list
+# or the CI licenses check fails with a clear reason.
+
+# Every dependency (direct and transitive) must be published under one of
+# these licenses. Covers the chosen core deps (clap, serde, toml, anyhow,
+# thiserror, ctrlc, which, indicatif) and the permissive Rust ecosystem.
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "ISC",
+    "0BSD",
+    "Zlib",
+    "Unicode-3.0",
+    "CC0-1.0",
+]
+
+# Known-vulnerability advisories from the RustSec database. The `ignore` list
+# must stay empty: a new advisory either gets fixed by a dependency bump or is
+# recorded here with a justification, never silently.
+[advisories]
+ignore = []

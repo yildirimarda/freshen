@@ -31,3 +31,25 @@ jobs:
 
       - name: Rust tests
         run: cargo test --all-features
+
+  # cargo-deny gates licenses (against deny.toml's allow-list) and known
+  # vulnerabilities (RustSec advisories) for the whole dependency tree, so a
+  # new dependency can never slip a non-permissive license or a vulnerable
+  # crate past review. The version is pinned to keep the checks reproducible;
+  # bump it deliberately when CI requires a newer cargo-deny.
+  cargo-deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked --version 0.20.2
+
+      - name: Check licenses
+        run: cargo deny check licenses
+
+      - name: Check advisories
+        run: cargo deny check advisories

@@ -51,4 +51,32 @@ if [[ -d docs/adr ]]; then
   if (( adr_ok )); then ok "docs/adr files (numbering, sections, index links)"; else bad "docs/adr file checks"; fi
 fi
 
+# 4. cargo-deny: deny.toml is a valid TOML with a licenses allow-list and an
+#    advisories section, and the CI proposal actually runs both checks
+if [[ -f deny.toml ]]; then
+  deny_ok=1
+  python3 - <<'PY' >/dev/null 2>&1 || deny_ok=0
+import sys, tomllib
+try:
+    with open("deny.toml", "rb") as f:
+        cfg = tomllib.load(f)
+    assert "licenses" in cfg and "allow" in cfg["licenses"] and cfg["licenses"]["allow"]
+    assert "advisories" in cfg and "ignore" in cfg["advisories"]
+except Exception:
+    sys.exit(1)
+PY
+  [[ "$deny_ok" == "1" ]] || { bad "deny.toml is not valid / missing licenses.allow or advisories"; }
+  if (( deny_ok )); then ok "deny.toml (valid TOML, licenses allow-list, advisories)"; fi
+
+  prop_ok=1
+  if [[ -f ci-proposals/rust.yml ]]; then
+    grep -q 'cargo-deny:' ci-proposals/rust.yml || { echo "  no cargo-deny job"; prop_ok=0; }
+    grep -q 'cargo deny check licenses' ci-proposals/rust.yml || { echo "  missing licenses check"; prop_ok=0; }
+    grep -q 'cargo deny check advisories' ci-proposals/rust.yml || { echo "  missing advisories check"; prop_ok=0; }
+    if (( prop_ok )); then ok "ci-proposals/rust.yml cargo-deny job (licenses + advisories)"; else bad "ci-proposals/rust.yml missing a cargo-deny job running both checks"; fi
+  else
+    bad "deny.toml present but ci-proposals/rust.yml missing"
+  fi
+fi
+
 exit "$fail"

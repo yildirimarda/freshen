@@ -6,3 +6,4 @@ Copy [0000-template.md](0000-template.md) to start a new one.
 | ADR | Title | Status |
 |---|---|---|
 | 0001 | [Implement freshen in Rust](0001-implement-freshen-in-rust.md) | accepted |
+| 0002 | [Choose the core dependencies](0002-choose-core-dependencies.md) | accepted |
