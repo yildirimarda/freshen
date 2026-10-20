@@ -2,11 +2,12 @@
 
 `bash tests/run-tests.sh` runs the repository checks used by CI:
 
-- the legacy zsh implementation is gone: `update-all.sh` is a POSIX `sh`
-  compatibility shim that forwards to `freshen`, maps the old environment
-  variables and still passes `sh -n`
+- the legacy zsh implementation and its deprecated `update-all.sh`
+  compatibility shim are gone
 - `README.md` documents the `update-all.sh` → `freshen` migration and
   `CHANGELOG.md` records the removal
+- the CI workflow proposal replaces the old zsh syntax step with a guard that
+  the `update-all.sh` shim stays removed
 - every task line in `PLAN.md` uses the exact `- [ ] ` / `- [x] ` format that `run.sh` parses
 - every `## Milestone N: name` heading is numbered consecutively
 - every ADR under `docs/adr/` is numbered consecutively from `0000`, carries a
