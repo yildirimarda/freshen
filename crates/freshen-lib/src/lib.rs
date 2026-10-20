@@ -15,6 +15,7 @@ pub mod registry;
 pub mod runner;
 pub mod step;
 pub mod system;
+pub mod tooling;
 
 pub use apps::{
     find_running_apps, quit_apps, quit_choice, reopen_apps, AppScan, AppSystem, MacAppSystem,
