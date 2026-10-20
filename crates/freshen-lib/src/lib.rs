@@ -9,6 +9,7 @@ pub mod check;
 pub mod containers;
 pub mod homebrew;
 pub mod listing;
+pub mod lock;
 pub mod options;
 pub mod platform;
 pub mod preflight;
@@ -31,6 +32,7 @@ pub use containers::{
     parse_compose_projects, parse_standalone_containers, ComposeProject, StandaloneContainer,
 };
 pub use listing::{list_steps, DetectionState, StepList, StepListing};
+pub use lock::{LockError, RunLock};
 pub use options::{PlanError, RunOptions, SelectionFlag, StepSelection};
 pub use platform::Platform;
 pub use preflight::{
