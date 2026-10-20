@@ -4,7 +4,7 @@
 use std::process::ExitCode;
 
 use clap::Parser;
-use freshen_lib::{list_steps, Platform, Registry, Runner};
+use freshen_lib::{list_steps, HostPreflightProbe, Platform, PreflightReport, Registry, Runner};
 
 mod cli;
 
@@ -48,6 +48,14 @@ fn main() -> ExitCode {
         return summary.exit_code();
     }
 
+    if !options.is_dry_run() && !preflight_skipped() {
+        let report = run_preflight(&options);
+        if !report.is_ok() {
+            eprint!("{report}");
+            return ExitCode::from(3);
+        }
+    }
+
     let summary = Runner::with_options(steps, options).run();
     if cli.json {
         println!("{}", summary.to_json());
@@ -68,4 +76,22 @@ fn build_registry() -> Registry {
     freshen_lib::tooling::register(freshen_lib::homebrew::register(
         freshen_lib::containers::register(Registry::new()),
     ))
+}
+
+fn run_preflight(options: &freshen_lib::RunOptions) -> PreflightReport {
+    #[cfg(feature = "test-harness")]
+    if let Some(probe) = test_steps::preflight_probe() {
+        return PreflightReport::run(&probe, options.preflight());
+    }
+
+    PreflightReport::run(&HostPreflightProbe, options.preflight())
+}
+
+fn preflight_skipped() -> bool {
+    std::env::var(freshen_lib::preflight::SKIP_ENV)
+        .ok()
+        .is_some_and(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            !value.is_empty() && value != "0" && value != "false" && value != "no"
+        })
 }

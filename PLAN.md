@@ -218,5 +218,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 
 - [ ] Add the Cargo workspace checks promised by `tests/README.md` to `tests/run-tests.sh`: the workspace sets an MSRV (`rust-version`), `rust-toolchain.toml` pins an exact channel with `rustfmt`/`clippy`, and every crate under `crates/` inherits the workspace MSRV and lints
 - [ ] Retry stub execution when the kernel returns `ETXTBSY` (text file busy), so parallel test threads that write and execute a stub cannot fail spuriously, with a test for the retry helper
+- [ ] Probe both IPv4 and IPv6 (and allow overriding the endpoint) in the network preflight check so IPv6-only or filtered networks are not reported as unreachable, covered by tests with injected endpoints
+- [ ] Detect user-marked metered networks on macOS instead of only hotspot SSIDs, so the metered preflight check matches the system setting, covered by tests with injected command output
 
 <!-- The agent appends newly found work here. -->

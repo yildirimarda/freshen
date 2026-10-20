@@ -5,7 +5,7 @@
 //! implementation.
 
 use clap::{ArgAction, Parser};
-use freshen_lib::{RunOptions, StepSelection};
+use freshen_lib::{PreflightCheck, PreflightConfig, RunOptions, StepSelection};
 
 /// Keep a developer machine up to date: package managers, language toolchains
 /// and containers, on macOS, Linux and Windows.
@@ -47,6 +47,30 @@ pub struct Cli {
     /// Force-kill applications that do not quit gracefully.
     #[arg(long)]
     pub force_kill: bool,
+
+    /// Skip the preflight check that the network is reachable.
+    #[arg(long)]
+    pub skip_network_check: bool,
+
+    /// Skip the preflight check that enough disk space is free.
+    #[arg(long)]
+    pub skip_disk_check: bool,
+
+    /// Skip the preflight check that the battery is not too low.
+    #[arg(long)]
+    pub skip_battery_check: bool,
+
+    /// Skip the preflight check for a metered connection or hotspot.
+    #[arg(long)]
+    pub skip_metered_check: bool,
+
+    /// Minimum free disk space in GiB required before updating.
+    #[arg(long, value_name = "GIB", default_value_t = 1)]
+    pub min_free_disk_gib: u64,
+
+    /// Battery percentage below which an update on battery is refused.
+    #[arg(long, value_name = "PERCENT", default_value_t = 20)]
+    pub battery_threshold: u8,
 }
 
 impl Cli {
@@ -54,10 +78,19 @@ impl Cli {
     /// options.
     #[must_use]
     pub fn run_options(&self) -> RunOptions {
+        let preflight = PreflightConfig::new()
+            .with_check(PreflightCheck::Network, !self.skip_network_check)
+            .with_check(PreflightCheck::DiskSpace, !self.skip_disk_check)
+            .with_check(PreflightCheck::Battery, !self.skip_battery_check)
+            .with_check(PreflightCheck::MeteredConnection, !self.skip_metered_check)
+            .with_min_free_disk_bytes(self.min_free_disk_gib.saturating_mul(1024 * 1024 * 1024))
+            .with_min_battery_percent(self.battery_threshold);
+
         RunOptions::new()
             .with_dry_run(self.dry_run)
             .with_assume_yes(self.yes)
             .with_force_kill(self.force_kill)
+            .with_preflight(preflight)
             .with_selection(
                 StepSelection::new()
                     .with_only(self.only.clone())
@@ -87,10 +120,22 @@ mod tests {
         assert!(!cli.check);
         assert!(!cli.json);
         assert!(!cli.markdown);
+        assert!(!cli.skip_network_check);
+        assert!(!cli.skip_disk_check);
+        assert!(!cli.skip_battery_check);
+        assert!(!cli.skip_metered_check);
         assert!(!options.is_dry_run());
         assert!(!options.assume_yes());
         assert!(!options.force_kill());
         assert!(options.selection().is_empty());
+        for check in freshen_lib::PreflightCheck::ALL {
+            assert!(options.preflight().is_enabled(check), "{check}");
+        }
+        assert_eq!(
+            options.preflight().min_free_disk_bytes(),
+            1024 * 1024 * 1024
+        );
+        assert_eq!(options.preflight().min_battery_percent(), 20);
     }
 
     #[test]
@@ -106,6 +151,14 @@ mod tests {
             "casks",
             "--yes",
             "--force-kill",
+            "--skip-network-check",
+            "--skip-disk-check",
+            "--skip-battery-check",
+            "--skip-metered-check",
+            "--min-free-disk-gib",
+            "5",
+            "--battery-threshold",
+            "35",
         ]);
         let options = cli.run_options();
 
@@ -116,6 +169,14 @@ mod tests {
         assert!(options.force_kill());
         assert_eq!(options.selection().only(), ["brew"]);
         assert_eq!(options.selection().skip(), ["casks"]);
+        for check in freshen_lib::PreflightCheck::ALL {
+            assert!(!options.preflight().is_enabled(check), "{check}");
+        }
+        assert_eq!(
+            options.preflight().min_free_disk_bytes(),
+            5 * 1024 * 1024 * 1024
+        );
+        assert_eq!(options.preflight().min_battery_percent(), 35);
     }
 
     #[test]
@@ -181,6 +242,12 @@ mod tests {
             "--skip",
             "--yes",
             "--force-kill",
+            "--skip-network-check",
+            "--skip-disk-check",
+            "--skip-battery-check",
+            "--skip-metered-check",
+            "--min-free-disk-gib",
+            "--battery-threshold",
         ] {
             assert!(help.contains(flag), "help does not mention {flag}: {help}");
         }

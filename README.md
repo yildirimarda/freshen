@@ -27,6 +27,7 @@ A failing step never aborts the run. Failures are collected and listed at the en
 - **Reopening uses `open -g`**, so apps do not steal focus.
 - **`mise upgrade` is used without `--bump`** on purpose: with `node@lts` in your config, `--bump` would pin `lts` to a fixed version.
 - **Zellij**: if zellij is outdated and you run freshen inside a session, you get a warning (server/client versions must match).
+- **Every run starts with preflight checks**: the network must be reachable, at least 1 GiB must be free, the battery must be at or above 20% while discharging, and the connection must not be metered or a hotspot. A failed check stops before any step runs (exit code 3) and lists every problem. Each check can be disabled with `--skip-network-check`, `--skip-disk-check`, `--skip-battery-check` or `--skip-metered-check`; `--min-free-disk-gib` and `--battery-threshold` change the thresholds. `--dry-run` and `--check` skip preflight because they change nothing.
 - **Every run records a pre-upgrade snapshot** of installed versions (`brew list --versions`, `brew bundle dump`, `uv tool list`, `mise ls`, Docker images) in a timestamped file under the platform state directory (`~/.local/state/freshen/snapshots` on Linux, `~/Library/Application Support/freshen/snapshots` on macOS, `%LOCALAPPDATA%\freshen\snapshots` on Windows). Set `FRESHEN_SNAPSHOT_DIR` to override the location. The summary prints the commands that reinstall the recorded versions.
 
 ## Requirements
@@ -48,11 +49,14 @@ freshen --json                # print the report as JSON (before/after versions 
 freshen --markdown            # print the report as Markdown
 freshen --list-steps          # show every step, its detection and skip reason
 freshen --only brew,uv --skip brew-casks   # select steps
+freshen --skip-metered-check  # run even on a phone hotspot
+freshen --min-free-disk-gib 5 --battery-threshold 30   # custom preflight thresholds
 ```
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `QUIT_TIMEOUT` | `20` | Seconds to wait for an app to quit |
+| `FRESHEN_SKIP_PREFLIGHT` | unset | Set to `1` to disable every preflight check |
 
 `--yes` and `--force-kill` replace the old `ASSUME_YES`/`FORCE_KILL` environment variables.
 
@@ -95,6 +99,7 @@ cargo run -p freshen -- --markdown                   # Markdown report with vers
 cargo run -p freshen -- --list-steps                 # detect every step and explain skips
 cargo run -p freshen -- --only brew,uv --skip casks  # select steps
 cargo run -p freshen -- --yes --force-kill           # no prompts, kill stubborn apps
+cargo run -p freshen -- --skip-network-check         # bypass one preflight check
 ```
 
 ## License
