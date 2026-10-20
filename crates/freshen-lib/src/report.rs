@@ -38,12 +38,25 @@ pub(crate) fn run_json(summary: &RunSummary) -> String {
         })
         .collect();
 
+    let rollback: Vec<Value> = summary
+        .rollback_commands()
+        .iter()
+        .map(|hint| {
+            json!({
+                "group": hint.group(),
+                "command": hint.command(),
+            })
+        })
+        .collect();
+
     let report = json!({
         "ok": summary.ok_count(),
         "planned": summary.planned_count(),
         "skipped": summary.skipped_count(),
         "failed": summary.failed_count(),
         "total_duration_ms": summary.total_duration().as_millis(),
+        "snapshot": summary.snapshot_path().map(|path| path.display().to_string()),
+        "rollback": rollback,
         "steps": steps,
     });
 
@@ -94,6 +107,20 @@ pub(crate) fn run_markdown(summary: &RunSummary) -> String {
             format_duration(result.duration()),
             escape_cell(&changes)
         ));
+    }
+
+    if !summary.rollback_commands().is_empty() {
+        out.push_str("\n## Rollback hints\n\n");
+        if let Some(path) = summary.snapshot_path() {
+            out.push_str(&format!("Snapshot: `{}`\n\n", path.display()));
+        }
+        out.push_str("Run these commands to return to the versions recorded before the run:\n\n");
+        out.push_str("```sh\n");
+        for hint in summary.rollback_commands() {
+            out.push_str(hint.command());
+            out.push('\n');
+        }
+        out.push_str("```\n");
     }
 
     out

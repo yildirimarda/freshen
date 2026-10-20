@@ -124,6 +124,25 @@ esac"#,
         "stderr: {}",
         stderr(&output)
     );
+
+    let summary = stdout(&output);
+    assert!(summary.contains("Snapshot:"), "summary: {summary}");
+    assert!(
+        summary.contains("Rollback hints (previous versions from the snapshot):"),
+        "summary: {summary}"
+    );
+    assert!(
+        summary.contains("brew install jq@1.7.1"),
+        "summary: {summary}"
+    );
+    assert!(
+        summary.contains("uv tool install ruff==0.6.0"),
+        "summary: {summary}"
+    );
+    assert!(
+        summary.contains("mise install node@22.1.0"),
+        "summary: {summary}"
+    );
 }
 
 #[test]

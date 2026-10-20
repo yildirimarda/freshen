@@ -129,6 +129,31 @@ impl SnapshotEntry {
     }
 }
 
+/// One command that restores a version recorded in the snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RollbackCommand {
+    group: StepId,
+    command: String,
+}
+
+impl RollbackCommand {
+    fn new(group: StepId, command: String) -> Self {
+        Self { group, command }
+    }
+
+    /// Step id whose package manager the command belongs to.
+    #[must_use]
+    pub fn group(&self) -> StepId {
+        self.group
+    }
+
+    /// Shell command that reinstalls the recorded version.
+    #[must_use]
+    pub fn command(&self) -> &str {
+        &self.command
+    }
+}
+
 /// The installed versions one step can change, captured before it runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotSection {
@@ -181,6 +206,13 @@ pub struct SnapshotRecorder {
     path: Option<PathBuf>,
     file: Option<File>,
     captured: HashSet<StepId>,
+    sections: Vec<CapturedSection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CapturedSection {
+    group: StepId,
+    entries: Vec<SnapshotEntry>,
 }
 
 impl Default for SnapshotRecorder {
@@ -204,6 +236,7 @@ impl SnapshotRecorder {
             path: None,
             file: None,
             captured: HashSet::new(),
+            sections: Vec::new(),
         }
     }
 
@@ -239,6 +272,7 @@ impl SnapshotRecorder {
             .as_mut()
             .ok_or_else(|| io::Error::other("snapshot file is not open"))?;
 
+        let mut entries = Vec::with_capacity(section.commands.len());
         writeln!(file, "## {}", section.group)?;
         writeln!(file)?;
         for command in &section.commands {
@@ -248,10 +282,33 @@ impl SnapshotRecorder {
                 writeln!(file, "{}", entry.output)?;
             }
             writeln!(file)?;
+            entries.push(entry);
         }
         file.flush()?;
 
+        self.sections.push(CapturedSection {
+            group: section.group,
+            entries,
+        });
+
         Ok(true)
+    }
+
+    /// Commands that restore the versions recorded so far.
+    ///
+    /// Only package managers whose snapshot output can be turned into an
+    /// install command contribute a hint. The snapshot file remains the full
+    /// record for anything that cannot be expressed as a single command.
+    #[must_use]
+    pub fn rollback_commands(&self) -> Vec<RollbackCommand> {
+        let mut commands = Vec::new();
+        for section in &self.sections {
+            commands.extend(section.rollback_commands());
+        }
+
+        let mut seen = HashSet::new();
+        commands.retain(|command| seen.insert(command.command.clone()));
+        commands
     }
 
     fn ensure_file(&mut self) -> io::Result<()> {
@@ -276,6 +333,110 @@ impl SnapshotRecorder {
 
         Ok(())
     }
+}
+
+impl CapturedSection {
+    fn rollback_commands(&self) -> Vec<RollbackCommand> {
+        let mut commands = Vec::new();
+        for entry in &self.entries {
+            match self.group {
+                "brew" if entry.command == "brew list --versions" => {
+                    commands.extend(brew_rollback_commands(entry));
+                }
+                "uv" if entry.command == "uv tool list" => {
+                    commands.extend(uv_rollback_commands(entry));
+                }
+                "mise" if entry.command == "mise ls" => {
+                    commands.extend(mise_rollback_commands(entry));
+                }
+                "docker" if entry.command == "docker image ls --digests" => {
+                    commands.extend(docker_rollback_commands(entry));
+                }
+                _ => {}
+            }
+        }
+        commands
+    }
+}
+
+fn recorded_lines(entry: &SnapshotEntry) -> impl Iterator<Item = &str> {
+    let output = if entry.output.starts_with("# command failed") {
+        ""
+    } else {
+        entry.output.as_str()
+    };
+    output.lines().filter(|line| !line.trim().is_empty())
+}
+
+fn brew_rollback_commands(entry: &SnapshotEntry) -> Vec<RollbackCommand> {
+    recorded_lines(entry)
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let name = fields.next()?;
+            let version = fields.next_back()?;
+            if name == version {
+                return None;
+            }
+
+            let command = if name.contains('@') {
+                format!("brew install {name}")
+            } else {
+                format!("brew install {name}@{version}")
+            };
+            Some(RollbackCommand::new("brew", command))
+        })
+        .collect()
+}
+
+fn uv_rollback_commands(entry: &SnapshotEntry) -> Vec<RollbackCommand> {
+    recorded_lines(entry)
+        .filter(|line| !line.starts_with([' ', '\t', '-']))
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let name = fields.next()?;
+            let version = fields.next()?;
+            let version = version.strip_prefix('v').unwrap_or(version);
+            Some(RollbackCommand::new(
+                "uv",
+                format!("uv tool install {name}=={version}"),
+            ))
+        })
+        .collect()
+}
+
+fn mise_rollback_commands(entry: &SnapshotEntry) -> Vec<RollbackCommand> {
+    recorded_lines(entry)
+        .filter(|line| !line.starts_with([' ', '\t', '-']))
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let tool = fields.next()?;
+            let version = fields.next()?;
+            if tool.eq_ignore_ascii_case("tool") && version.eq_ignore_ascii_case("version") {
+                return None;
+            }
+            Some(RollbackCommand::new(
+                "mise",
+                format!("mise install {tool}@{version}"),
+            ))
+        })
+        .collect()
+}
+
+fn docker_rollback_commands(entry: &SnapshotEntry) -> Vec<RollbackCommand> {
+    recorded_lines(entry)
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            let repository = fields.first()?;
+            let digest = fields.get(2)?;
+            if *repository == "REPOSITORY" || *digest == "<none>" || *digest == "DIGEST" {
+                return None;
+            }
+            Some(RollbackCommand::new(
+                "docker",
+                format!("docker pull {repository}@{digest}"),
+            ))
+        })
+        .collect()
 }
 
 fn failure_text(error: &ProcessError) -> String {
@@ -403,8 +564,8 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        civil_from_days, filename_timestamp, format_timestamp, SnapshotCommand, SnapshotRecorder,
-        SnapshotSection,
+        civil_from_days, filename_timestamp, format_timestamp, CapturedSection, SnapshotCommand,
+        SnapshotEntry, SnapshotRecorder, SnapshotSection,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -506,6 +667,69 @@ mod tests {
 
         fs::remove_dir_all(&directory)
             .unwrap_or_else(|error| panic!("failed to remove test directory: {error}"));
+    }
+
+    fn commands(section: CapturedSection) -> Vec<String> {
+        section
+            .rollback_commands()
+            .into_iter()
+            .map(|command| command.command().to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn rollback_commands_name_the_previous_versions() {
+        assert_eq!(
+            commands(CapturedSection {
+                group: "brew",
+                entries: vec![SnapshotEntry::new(
+                    "brew list --versions",
+                    "jq 1.7.1\npython@3.11 3.11.6\n",
+                )],
+            }),
+            ["brew install jq@1.7.1", "brew install python@3.11"]
+        );
+        assert_eq!(
+            commands(CapturedSection {
+                group: "uv",
+                entries: vec![SnapshotEntry::new("uv tool list", "ruff v0.6.0\n- ruff\n",)],
+            }),
+            ["uv tool install ruff==0.6.0"]
+        );
+        assert_eq!(
+            commands(CapturedSection {
+                group: "mise",
+                entries: vec![SnapshotEntry::new(
+                    "mise ls",
+                    "Tool Version Source\nnode 22.1.0 ~/.config/mise/config.toml\n",
+                )],
+            }),
+            ["mise install node@22.1.0"]
+        );
+        assert_eq!(
+            commands(CapturedSection {
+                group: "docker",
+                entries: vec![SnapshotEntry::new(
+                    "docker image ls --digests",
+                    "REPOSITORY TAG DIGEST IMAGE ID CREATED SIZE\n\
+                     alpine latest sha256:abc 123 1 day ago 7MB\n\
+                     scratch latest <none> 456 1 day ago 0B\n",
+                )],
+            }),
+            ["docker pull alpine@sha256:abc"]
+        );
+    }
+
+    #[test]
+    fn a_failed_snapshot_command_produces_no_rollback_hints() {
+        assert!(commands(CapturedSection {
+            group: "uv",
+            entries: vec![SnapshotEntry::new(
+                "uv tool list",
+                "# command failed: uv tool list\nno tools installed",
+            )],
+        })
+        .is_empty());
     }
 
     #[test]
