@@ -55,7 +55,7 @@ esac"#,
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         [
             "brew update",
             "brew outdated --formula",
@@ -96,7 +96,7 @@ fn no_outdated_casks_skips_the_cask_upgrade() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         [
             "brew update",
             "brew outdated --formula",
@@ -122,7 +122,7 @@ fn a_missing_brew_skips_every_homebrew_step_without_calling_anything() {
     let output = run(&tools, &["--only", HOMEBREW_STEPS]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert!(tools.calls().is_empty());
+    assert!(tools.step_calls().is_empty());
     assert!(
         stdout(&output).contains("0 ok, 0 planned, 6 skipped, 0 failed"),
         "summary: {}",
@@ -149,7 +149,7 @@ esac"#,
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         [
             "brew update",
             "brew outdated --formula",
@@ -192,7 +192,7 @@ esac"#,
 
     assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         [
             "brew update",
             "brew outdated --formula",
@@ -292,7 +292,7 @@ fn quits_running_cask_apps_before_the_upgrade_and_reopens_after_cleanup() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let info = app.join("Contents/Info");
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         [
             "brew update".to_owned(),
             "brew outdated --formula".to_owned(),
@@ -338,7 +338,7 @@ fn yes_at_the_prompt_quits_apps_and_upgrades_casks() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let info = app.join("Contents/Info");
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         [
             "brew update".to_owned(),
             "brew outdated --formula".to_owned(),
@@ -383,7 +383,7 @@ fn skip_quitting_at_the_prompt_upgrades_casks_without_quitting_apps() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let info = app.join("Contents/Info");
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         [
             "brew update".to_owned(),
             "brew outdated --formula".to_owned(),
@@ -422,7 +422,7 @@ fn skip_casks_at_the_prompt_skips_the_cask_upgrade() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let info = app.join("Contents/Info");
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         [
             "brew update".to_owned(),
             "brew outdated --formula".to_owned(),
@@ -467,7 +467,7 @@ fn never_quits_the_terminal_running_the_script() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         [
             "brew update".to_owned(),
             "brew outdated --formula".to_owned(),
@@ -504,7 +504,7 @@ fn force_kill_terminates_an_app_that_does_not_quit_gracefully() {
     let output = run_apps(&tools, &state, &[("QUIT_TIMEOUT", "0")], &["--force-kill"]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    let calls = tools.calls();
+    let calls = tools.step_calls();
     assert!(
         calls.contains(&"ps -axo pid=,command=".to_owned()),
         "calls: {calls:?}"
@@ -550,7 +550,7 @@ esac"#,
     let output = command
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
-    (output, tools.calls())
+    (output, tools.step_calls())
 }
 
 #[test]
@@ -609,7 +609,7 @@ esac"#,
 
     assert_eq!(output.status.code(), Some(2), "stderr: {}", stderr(&output));
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         ["brew outdated --formula", "brew outdated --cask --greedy"]
     );
 
@@ -632,7 +632,7 @@ fn check_exits_zero_when_homebrew_is_up_to_date() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         ["brew outdated --formula", "brew outdated --cask --greedy"]
     );
     assert_eq!(stdout(&output), "Everything is up to date.\n");
@@ -645,7 +645,7 @@ fn check_skips_a_missing_tool_and_never_calls_it() {
     let output = run(&tools, &["--check", "--only", "brew-formulae"]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert!(tools.calls().is_empty());
+    assert!(tools.step_calls().is_empty());
     assert_eq!(stdout(&output), "Everything is up to date.\n");
 }
 
@@ -664,7 +664,7 @@ esac"#,
     let output = run(&tools, &["--check", "--only", "brew-formulae"]);
 
     assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
-    assert_eq!(tools.calls(), ["brew outdated --formula"]);
+    assert_eq!(tools.step_calls(), ["brew outdated --formula"]);
     assert!(
         stdout(&output).contains("failed during check"),
         "output: {}",

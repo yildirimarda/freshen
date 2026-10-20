@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use crate::check::{CheckResult, CheckSummary};
 use crate::options::{RunOptions, SelectionFlag};
+use crate::snapshot::SnapshotRecorder;
 use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
 
 /// The outcome of one step in a run.
@@ -479,12 +480,14 @@ impl<'a> Runner<'a> {
     /// Runs every step and returns the collected results.
     #[must_use]
     pub fn run(&self) -> RunSummary {
+        let mut snapshots = SnapshotRecorder::new();
+
         RunSummary::from_results(
             self.steps
                 .iter()
                 .copied()
                 .map(|planned| match planned {
-                    PlannedStep::Run(step) => run_step(step, &self.options),
+                    PlannedStep::Run(step) => run_step(step, &self.options, &mut snapshots),
                     PlannedStep::Skip { step, reason } => {
                         StepResult::skipped_because(step, reason, Duration::ZERO)
                     }
@@ -529,7 +532,7 @@ fn check_step(step: &dyn Step) -> CheckResult {
     }
 }
 
-fn run_step(step: &dyn Step, options: &RunOptions) -> StepResult {
+fn run_step(step: &dyn Step, options: &RunOptions, snapshots: &mut SnapshotRecorder) -> StepResult {
     let started = Instant::now();
     match step.detect() {
         Ok(Detection::NotInstalled) => StepResult::skipped(step, started.elapsed()),
@@ -537,6 +540,7 @@ fn run_step(step: &dyn Step, options: &RunOptions) -> StepResult {
             StepResult::planned(step, started.elapsed())
         }
         Ok(Detection::Installed) => {
+            capture_snapshot(step, snapshots);
             let before = step.check().ok();
             let result = match step.run_with_options(options) {
                 Ok(()) => match step.cleanup() {
@@ -557,6 +561,25 @@ fn run_step(step: &dyn Step, options: &RunOptions) -> StepResult {
             result.with_changes(changes)
         }
         Err(error) => StepResult::failed(step, started.elapsed(), error),
+    }
+}
+
+fn capture_snapshot(step: &dyn Step, snapshots: &mut SnapshotRecorder) {
+    let Some(section) = step.snapshot() else {
+        return;
+    };
+
+    match snapshots.record(section) {
+        Ok(true) => {
+            if let Some(path) = snapshots.path() {
+                eprintln!(
+                    "freshen: pre-upgrade snapshot written to {}",
+                    path.display()
+                );
+            }
+        }
+        Ok(false) => {}
+        Err(error) => eprintln!("freshen: could not write pre-upgrade snapshot: {error}"),
     }
 }
 

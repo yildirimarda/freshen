@@ -17,6 +17,7 @@ use crate::homebrew::BREW;
 use crate::platform::Platform;
 use crate::process::CommandSpec;
 use crate::registry::Registry;
+use crate::snapshot::{SnapshotCommand, SnapshotSection};
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
 use crate::warnings::warn_about_stale_node_processes;
 
@@ -71,6 +72,13 @@ impl Step for UvStep {
         finish(UV, failures)
     }
 
+    fn snapshot(&self) -> Option<SnapshotSection> {
+        Some(SnapshotSection::new(
+            UV,
+            vec![SnapshotCommand::new("uv", ["tool", "list"])],
+        ))
+    }
+
     fn prerequisites(&self) -> &'static [StepId] {
         &[BREW]
     }
@@ -122,6 +130,13 @@ impl Step for MiseStep {
         warn_about_stale_node_processes();
 
         finish(MISE, failures)
+    }
+
+    fn snapshot(&self) -> Option<SnapshotSection> {
+        Some(SnapshotSection::new(
+            MISE,
+            vec![SnapshotCommand::new("mise", ["ls"])],
+        ))
     }
 
     fn prerequisites(&self) -> &'static [StepId] {

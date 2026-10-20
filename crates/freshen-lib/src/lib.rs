@@ -15,6 +15,7 @@ pub mod process;
 pub mod registry;
 pub mod report;
 pub mod runner;
+pub mod snapshot;
 pub mod step;
 pub mod system;
 pub mod tooling;
@@ -34,6 +35,7 @@ pub use platform::Platform;
 pub use process::{Backoff, CommandSpec, OutputStream, ProcessError, ProcessOutput};
 pub use registry::{Registry, RegistryError};
 pub use runner::{RunSummary, Runner, SkipReason, StepResult, StepStatus, VersionChange};
+pub use snapshot::{SnapshotCommand, SnapshotRecorder, SnapshotSection};
 pub use step::{CheckReport, Detection, Operation, OutdatedItem, Step, StepError, StepId};
 pub use system::{
     Arch, Distro, Environment, HostProbe, OsInfo, Privilege, ProcessInfo, SystemInfo, SystemProbe,

@@ -23,6 +23,7 @@ use crate::homebrew::{BREW, FORMULAE, REOPEN};
 use crate::platform::Platform;
 use crate::process::CommandSpec;
 use crate::registry::Registry;
+use crate::snapshot::{self, SnapshotCommand, SnapshotSection};
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
 
 /// Stops containers and Colima before the formula upgrade.
@@ -268,6 +269,10 @@ impl Step for ColimaStopStep {
         finish(COLIMA_STOP, failures)
     }
 
+    fn snapshot(&self) -> Option<SnapshotSection> {
+        Some(snapshot::homebrew_section())
+    }
+
     fn prerequisites(&self) -> &'static [StepId] {
         &[BREW]
     }
@@ -331,6 +336,10 @@ impl Step for ColimaStartStep {
         }
 
         finish(COLIMA_START, failures)
+    }
+
+    fn snapshot(&self) -> Option<SnapshotSection> {
+        Some(snapshot::homebrew_section())
     }
 
     fn prerequisites(&self) -> &'static [StepId] {
@@ -399,6 +408,13 @@ impl Step for DockerStep {
         }
 
         finish(DOCKER, failures)
+    }
+
+    fn snapshot(&self) -> Option<SnapshotSection> {
+        Some(SnapshotSection::new(
+            DOCKER,
+            vec![SnapshotCommand::new("docker", ["image", "ls", "--digests"])],
+        ))
     }
 
     fn prerequisites(&self) -> &'static [StepId] {

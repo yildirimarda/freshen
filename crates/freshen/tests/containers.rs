@@ -150,7 +150,7 @@ fn stops_colima_and_restores_containers_around_the_formula_upgrade() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         [
             "brew update",
             "brew outdated --formula --quiet",
@@ -226,7 +226,7 @@ fn up_to_date_colima_is_never_stopped() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         [
             "brew update",
             "brew outdated --formula --quiet",
@@ -271,7 +271,7 @@ fn a_stopped_colima_is_not_started_and_docker_updates_are_skipped() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         [
             "brew update",
             "brew outdated --formula --quiet",
@@ -292,9 +292,12 @@ fn a_stopped_colima_is_not_started_and_docker_updates_are_skipped() {
         stdout(&output)
     );
     assert!(
-        !tools.calls().iter().any(|call| call.starts_with("docker ")),
+        !tools
+            .step_calls()
+            .iter()
+            .any(|call| call.starts_with("docker ")),
         "calls: {:?}",
-        tools.calls()
+        tools.step_calls()
     );
 }
 
@@ -308,7 +311,7 @@ fn colima_is_stopped_without_docker_and_the_docker_step_is_skipped() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         [
             "brew update",
             "brew outdated --formula --quiet",
@@ -348,7 +351,7 @@ fn a_failing_colima_start_is_recorded_and_containers_are_not_restored() {
     );
 
     assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
-    let calls = tools.calls();
+    let calls = tools.step_calls();
     assert!(
         calls.contains(&"colima start".to_owned()),
         "calls: {calls:?}"
@@ -388,7 +391,7 @@ fn containers_are_restored_even_when_the_formula_upgrade_fails() {
     );
 
     assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
-    let calls = tools.calls();
+    let calls = tools.step_calls();
     assert!(
         calls.contains(&"colima start".to_owned()),
         "calls: {calls:?}"

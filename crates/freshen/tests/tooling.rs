@@ -78,7 +78,10 @@ fn uv_upgrades_tools_and_prunes_the_cache() {
     let output = run(&tools, "uv");
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert_eq!(tools.calls(), ["uv tool upgrade --all", "uv cache prune"]);
+    assert_eq!(
+        tools.step_calls(),
+        ["uv tool upgrade --all", "uv cache prune"]
+    );
 }
 
 #[test]
@@ -94,7 +97,10 @@ fn a_failing_uv_upgrade_still_prunes_the_cache_and_fails_the_step() {
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
 
     assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
-    assert_eq!(tools.calls(), ["uv tool upgrade --all", "uv cache prune"]);
+    assert_eq!(
+        tools.step_calls(),
+        ["uv tool upgrade --all", "uv cache prune"]
+    );
     assert!(
         stdout(&output).contains("1 failed"),
         "summary: {}",
@@ -112,7 +118,7 @@ fn mise_self_updates_upgrades_and_prunes_when_not_installed_with_brew() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         [
             "brew list --formula mise",
             "mise self-update -y",
@@ -138,7 +144,7 @@ fn mise_installed_with_brew_is_not_self_updated() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         [
             "brew list --formula mise",
             "mise upgrade",
@@ -157,7 +163,7 @@ fn mise_self_updates_when_brew_is_not_installed() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         [
             "mise self-update -y",
             "mise upgrade",
@@ -181,7 +187,7 @@ fn a_failing_mise_self_update_is_only_a_warning() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         [
             "mise self-update -y",
             "mise upgrade",
@@ -210,7 +216,7 @@ fn a_failing_mise_upgrade_still_prunes_and_fails_the_step() {
 
     assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         [
             "mise self-update -y",
             "mise upgrade",
@@ -232,7 +238,7 @@ fn a_missing_uv_or_mise_is_skipped_without_calling_anything() {
     let output = run(&tools, "uv,mise");
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert!(tools.calls().is_empty());
+    assert!(tools.step_calls().is_empty());
     assert!(
         stdout(&output).contains("0 ok, 0 planned, 2 skipped, 0 failed"),
         "summary: {}",
@@ -291,7 +297,7 @@ fn warns_about_processes_still_running_an_old_node_version() {
         "the active node version must not be reported: {text}"
     );
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         [
             "mise self-update -y",
             "mise upgrade",
@@ -337,6 +343,6 @@ esac"#,
             .iter()
             .any(|call| call.starts_with("ps -o comm=")),
         "calls: {:?}",
-        tools.calls()
+        tools.step_calls()
     );
 }
