@@ -54,7 +54,7 @@ Goal: one tool for macOS, Linux and Windows, written in Rust and shipped as a si
 - [x] Port the Homebrew steps (including formulae-before-casks ordering and cask artifact detection) with parity tests against recorded command transcripts
 - [x] Port the app quit/reopen logic (graceful quit, timeout, optional force kill, never quit the host terminal) with parity tests
 - [x] Port the Colima/lima/Docker orchestration with parity tests
-- [ ] Port the uv and mise steps with parity tests
+- [x] Port the uv and mise steps with parity tests
 - [ ] Port the warnings: processes still running on an old Node version (with the app that started them) and zellij upgraded from inside a zellij session
 - [ ] Remove the zsh implementation once parity tests pass and document the migration in README and CHANGELOG
 - [ ] Add a CI job that checks the code compiles against the MSRV (`rust-version` in the workspace manifest) with `cargo check --workspace`, so an accidental use of a newer language feature fails before release
