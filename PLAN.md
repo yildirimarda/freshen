@@ -52,7 +52,7 @@ Goal: one tool for macOS, Linux and Windows, written in Rust and shipped as a si
 - [x] Add a test that a failing step is recorded, does not abort the run, and produces exit code 1 with the step listed in the summary
 - [x] Add `--list-steps` showing every known step, whether it was detected on this machine, and why it would be skipped
 - [x] Port the Homebrew steps (including formulae-before-casks ordering and cask artifact detection) with parity tests against recorded command transcripts
-- [ ] Port the app quit/reopen logic (graceful quit, timeout, optional force kill, never quit the host terminal) with parity tests
+- [x] Port the app quit/reopen logic (graceful quit, timeout, optional force kill, never quit the host terminal) with parity tests
 - [ ] Port the Colima/lima/Docker orchestration with parity tests
 - [ ] Port the uv and mise steps with parity tests
 - [ ] Port the warnings: processes still running on an old Node version (with the app that started them) and zellij upgraded from inside a zellij session
