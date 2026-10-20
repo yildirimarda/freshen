@@ -11,6 +11,7 @@ pub mod homebrew;
 pub mod listing;
 pub mod options;
 pub mod platform;
+pub mod preflight;
 pub mod process;
 pub mod registry;
 pub mod report;
@@ -32,6 +33,10 @@ pub use containers::{
 pub use listing::{list_steps, DetectionState, StepList, StepListing};
 pub use options::{PlanError, RunOptions, SelectionFlag, StepSelection};
 pub use platform::Platform;
+pub use preflight::{
+    BatteryStatus, HostPreflightProbe, PreflightCheck, PreflightConfig, PreflightIssue,
+    PreflightProbe, PreflightReport,
+};
 pub use process::{Backoff, CommandSpec, OutputStream, ProcessError, ProcessOutput};
 pub use registry::{Registry, RegistryError};
 pub use runner::{RunSummary, Runner, SkipReason, StepResult, StepStatus, VersionChange};

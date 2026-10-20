@@ -39,6 +39,12 @@ fn help_lists_every_flag() {
         "--skip",
         "--yes",
         "--force-kill",
+        "--skip-network-check",
+        "--skip-disk-check",
+        "--skip-battery-check",
+        "--skip-metered-check",
+        "--min-free-disk-gib",
+        "--battery-threshold",
     ] {
         assert!(text.contains(flag), "help does not mention {flag}: {text}");
     }

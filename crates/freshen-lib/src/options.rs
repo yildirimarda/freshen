@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use std::fmt;
 
 use crate::platform::Platform;
+use crate::preflight::PreflightConfig;
 use crate::registry::{Registry, RegistryError};
 use crate::step::{Step, StepId};
 
@@ -183,6 +184,7 @@ pub struct RunOptions {
     assume_yes: bool,
     force_kill: bool,
     selection: StepSelection,
+    preflight: PreflightConfig,
 }
 
 impl RunOptions {
@@ -221,6 +223,13 @@ impl RunOptions {
         self
     }
 
+    /// Replaces the preflight check configuration.
+    #[must_use]
+    pub fn with_preflight(mut self, preflight: PreflightConfig) -> Self {
+        self.preflight = preflight;
+        self
+    }
+
     /// Returns `true` when `--dry-run` is set.
     #[must_use]
     pub fn is_dry_run(&self) -> bool {
@@ -243,6 +252,12 @@ impl RunOptions {
     #[must_use]
     pub fn selection(&self) -> &StepSelection {
         &self.selection
+    }
+
+    /// Configuration for the checks that run before an update.
+    #[must_use]
+    pub fn preflight(&self) -> &PreflightConfig {
+        &self.preflight
     }
 
     /// Builds the ordered list of steps this run should execute on `platform`.
@@ -278,6 +293,7 @@ impl RunOptions {
 mod tests {
     use super::{PlanError, RunOptions, SelectionFlag, StepSelection};
     use crate::platform::Platform;
+    use crate::preflight::{PreflightCheck, PreflightConfig};
     use crate::registry::Registry;
     use crate::step::{CheckReport, Detection, Step, StepError, StepId};
 
@@ -358,6 +374,24 @@ mod tests {
         assert!(options.is_dry_run());
         assert!(options.assume_yes());
         assert!(options.force_kill());
+    }
+
+    #[test]
+    fn preflight_defaults_are_enabled_and_can_be_replaced() {
+        let defaults = RunOptions::new();
+        for check in PreflightCheck::ALL {
+            assert!(defaults.preflight().is_enabled(check), "{check}");
+        }
+
+        let configured = RunOptions::new().with_preflight(
+            PreflightConfig::new()
+                .with_check(PreflightCheck::Network, false)
+                .with_min_free_disk_bytes(42),
+        );
+
+        assert!(!configured.preflight().is_enabled(PreflightCheck::Network));
+        assert!(configured.preflight().is_enabled(PreflightCheck::DiskSpace));
+        assert_eq!(configured.preflight().min_free_disk_bytes(), 42);
     }
 
     #[test]

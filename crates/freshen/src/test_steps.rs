@@ -8,10 +8,12 @@
 //! `PATH`.
 
 use freshen_lib::{
-    CheckReport, CommandSpec, Detection, Platform, Registry, Step, StepError, StepId,
+    BatteryStatus, CheckReport, CommandSpec, Detection, Platform, PreflightProbe, Registry, Step,
+    StepError, StepId,
 };
 
 const ENV_VAR: &str = "FRESHEN_TEST_STEPS";
+const PREFLIGHT_ENV_VAR: &str = "FRESHEN_TEST_PREFLIGHT";
 
 const IDS: [StepId; 16] = [
     "probe-0", "probe-1", "probe-2", "probe-3", "probe-4", "probe-5", "probe-6", "probe-7",
@@ -24,6 +26,92 @@ const IDS: [StepId; 16] = [
 /// own steps never also runs the real Homebrew steps.
 pub fn requested() -> bool {
     std::env::var_os(ENV_VAR).is_some()
+}
+
+/// A preflight probe built from `FRESHEN_TEST_PREFLIGHT`, when it is set.
+///
+/// The value is a semicolon-separated list of `key=value` facts:
+/// `network=down`, `disk=<bytes>`, `battery=<percent>:<charging|discharging>`
+/// and `metered=<yes|no>`. Unknown keys are ignored.
+pub fn preflight_probe() -> Option<ScriptedPreflightProbe> {
+    let value = std::env::var(PREFLIGHT_ENV_VAR).ok()?;
+    let mut probe = ScriptedPreflightProbe {
+        network: true,
+        disk: None,
+        battery: None,
+        metered: None,
+    };
+
+    for entry in value.split(';') {
+        let Some((key, value)) = entry.split_once('=') else {
+            continue;
+        };
+        match key.trim() {
+            "network" => probe.network = !is_false(value),
+            "disk" => probe.disk = value.trim().parse().ok(),
+            "battery" => {
+                let (percent, state) = value.split_once(':').unwrap_or((value, "discharging"));
+                if let Ok(percent) = percent.trim().parse() {
+                    probe.battery = Some(BatteryStatus::new(
+                        percent,
+                        state.trim().eq_ignore_ascii_case("charging"),
+                    ));
+                }
+            }
+            "metered" => {
+                probe.metered = if is_true(value) {
+                    Some(true)
+                } else if is_false(value) {
+                    Some(false)
+                } else {
+                    None
+                };
+            }
+            _ => {}
+        }
+    }
+
+    Some(probe)
+}
+
+fn is_true(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "yes" | "true" | "up" | "metered"
+    )
+}
+
+fn is_false(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "0" | "no" | "false" | "down" | "unreachable" | "unmetered"
+    )
+}
+
+/// Preflight facts scripted by an integration test.
+pub struct ScriptedPreflightProbe {
+    network: bool,
+    disk: Option<u64>,
+    battery: Option<BatteryStatus>,
+    metered: Option<bool>,
+}
+
+impl PreflightProbe for ScriptedPreflightProbe {
+    fn network_reachable(&self) -> bool {
+        self.network
+    }
+
+    fn free_disk_bytes(&self) -> Option<u64> {
+        self.disk
+    }
+
+    fn battery(&self) -> Option<BatteryStatus> {
+        self.battery
+    }
+
+    fn metered_connection(&self) -> Option<bool> {
+        self.metered
+    }
 }
 
 /// Registers one probe step per `FRESHEN_TEST_STEPS` entry.
