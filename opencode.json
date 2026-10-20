@@ -1,0 +1,54 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "openrouter/thinkingmachines/inkling:free",
+  "small_model": "openrouter/thinkingmachines/inkling:free",
+  "permission": {
+    "*": "allow",
+    "bash": {
+      "*": "allow",
+      "git push --force*": "deny",
+      "git push -f*": "deny",
+      "git push*main*": "deny",
+      "git push*master*": "deny",
+      "terraform apply*": "deny",
+      "terraform destroy*": "deny"
+    },
+    "edit": {
+      "*": "allow",
+      ".github/workflows/**": "deny"
+    }
+  },
+  "mcp": {
+    "graphify": {
+      "type": "local",
+      "command": [
+        "/opt/graphify/bin/python",
+        "-m",
+        "graphify.serve",
+        "graphify-out/graph.json"
+      ],
+      "enabled": true,
+      "timeout": 30000,
+      "environment": {
+        "GRAPHIFY_QUERY_LOG_DISABLE": "1"
+      }
+    }
+  },
+  "provider": {
+    "openrouter": {
+      "options": {
+        "timeout": 600000,
+        "setCacheKey": true
+      }
+    }
+  },
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "reserved": 12000
+  },
+  "tool_output": {
+    "max_lines": 500,
+    "max_bytes": 20480
+  }
+}

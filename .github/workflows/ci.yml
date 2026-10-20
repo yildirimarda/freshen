@@ -1,0 +1,55 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install zsh
+        run: sudo apt-get update -q && sudo apt-get install -y -q zsh
+
+      # shellcheck does not support zsh, so the syntax check is `zsh -n`.
+      - name: Zsh syntax
+        run: zsh -n update-all.sh
+
+      - name: Bash syntax (agentloop scripts)
+        run: |
+          bash -n run.sh
+          bash -n setup-github.sh
+
+      - name: Workflow YAML validity
+        run: |
+          python3 - <<'PY'
+          import glob, yaml
+          for f in sorted(glob.glob(".github/workflows/*.yml")):
+              yaml.safe_load(open(f))
+              print("ok", f)
+          PY
+
+      - name: Tests (zsh phase)
+        run: |
+          if [ -f tests/run-tests.sh ]; then bash tests/run-tests.sh; else echo "no zsh tests yet"; fi
+
+      # Rust phase: active as soon as the Cargo workspace exists (PLAN.md Milestone 3).
+      - name: Rust fmt, clippy, tests
+        run: |
+          if [ -f Cargo.toml ]; then
+            cargo fmt --all -- --check
+            cargo clippy --all-targets --all-features -- -D warnings
+            cargo test --all-features
+          else
+            echo "no Cargo workspace yet"
+          fi
