@@ -5,6 +5,7 @@
 //! wrapper around this library. One module per step.
 
 pub mod apps;
+pub mod containers;
 pub mod homebrew;
 pub mod listing;
 pub mod options;
@@ -18,6 +19,9 @@ pub mod system;
 pub use apps::{
     find_running_apps, quit_apps, quit_choice, reopen_apps, AppScan, AppSystem, MacAppSystem,
     QuitChoice, QuitPolicy, RunningApp,
+};
+pub use containers::{
+    parse_compose_projects, parse_standalone_containers, ComposeProject, StandaloneContainer,
 };
 pub use listing::{list_steps, DetectionState, StepList, StepListing};
 pub use options::{PlanError, RunOptions, SelectionFlag, StepSelection};
