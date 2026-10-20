@@ -43,6 +43,13 @@ pub enum RegistryError {
         /// Ids of the steps that could not be ordered.
         steps: Vec<StepId>,
     },
+
+    /// The same step id was registered more than once.
+    #[error("step id `{step}` is registered more than once")]
+    DuplicateStepId {
+        /// The id that appears on more than one registered step.
+        step: StepId,
+    },
 }
 
 /// The set of known steps.
@@ -93,13 +100,15 @@ impl Registry {
 
     /// Validates the step graph before it is used.
     ///
-    /// Every prerequisite and conflict must name a registered step. Cycles are
-    /// checked per platform, because a prerequisite that does not support the
-    /// platform of a run does not constrain its dependants.
+    /// Step ids must be unique, and every prerequisite and conflict must name a
+    /// registered step. Cycles are checked per platform, because a prerequisite
+    /// that does not support the platform of a run does not constrain its
+    /// dependants.
     ///
     /// # Errors
     ///
-    /// Returns [`RegistryError::UnknownPrerequisite`] or
+    /// Returns [`RegistryError::DuplicateStepId`] when an id is registered more
+    /// than once, [`RegistryError::UnknownPrerequisite`] or
     /// [`RegistryError::UnknownConflict`] when a step names an id that is not
     /// registered, and [`RegistryError::DependencyCycle`] when prerequisites
     /// form a cycle on a platform and no complete order exists.
@@ -112,7 +121,13 @@ impl Registry {
     }
 
     fn validate_references(&self) -> Result<(), RegistryError> {
-        let known: HashSet<StepId> = self.steps.iter().map(|step| step.id()).collect();
+        let mut known: HashSet<StepId> = HashSet::new();
+
+        for step in &self.steps {
+            if !known.insert(step.id()) {
+                return Err(RegistryError::DuplicateStepId { step: step.id() });
+            }
+        }
 
         for step in &self.steps {
             let id = step.id();
@@ -141,7 +156,8 @@ impl Registry {
     ///
     /// # Errors
     ///
-    /// Returns [`RegistryError::UnknownPrerequisite`] or
+    /// Returns [`RegistryError::DuplicateStepId`] when an id is registered more
+    /// than once, [`RegistryError::UnknownPrerequisite`] or
     /// [`RegistryError::UnknownConflict`] when a step names an id that is not
     /// registered, and [`RegistryError::DependencyCycle`] when prerequisites
     /// form a cycle and no complete order exists.
@@ -209,7 +225,8 @@ impl Registry {
     ///
     /// # Errors
     ///
-    /// Returns [`RegistryError::UnknownPrerequisite`] or
+    /// Returns [`RegistryError::DuplicateStepId`] when an id is registered more
+    /// than once, [`RegistryError::UnknownPrerequisite`] or
     /// [`RegistryError::UnknownConflict`] when a step names an id that is not
     /// registered, and [`RegistryError::DependencyCycle`] when prerequisites
     /// form a cycle and no complete order exists.
@@ -464,6 +481,43 @@ mod tests {
             Some(RegistryError::DependencyCycle {
                 steps: vec!["first", "second"],
             })
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_step_ids() {
+        let registry = Registry::new()
+            .with(TestStep::new("brew"))
+            .with(TestStep::new("brew"));
+
+        assert_eq!(
+            registry.validate(),
+            Err(RegistryError::DuplicateStepId { step: "brew" })
+        );
+    }
+
+    #[test]
+    fn duplicate_step_ids_fail_dependency_resolution() {
+        let registry = Registry::new()
+            .with(TestStep::new("brew"))
+            .with(TestStep::new("brew"))
+            .with(TestStep::after("casks", &["brew"]));
+
+        assert_eq!(
+            registry.ordered_for(Platform::Macos).err(),
+            Some(RegistryError::DuplicateStepId { step: "brew" })
+        );
+    }
+
+    #[test]
+    fn duplicate_step_id_error_names_the_id() {
+        let registry = Registry::new()
+            .with(TestStep::new("brew"))
+            .with(TestStep::new("brew"));
+
+        assert_eq!(
+            registry.validate().map_err(|error| error.to_string()),
+            Err("step id `brew` is registered more than once".to_owned())
         );
     }
 
