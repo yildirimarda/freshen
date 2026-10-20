@@ -4,8 +4,12 @@
 //! [`freshen_lib::RunOptions`], so macOS, Linux and Windows share one
 //! implementation.
 
+use std::time::Duration;
+
 use clap::{ArgAction, Parser};
-use freshen_lib::{PreflightCheck, PreflightConfig, RunOptions, StepSelection};
+use freshen_lib::{
+    PackageManagerConfig, PreflightCheck, PreflightConfig, RunOptions, StepSelection,
+};
 
 /// Keep a developer machine up to date: package managers, language toolchains
 /// and containers, on macOS, Linux and Windows.
@@ -64,6 +68,14 @@ pub struct Cli {
     #[arg(long)]
     pub skip_metered_check: bool,
 
+    /// Skip the check for another package manager process.
+    #[arg(long)]
+    pub skip_package_manager_check: bool,
+
+    /// Seconds to wait for another package manager to finish before aborting.
+    #[arg(long, value_name = "SECONDS", default_value_t = 30)]
+    pub package_manager_wait: u64,
+
     /// Minimum free disk space in GiB required before updating.
     #[arg(long, value_name = "GIB", default_value_t = 1)]
     pub min_free_disk_gib: u64,
@@ -86,11 +98,16 @@ impl Cli {
             .with_min_free_disk_bytes(self.min_free_disk_gib.saturating_mul(1024 * 1024 * 1024))
             .with_min_battery_percent(self.battery_threshold);
 
+        let package_manager = PackageManagerConfig::new()
+            .with_enabled(!self.skip_package_manager_check)
+            .with_wait(Duration::from_secs(self.package_manager_wait));
+
         RunOptions::new()
             .with_dry_run(self.dry_run)
             .with_assume_yes(self.yes)
             .with_force_kill(self.force_kill)
             .with_preflight(preflight)
+            .with_package_manager(package_manager)
             .with_selection(
                 StepSelection::new()
                     .with_only(self.only.clone())
@@ -124,6 +141,7 @@ mod tests {
         assert!(!cli.skip_disk_check);
         assert!(!cli.skip_battery_check);
         assert!(!cli.skip_metered_check);
+        assert!(!cli.skip_package_manager_check);
         assert!(!options.is_dry_run());
         assert!(!options.assume_yes());
         assert!(!options.force_kill());
@@ -136,6 +154,11 @@ mod tests {
             1024 * 1024 * 1024
         );
         assert_eq!(options.preflight().min_battery_percent(), 20);
+        assert!(options.package_manager().is_enabled());
+        assert_eq!(
+            options.package_manager().wait(),
+            std::time::Duration::from_secs(30)
+        );
     }
 
     #[test]
@@ -155,6 +178,9 @@ mod tests {
             "--skip-disk-check",
             "--skip-battery-check",
             "--skip-metered-check",
+            "--skip-package-manager-check",
+            "--package-manager-wait",
+            "5",
             "--min-free-disk-gib",
             "5",
             "--battery-threshold",
@@ -177,6 +203,11 @@ mod tests {
             5 * 1024 * 1024 * 1024
         );
         assert_eq!(options.preflight().min_battery_percent(), 35);
+        assert!(!options.package_manager().is_enabled());
+        assert_eq!(
+            options.package_manager().wait(),
+            std::time::Duration::from_secs(5)
+        );
     }
 
     #[test]
@@ -246,6 +277,8 @@ mod tests {
             "--skip-disk-check",
             "--skip-battery-check",
             "--skip-metered-check",
+            "--skip-package-manager-check",
+            "--package-manager-wait",
             "--min-free-disk-gib",
             "--battery-threshold",
         ] {

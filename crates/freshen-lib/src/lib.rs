@@ -11,6 +11,7 @@ pub mod homebrew;
 pub mod listing;
 pub mod lock;
 pub mod options;
+pub mod package_manager;
 pub mod platform;
 pub mod preflight;
 pub mod process;
@@ -34,6 +35,10 @@ pub use containers::{
 pub use listing::{list_steps, DetectionState, StepList, StepListing};
 pub use lock::{LockError, RunLock};
 pub use options::{PlanError, RunOptions, SelectionFlag, StepSelection};
+pub use package_manager::{
+    wait_for_package_managers, HostPackageManagerProbe, PackageManagerConfig, PackageManagerProbe,
+    PackageManagerProcess, WaitOutcome,
+};
 pub use platform::Platform;
 pub use preflight::{
     BatteryStatus, HostPreflightProbe, PreflightCheck, PreflightConfig, PreflightIssue,
