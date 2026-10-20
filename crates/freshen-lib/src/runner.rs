@@ -554,6 +554,10 @@ mod tests {
         Runner::new(steps.iter().copied()).run()
     }
 
+    fn assert_exit_code(actual: ExitCode, expected: ExitCode) {
+        assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+    }
+
     #[test]
     fn runs_installed_steps_in_order_and_cleans_up() {
         let first = FakeStep::new("brew", "Homebrew");
@@ -572,7 +576,7 @@ mod tests {
         assert_eq!(summary.skipped_count(), 0);
         assert_eq!(summary.failed_count(), 0);
         assert!(!summary.has_failures());
-        assert_eq!(summary.exit_code(), ExitCode::SUCCESS);
+        assert_exit_code(summary.exit_code(), ExitCode::SUCCESS);
 
         assert_eq!(first_calls.detect.get(), 1);
         assert_eq!(first_calls.run.get(), 1);
@@ -595,7 +599,7 @@ mod tests {
         assert_eq!(summary.skipped_count(), 1);
         assert_eq!(summary.ok_count(), 0);
         assert_eq!(summary.failed_count(), 0);
-        assert_eq!(summary.exit_code(), ExitCode::SUCCESS);
+        assert_exit_code(summary.exit_code(), ExitCode::SUCCESS);
 
         assert_eq!(calls.detect.get(), 1);
         assert_eq!(calls.run.get(), 0);
@@ -617,7 +621,7 @@ mod tests {
         assert_eq!(summary.steps()[1].status(), StepStatus::Skipped);
         assert_eq!(summary.skipped_count(), 1);
         assert_eq!(summary.failed_count(), 0);
-        assert_eq!(summary.exit_code(), ExitCode::SUCCESS);
+        assert_exit_code(summary.exit_code(), ExitCode::SUCCESS);
         assert!(summary.to_string().contains("1 planned"));
 
         assert_eq!(calls.detect.get(), 1);
@@ -663,7 +667,7 @@ mod tests {
         assert_eq!(summary.ok_count(), 1);
         assert_eq!(summary.skipped_count(), 1);
         assert_eq!(summary.failed_count(), 0);
-        assert_eq!(summary.exit_code(), ExitCode::SUCCESS);
+        assert_exit_code(summary.exit_code(), ExitCode::SUCCESS);
         assert!(summary.to_string().contains("conflicts with `brew`"));
 
         assert_eq!(earlier_calls.run.get(), 1);
@@ -730,7 +734,7 @@ mod tests {
 
         assert_eq!(summary.steps()[0].status(), StepStatus::Failed);
         assert_eq!(summary.planned_count(), 0);
-        assert_eq!(summary.exit_code(), ExitCode::FAILURE);
+        assert_exit_code(summary.exit_code(), ExitCode::FAILURE);
     }
 
     #[test]
@@ -746,7 +750,7 @@ mod tests {
         assert_eq!(summary.failed_count(), 1);
         assert_eq!(summary.ok_count(), 1);
         assert!(summary.has_failures());
-        assert_eq!(summary.exit_code(), ExitCode::FAILURE);
+        assert_exit_code(summary.exit_code(), ExitCode::FAILURE);
         assert_eq!(summary.failures().count(), 1);
 
         let result = &summary.steps()[0];
@@ -778,7 +782,7 @@ mod tests {
         assert_eq!(calls.detect.get(), 1);
         assert_eq!(calls.run.get(), 0);
         assert_eq!(calls.cleanup.get(), 0);
-        assert_eq!(summary.exit_code(), ExitCode::FAILURE);
+        assert_exit_code(summary.exit_code(), ExitCode::FAILURE);
     }
 
     #[test]
@@ -796,7 +800,7 @@ mod tests {
         );
         assert_eq!(calls.run.get(), 1);
         assert_eq!(calls.cleanup.get(), 1);
-        assert_eq!(summary.exit_code(), ExitCode::FAILURE);
+        assert_exit_code(summary.exit_code(), ExitCode::FAILURE);
     }
 
     #[test]
@@ -820,7 +824,7 @@ mod tests {
 
         assert_eq!(summary.skipped_count(), 2);
         assert!(!summary.has_failures());
-        assert_eq!(summary.exit_code(), ExitCode::SUCCESS);
+        assert_exit_code(summary.exit_code(), ExitCode::SUCCESS);
     }
 
     #[test]
@@ -830,7 +834,7 @@ mod tests {
         assert!(summary.steps().is_empty());
         assert!(!summary.has_failures());
         assert_eq!(summary.total_duration(), Duration::ZERO);
-        assert_eq!(summary.exit_code(), ExitCode::SUCCESS);
+        assert_exit_code(summary.exit_code(), ExitCode::SUCCESS);
     }
 
     #[test]

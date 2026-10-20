@@ -22,8 +22,8 @@
   `advisories` section, and the `cargo-deny` job in `ci-proposals/rust.yml`
   runs both `cargo deny check licenses` and `cargo deny check advisories`
 - the `msrv` job in `ci-proposals/rust.yml` reads the workspace
-  `rust-version` and runs `cargo check --workspace` with that toolchain, so a
-  newer language feature fails before release
+  `rust-version` and runs `cargo check --workspace --all-targets` with that
+  toolchain, so a newer language feature fails before release
 
 Unit and integration tests for the Rust implementation live in the Cargo
 workspace (`cargo test --all-features`); this script keeps only the
