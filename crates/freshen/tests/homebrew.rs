@@ -28,6 +28,7 @@ fn run(tools: &StubTools, args: &[&str]) -> Output {
     tools
         .command()
         .env("FRESHEN_BREW_INFO_JSON", CASK_INFO)
+        .env_remove("ZELLIJ")
         .args(args)
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
@@ -57,6 +58,7 @@ esac"#,
         tools.calls(),
         [
             "brew update",
+            "brew outdated --formula --quiet",
             "brew upgrade --formula",
             "brew outdated --cask --greedy --quiet",
             "brew info --cask --json=v2 firefox google-chrome",
@@ -95,6 +97,7 @@ fn no_outdated_casks_skips_the_cask_upgrade() {
         tools.calls(),
         [
             "brew update",
+            "brew outdated --formula --quiet",
             "brew upgrade --formula",
             "brew outdated --cask --greedy --quiet",
             "brew autoremove",
@@ -145,6 +148,7 @@ esac"#,
         tools.calls(),
         [
             "brew update",
+            "brew outdated --formula --quiet",
             "brew upgrade --formula",
             "brew outdated --cask --greedy --quiet",
             "brew info --cask --json=v2 firefox",
@@ -185,6 +189,7 @@ esac"#,
         tools.calls(),
         [
             "brew update",
+            "brew outdated --formula --quiet",
             "brew upgrade --formula",
             "brew outdated --cask --greedy --quiet",
             "brew info --cask --json=v2 firefox",
@@ -272,6 +277,7 @@ fn quits_running_cask_apps_before_the_upgrade_and_reopens_after_cleanup() {
         tools.calls(),
         [
             "brew update".to_owned(),
+            "brew outdated --formula --quiet".to_owned(),
             "brew upgrade --formula".to_owned(),
             "brew outdated --cask --greedy --quiet".to_owned(),
             "brew info --cask --json=v2 firefox".to_owned(),
@@ -319,6 +325,7 @@ fn never_quits_the_terminal_running_the_script() {
         tools.calls(),
         [
             "brew update".to_owned(),
+            "brew outdated --formula --quiet".to_owned(),
             "brew upgrade --formula".to_owned(),
             "brew outdated --cask --greedy --quiet".to_owned(),
             "brew info --cask --json=v2 firefox".to_owned(),
@@ -369,4 +376,68 @@ fn force_kill_terminates_an_app_that_does_not_quit_gracefully() {
         text.contains("did not quit, force-killing"),
         "output: {text}"
     );
+}
+
+fn run_formulae(outdated: &str, inside_zellij: bool) -> (Output, Vec<String>) {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_script(
+        "brew",
+        r#"case "$*" in
+  "outdated --formula --quiet")
+    printf '%s\n' "$FRESHEN_OUTDATED"
+    ;;
+esac"#,
+    );
+
+    let mut command = tools.command();
+    command
+        .env("FRESHEN_BREW_INFO_JSON", CASK_INFO)
+        .env("FRESHEN_OUTDATED", outdated)
+        .args(["--only", "brew,brew-formulae"]);
+    if inside_zellij {
+        command.env("ZELLIJ", "0");
+    } else {
+        command.env_remove("ZELLIJ");
+    }
+
+    let output = command
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+    (output, tools.calls())
+}
+
+#[test]
+fn warns_when_zellij_is_upgraded_from_inside_a_zellij_session() {
+    let (output, calls) = run_formulae("zellij\nnode\n", true);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        calls,
+        [
+            "brew update",
+            "brew outdated --formula --quiet",
+            "brew upgrade --formula",
+        ]
+    );
+    assert!(
+        stdout(&output)
+            .contains("warning: zellij will be upgraded while you are inside a zellij session"),
+        "output: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn no_zellij_warning_outside_a_session_or_when_zellij_is_current() {
+    let (outside, _) = run_formulae("zellij\n", false);
+    let (current, _) = run_formulae("node\n", true);
+
+    for output in [outside, current] {
+        assert!(output.status.success(), "stderr: {}", stderr(&output));
+        assert!(
+            !stdout(&output).contains("zellij will be upgraded"),
+            "unexpected warning: {}",
+            stdout(&output)
+        );
+    }
 }

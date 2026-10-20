@@ -25,6 +25,7 @@ use crate::platform::Platform;
 use crate::process::{CommandSpec, ProcessOutput};
 use crate::registry::Registry;
 use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
+use crate::warnings::warn_if_zellij_upgrade;
 
 pub(crate) const BREW: StepId = "brew";
 pub(crate) const FORMULAE: StepId = "brew-formulae";
@@ -255,6 +256,13 @@ impl Step for FormulaeStep {
     }
 
     fn run(&self) -> Result<(), StepError> {
+        if let Ok(outdated) = CommandSpec::new("brew")
+            .args(["outdated", "--formula", "--quiet"])
+            .run()
+        {
+            warn_if_zellij_upgrade(outdated.stdout());
+        }
+
         run_brew(
             FORMULAE,
             CommandSpec::new("brew").args(["upgrade", "--formula"]),
