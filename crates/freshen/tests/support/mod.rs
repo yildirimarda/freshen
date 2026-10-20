@@ -115,6 +115,7 @@ impl StubTools {
             .env("FRESHEN_STUB_LOG", &self.log)
             .env("FRESHEN_STUB_STATE", &self.dir)
             .env("FRESHEN_SNAPSHOT_DIR", self.dir.join("snapshots"))
+            .env("FRESHEN_LOCK_DIR", self.dir.join("lock"))
             .env("FRESHEN_SKIP_PREFLIGHT", "1")
             .env("HOME", &self.dir)
             .env("USERPROFILE", &self.dir);

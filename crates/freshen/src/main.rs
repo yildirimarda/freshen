@@ -4,7 +4,9 @@
 use std::process::ExitCode;
 
 use clap::Parser;
-use freshen_lib::{list_steps, HostPreflightProbe, Platform, PreflightReport, Registry, Runner};
+use freshen_lib::{
+    list_steps, HostPreflightProbe, Platform, PreflightReport, Registry, RunLock, Runner,
+};
 
 mod cli;
 
@@ -47,6 +49,18 @@ fn main() -> ExitCode {
         }
         return summary.exit_code();
     }
+
+    let _lock = if options.is_dry_run() {
+        None
+    } else {
+        match RunLock::acquire() {
+            Ok(lock) => Some(lock),
+            Err(error) => {
+                eprintln!("freshen: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    };
 
     if !options.is_dry_run() && !preflight_skipped() {
         let report = run_preflight(&options);

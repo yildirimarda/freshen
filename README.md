@@ -29,6 +29,7 @@ A failing step never aborts the run. Failures are collected and listed at the en
 - **Zellij**: if zellij is outdated and you run freshen inside a session, you get a warning (server/client versions must match).
 - **Every run starts with preflight checks**: the network must be reachable, at least 1 GiB must be free, the battery must be at or above 20% while discharging, and the connection must not be metered or a hotspot. A failed check stops before any step runs (exit code 3) and lists every problem. Each check can be disabled with `--skip-network-check`, `--skip-disk-check`, `--skip-battery-check` or `--skip-metered-check`; `--min-free-disk-gib` and `--battery-threshold` change the thresholds. `--dry-run` and `--check` skip preflight because they change nothing.
 - **Every run records a pre-upgrade snapshot** of installed versions (`brew list --versions`, `brew bundle dump`, `uv tool list`, `mise ls`, Docker images) in a timestamped file under the platform state directory (`~/.local/state/freshen/snapshots` on Linux, `~/Library/Application Support/freshen/snapshots` on macOS, `%LOCALAPPDATA%\freshen\snapshots` on Windows). Set `FRESHEN_SNAPSHOT_DIR` to override the location. The summary prints the commands that reinstall the recorded versions.
+- **Only one update runs at a time.** A second run stops with an error naming the PID that holds the lock. The lock lives under the platform state directory (`FRESHEN_LOCK_DIR` overrides it), and `--dry-run`/`--check` do not take it.
 
 ## Requirements
 
@@ -57,6 +58,7 @@ freshen --min-free-disk-gib 5 --battery-threshold 30   # custom preflight thresh
 |---|---|---|
 | `QUIT_TIMEOUT` | `20` | Seconds to wait for an app to quit |
 | `FRESHEN_SKIP_PREFLIGHT` | unset | Set to `1` to disable every preflight check |
+| `FRESHEN_LOCK_DIR` | platform state directory | Override where the single-run lock file lives |
 
 `--yes` and `--force-kill` replace the old `ASSUME_YES`/`FORCE_KILL` environment variables.
 

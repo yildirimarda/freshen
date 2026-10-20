@@ -78,7 +78,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Pre-upgrade snapshot: record installed versions per step (brew list --versions, brew bundle dump, uv tool list, mise ls, package lists) to a timestamped file so a rollback is possible
 - [x] Rollback hints in the summary: print the exact commands to return to the previous versions recorded in the snapshot
 - [x] Preflight checks: network reachable, enough free disk space, not on battery below a threshold, not on a metered/hotspot connection (configurable, each skippable with a flag)
-- [ ] Add a lock file so two freshen runs cannot overlap, with a clear message naming the PID that holds it
+- [x] Add a lock file so two freshen runs cannot overlap, with a clear message naming the PID that holds it
 - [ ] Detect when another package manager process is running (brew, apt/dpkg lock, winget) and wait or abort with a clear message
 - [ ] Graceful handling of SIGINT/SIGTERM on every OS: stop the running step, restore everything that was stopped (apps, containers, VMs), print a partial summary
 - [ ] Idempotency guarantee: running the tool twice in a row must be a no-op the second time; add a test asserting it
@@ -220,5 +220,6 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Retry stub execution when the kernel returns `ETXTBSY` (text file busy), so parallel test threads that write and execute a stub cannot fail spuriously, with a test for the retry helper
 - [ ] Probe both IPv4 and IPv6 (and allow overriding the endpoint) in the network preflight check so IPv6-only or filtered networks are not reported as unreachable, covered by tests with injected endpoints
 - [ ] Detect user-marked metered networks on macOS instead of only hotspot SSIDs, so the metered preflight check matches the system setting, covered by tests with injected command output
+- [ ] Make `preflight::tests::tcp_reachability_detects_open_and_closed_ports` robust against another process reusing the just-released port, so the suite does not fail spuriously on shared CI runners
 
 <!-- The agent appends newly found work here. -->
