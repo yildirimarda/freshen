@@ -44,7 +44,7 @@ Goal: one tool for macOS, Linux and Windows, written in Rust and shipped as a si
 - [x] Choose and document the core dependencies in the ADR (candidates: `clap` for the CLI, `serde` + `toml` for config, `anyhow`/`thiserror` for errors, `ctrlc` for signals, `which` for tool detection, `indicatif` for progress) and add `cargo-deny` (licenses, advisories) to CI
 - [x] Define the step abstraction: each step has an id, display name, `detect()` (is the tool installed), `check()` (what is outdated, read-only), `run()` (upgrade), `cleanup()` and a list of conflicts/prerequisites
 - [x] Implement a step registry with ordering, dependencies (e.g. brew formulae before casks, mise after brew) and per-step platform filter (`macos`, `linux`, `windows`)
-- [ ] Implement a subprocess runner with live output streaming, per-step timeout, environment control, optional retry with backoff, and capture of stdout/stderr for the log
+- [x] Implement a subprocess runner with live output streaming, per-step timeout, environment control, optional retry with backoff, and capture of stdout/stderr for the log
 - [ ] Implement an OS abstraction layer: detect OS/distro/arch, privilege level, interactive vs non-interactive terminal, and the terminal application running the tool
 - [ ] Implement failure collection and the final summary (steps ok / skipped / failed, duration per step) with the same exit-code semantics as the zsh script
 - [ ] Add `--dry-run`, `--only`, `--skip`, `--yes`, `--force-kill` with identical semantics on every platform
