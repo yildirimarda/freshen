@@ -50,7 +50,7 @@ Goal: one tool for macOS, Linux and Windows, written in Rust and shipped as a si
 - [x] Add `--dry-run`, `--only`, `--skip`, `--yes`, `--force-kill` with identical semantics on every platform
 - [x] Add a test harness that runs the built binary against stub `brew`, `uv`, `mise`, `docker`, `colima` executables on `PATH` and asserts the call order (tests never invoke the real tools)
 - [x] Add a test that a failing step is recorded, does not abort the run, and produces exit code 1 with the step listed in the summary
-- [ ] Add `--list-steps` showing every known step, whether it was detected on this machine, and why it would be skipped
+- [x] Add `--list-steps` showing every known step, whether it was detected on this machine, and why it would be skipped
 - [ ] Port the Homebrew steps (including formulae-before-casks ordering and cask artifact detection) with parity tests against recorded command transcripts
 - [ ] Port the app quit/reopen logic (graceful quit, timeout, optional force kill, never quit the host terminal) with parity tests
 - [ ] Port the Colima/lima/Docker orchestration with parity tests
