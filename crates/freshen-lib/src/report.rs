@@ -1,0 +1,341 @@
+//! JSON and Markdown renderings of run and check summaries.
+//!
+//! The plain-text summary is the default; these renderings are selected with
+//! `--json` or `--markdown`. Every step appears in the report, including its
+//! status, duration and the versions that actually changed while it ran.
+
+use serde_json::{json, Value};
+
+use crate::check::CheckSummary;
+use crate::runner::{format_duration, RunSummary};
+
+pub(crate) fn run_json(summary: &RunSummary) -> String {
+    let steps: Vec<Value> = summary
+        .steps()
+        .iter()
+        .map(|result| {
+            let changes: Vec<Value> = result
+                .changes()
+                .iter()
+                .map(|change| {
+                    json!({
+                        "name": change.name(),
+                        "before": change.before(),
+                        "after": change.after(),
+                    })
+                })
+                .collect();
+
+            json!({
+                "id": result.id(),
+                "name": result.name(),
+                "status": result.status().as_str(),
+                "duration_ms": result.duration().as_millis(),
+                "changes": changes,
+                "skip_reason": result.skip_reason().map(|reason| reason.to_string()),
+                "error": result.error().map(|error| error.to_string()),
+            })
+        })
+        .collect();
+
+    let report = json!({
+        "ok": summary.ok_count(),
+        "planned": summary.planned_count(),
+        "skipped": summary.skipped_count(),
+        "failed": summary.failed_count(),
+        "total_duration_ms": summary.total_duration().as_millis(),
+        "steps": steps,
+    });
+
+    serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_owned())
+}
+
+pub(crate) fn run_markdown(summary: &RunSummary) -> String {
+    let mut out = String::new();
+    out.push_str("# freshen report\n\n");
+    out.push_str(&format!(
+        "**Summary:** {} ok, {} planned, {} skipped, {} failed ({})\n\n",
+        summary.ok_count(),
+        summary.planned_count(),
+        summary.skipped_count(),
+        summary.failed_count(),
+        format_duration(summary.total_duration())
+    ));
+    out.push_str("| Step | Status | Duration | Changes |\n");
+    out.push_str("| --- | --- | --- | --- |\n");
+
+    for result in summary.steps() {
+        let mut status = result.status().to_string();
+        if let Some(reason) = result.skip_reason() {
+            status.push_str(" - ");
+            status.push_str(&reason.to_string());
+        }
+        if let Some(error) = result.error() {
+            status.push_str(" - ");
+            status.push_str(&error.to_string());
+        }
+
+        let changes = if result.changes().is_empty() {
+            "none".to_owned()
+        } else {
+            result
+                .changes()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("<br>")
+        };
+
+        out.push_str(&format!(
+            "| {} (`{}`) | {} | {} | {} |\n",
+            escape_cell(result.name()),
+            result.id(),
+            escape_cell(&status),
+            format_duration(result.duration()),
+            escape_cell(&changes)
+        ));
+    }
+
+    out
+}
+
+pub(crate) fn check_json(summary: &CheckSummary) -> String {
+    let steps: Vec<Value> = summary
+        .steps()
+        .iter()
+        .map(|result| {
+            let items: Vec<Value> = result
+                .report()
+                .items()
+                .iter()
+                .map(|item| {
+                    json!({
+                        "name": item.name(),
+                        "current": item.current(),
+                        "latest": item.latest(),
+                    })
+                })
+                .collect();
+
+            json!({
+                "id": result.id(),
+                "name": result.name(),
+                "status": result.status().as_str(),
+                "duration_ms": result.duration().as_millis(),
+                "pending": result.report().pending(),
+                "items": items,
+                "skip_reason": result.skip_reason().map(|reason| reason.to_string()),
+                "error": result.error().map(|error| error.to_string()),
+            })
+        })
+        .collect();
+
+    let report = json!({
+        "up_to_date": summary.up_to_date_count(),
+        "outdated": summary.outdated_steps(),
+        "skipped": summary.skipped_count(),
+        "failed": summary.failed_count(),
+        "pending": summary.pending(),
+        "steps": steps,
+    });
+
+    serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_owned())
+}
+
+pub(crate) fn check_markdown(summary: &CheckSummary) -> String {
+    let mut out = String::new();
+    out.push_str("# freshen check\n\n");
+    out.push_str(&format!(
+        "**Summary:** {} up to date, {} outdated, {} skipped, {} failed ({} update(s) pending)\n\n",
+        summary.up_to_date_count(),
+        summary.outdated_steps(),
+        summary.skipped_count(),
+        summary.failed_count(),
+        summary.pending()
+    ));
+    out.push_str("| Step | Status | Duration | Outdated |\n");
+    out.push_str("| --- | --- | --- | --- |\n");
+
+    for result in summary.steps() {
+        let mut status = result.status().to_string();
+        if let Some(reason) = result.skip_reason() {
+            status.push_str(" - ");
+            status.push_str(&reason.to_string());
+        }
+        if let Some(error) = result.error() {
+            status.push_str(" - ");
+            status.push_str(&error.to_string());
+        }
+
+        let items = if result.report().items().is_empty() {
+            "none".to_owned()
+        } else {
+            result
+                .report()
+                .items()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("<br>")
+        };
+
+        out.push_str(&format!(
+            "| {} (`{}`) | {} | {} | {} |\n",
+            escape_cell(result.name()),
+            result.id(),
+            escape_cell(&status),
+            format_duration(result.duration()),
+            escape_cell(&items)
+        ));
+    }
+
+    out
+}
+
+fn escape_cell(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('|', "\\|")
+        .replace('\n', "<br>")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{check_json, check_markdown, run_json, run_markdown};
+    use crate::check::{CheckStatus, CheckSummary};
+    use crate::options::RunOptions;
+    use crate::platform::Platform;
+    use crate::runner::Runner;
+    use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
+    use std::cell::Cell;
+
+    struct ReportStep {
+        report: CheckReport,
+        after: CheckReport,
+        ran: Cell<bool>,
+    }
+
+    impl ReportStep {
+        fn new(before: CheckReport, after: CheckReport) -> Self {
+            Self {
+                report: before,
+                after,
+                ran: Cell::new(false),
+            }
+        }
+    }
+
+    impl Step for ReportStep {
+        fn id(&self) -> StepId {
+            "brew-formulae"
+        }
+
+        fn display_name(&self) -> &str {
+            "Homebrew formulae"
+        }
+
+        fn detect(&self) -> Result<Detection, StepError> {
+            Ok(Detection::Installed)
+        }
+
+        fn check(&self) -> Result<CheckReport, StepError> {
+            if self.ran.get() {
+                Ok(self.after.clone())
+            } else {
+                Ok(self.report.clone())
+            }
+        }
+
+        fn run(&self) -> Result<(), StepError> {
+            self.ran.set(true);
+            Ok(())
+        }
+
+        fn platforms(&self) -> &'static [Platform] {
+            &Platform::ALL
+        }
+    }
+
+    fn summary() -> crate::runner::RunSummary {
+        let step = ReportStep::new(
+            CheckReport::from_items([OutdatedItem::new("jq")
+                .with_current("1.7.1")
+                .with_latest("1.8.0")]),
+            CheckReport::up_to_date(),
+        );
+        Runner::with_options([&step as &dyn Step], RunOptions::new()).run()
+    }
+
+    #[test]
+    fn run_json_contains_the_step_and_its_version_changes() {
+        let text = run_json(&summary());
+        let value: serde_json::Value = match serde_json::from_str(&text) {
+            Ok(value) => value,
+            Err(error) => panic!("invalid JSON report: {error}: {text}"),
+        };
+
+        assert_eq!(value["ok"], 1);
+        assert_eq!(value["steps"][0]["id"], "brew-formulae");
+        assert_eq!(value["steps"][0]["changes"][0]["name"], "jq");
+        assert_eq!(value["steps"][0]["changes"][0]["before"], "1.7.1");
+        assert_eq!(value["steps"][0]["changes"][0]["after"], "1.8.0");
+    }
+
+    #[test]
+    fn run_markdown_contains_a_table_row_with_the_version_changes() {
+        let text = run_markdown(&summary());
+
+        assert!(text.starts_with("# freshen report\n"));
+        assert!(text.contains("| Step | Status | Duration | Changes |"));
+        assert!(text.contains("Homebrew formulae"));
+        assert!(text.contains("jq 1.7.1 -> 1.8.0"));
+    }
+
+    #[test]
+    fn a_step_without_version_changes_says_none_in_markdown() {
+        let step = ReportStep::new(CheckReport::up_to_date(), CheckReport::up_to_date());
+        let summary = Runner::with_options([&step as &dyn Step], RunOptions::new()).run();
+
+        let text = run_markdown(&summary);
+        assert!(
+            text.lines()
+                .any(|line| line.contains("| ok |") && line.ends_with("| none |")),
+            "markdown: {text}"
+        );
+    }
+
+    #[test]
+    fn check_reports_include_the_outdated_items() {
+        let step = ReportStep::new(
+            CheckReport::from_items([OutdatedItem::new("jq")
+                .with_current("1.7.1")
+                .with_latest("1.8.0")]),
+            CheckReport::up_to_date(),
+        );
+        let summary: CheckSummary =
+            Runner::with_options([&step as &dyn Step], RunOptions::new()).check();
+
+        let json = check_json(&summary);
+        let value: serde_json::Value = match serde_json::from_str(&json) {
+            Ok(value) => value,
+            Err(error) => panic!("invalid JSON report: {error}: {json}"),
+        };
+        assert_eq!(value["outdated"], 1);
+        assert_eq!(value["steps"][0]["items"][0]["name"], "jq");
+
+        let markdown = check_markdown(&summary);
+        assert!(markdown.contains("# freshen check"));
+        assert!(markdown.contains("jq 1.7.1 -> 1.8.0"));
+    }
+
+    #[test]
+    fn check_status_is_used_in_the_json_report() {
+        let step = ReportStep::new(CheckReport::up_to_date(), CheckReport::up_to_date());
+        let summary = Runner::with_options([&step as &dyn Step], RunOptions::new()).check();
+
+        let value: serde_json::Value = match serde_json::from_str(&check_json(&summary)) {
+            Ok(value) => value,
+            Err(error) => panic!("invalid JSON report: {error}"),
+        };
+        assert_eq!(value["steps"][0]["status"], CheckStatus::UpToDate.as_str());
+    }
+}

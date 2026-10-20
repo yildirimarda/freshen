@@ -43,6 +43,8 @@ freshen --force-kill          # kill apps that refuse to quit (unsaved data may 
 QUIT_TIMEOUT=40 freshen       # wait longer for apps to quit
 freshen --dry-run             # detect and plan, change nothing
 freshen --check               # report outdated items, change nothing (exit 2 if updates are pending)
+freshen --json                # print the report as JSON (before/after versions per step)
+freshen --markdown            # print the report as Markdown
 freshen --list-steps          # show every step, its detection and skip reason
 freshen --only brew,uv --skip brew-casks   # select steps
 ```
@@ -87,6 +89,8 @@ The Rust binary accepts the same options on macOS, Linux and Windows:
 ```bash
 cargo run -p freshen -- --dry-run                    # detect, change nothing
 cargo run -p freshen -- --check                      # report outdated items, exit 2 when pending
+cargo run -p freshen -- --json                       # machine-readable report with version changes
+cargo run -p freshen -- --markdown                   # Markdown report with version changes
 cargo run -p freshen -- --list-steps                 # detect every step and explain skips
 cargo run -p freshen -- --only brew,uv --skip casks  # select steps
 cargo run -p freshen -- --yes --force-kill           # no prompts, kill stubborn apps

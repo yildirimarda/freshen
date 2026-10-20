@@ -10,13 +10,14 @@
 //! when at least one did. A skipped step (its tool is not installed) is not a
 //! failure and therefore does not change the exit code.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use crate::check::{CheckResult, CheckSummary};
 use crate::options::{RunOptions, SelectionFlag};
-use crate::step::{Detection, Step, StepError, StepId};
+use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
 
 /// The outcome of one step in a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -92,13 +93,69 @@ impl fmt::Display for SkipReason {
     }
 }
 
-/// The collected result of one step: status, duration and failure detail.
+/// One package, tool or artifact whose installed version changed during a step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionChange {
+    name: String,
+    before: Option<String>,
+    after: Option<String>,
+}
+
+impl VersionChange {
+    /// Creates a change for `name` from `before` to `after`.
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        before: Option<impl Into<String>>,
+        after: Option<impl Into<String>>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            before: before.map(Into::into),
+            after: after.map(Into::into),
+        }
+    }
+
+    /// Name of the package, tool or artifact.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Version before the step ran, when known.
+    #[must_use]
+    pub fn before(&self) -> Option<&str> {
+        self.before.as_deref()
+    }
+
+    /// Version after the step ran, when known.
+    #[must_use]
+    pub fn after(&self) -> Option<&str> {
+        self.after.as_deref()
+    }
+}
+
+impl fmt::Display for VersionChange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.name)?;
+        match (&self.before, &self.after) {
+            (Some(before), Some(after)) => write!(f, " {before} -> {after}"),
+            (Some(before), None) => write!(f, " {before} -> ?"),
+            (None, Some(after)) => write!(f, " ? -> {after}"),
+            (None, None) => Ok(()),
+        }
+    }
+}
+
+/// The collected result of one step: status, duration, version changes and
+/// failure detail.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StepResult {
     id: StepId,
     name: String,
     status: StepStatus,
     duration: Duration,
+    changes: Vec<VersionChange>,
     skip_reason: Option<SkipReason>,
     error: Option<StepError>,
 }
@@ -110,9 +167,15 @@ impl StepResult {
             name: step.display_name().to_owned(),
             status,
             duration,
+            changes: Vec::new(),
             skip_reason: None,
             error: None,
         }
+    }
+
+    fn with_changes(mut self, changes: Vec<VersionChange>) -> Self {
+        self.changes = changes;
+        self
     }
 
     fn ok(step: &dyn Step, duration: Duration) -> Self {
@@ -163,6 +226,18 @@ impl StepResult {
     #[must_use]
     pub fn duration(&self) -> Duration {
         self.duration
+    }
+
+    /// Versions that changed while the step ran, in report order.
+    #[must_use]
+    pub fn changes(&self) -> &[VersionChange] {
+        &self.changes
+    }
+
+    /// Returns `true` when at least one version changed during the step.
+    #[must_use]
+    pub fn has_changes(&self) -> bool {
+        !self.changes.is_empty()
     }
 
     /// Why the step was skipped, when it was.
@@ -247,6 +322,18 @@ impl RunSummary {
         self.steps.iter().map(StepResult::duration).sum()
     }
 
+    /// Renders the summary as a JSON report.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        crate::report::run_json(self)
+    }
+
+    /// Renders the summary as a Markdown report.
+    #[must_use]
+    pub fn to_markdown(&self) -> String {
+        crate::report::run_markdown(self)
+    }
+
     /// Process exit code matching the zsh script: `0` unless a step failed.
     #[must_use]
     pub fn exit_code(&self) -> ExitCode {
@@ -284,12 +371,15 @@ impl fmt::Display for RunSummary {
                 write!(f, " - {error}")?;
             }
             writeln!(f)?;
+            for change in result.changes() {
+                writeln!(f, "          - {change}")?;
+            }
         }
         Ok(())
     }
 }
 
-fn format_duration(duration: Duration) -> String {
+pub(crate) fn format_duration(duration: Duration) -> String {
     if duration.as_secs() > 0 {
         format!("{:.2}s", duration.as_secs_f64())
     } else if duration.as_millis() > 0 {
@@ -446,15 +536,74 @@ fn run_step(step: &dyn Step, options: &RunOptions) -> StepResult {
         Ok(Detection::Installed) if options.is_dry_run() => {
             StepResult::planned(step, started.elapsed())
         }
-        Ok(Detection::Installed) => match step.run_with_options(options) {
-            Ok(()) => match step.cleanup() {
-                Ok(()) => StepResult::ok(step, started.elapsed()),
+        Ok(Detection::Installed) => {
+            let before = step.check().ok();
+            let result = match step.run_with_options(options) {
+                Ok(()) => match step.cleanup() {
+                    Ok(()) => StepResult::ok(step, started.elapsed()),
+                    Err(error) => StepResult::failed(step, started.elapsed(), error),
+                },
                 Err(error) => StepResult::failed(step, started.elapsed(), error),
-            },
-            Err(error) => StepResult::failed(step, started.elapsed(), error),
-        },
+            };
+
+            let changes = match before {
+                Some(before) if !before.is_up_to_date() => match step.check() {
+                    Ok(after) => diff_reports(&before, &after),
+                    Err(_) => Vec::new(),
+                },
+                _ => Vec::new(),
+            };
+
+            result.with_changes(changes)
+        }
         Err(error) => StepResult::failed(step, started.elapsed(), error),
     }
+}
+
+/// Compares the outdated items a step reported before and after it ran.
+///
+/// An item that disappeared from the report was upgraded to the version that
+/// was pending before the run. An item that is still outdated but now has a
+/// different installed version changed to that version. Items that were not
+/// outdated before are ignored: they did not change because of this step.
+fn diff_reports(before: &CheckReport, after: &CheckReport) -> Vec<VersionChange> {
+    let after_by_name: HashMap<&str, &OutdatedItem> = after
+        .items()
+        .iter()
+        .map(|item| (item.name(), item))
+        .collect();
+
+    before
+        .items()
+        .iter()
+        .filter_map(|item| {
+            let after_item = after_by_name.get(item.name());
+
+            if let Some(after_item) = after_item {
+                if after_item.current() == item.current() && after_item.latest() == item.latest() {
+                    return None;
+                }
+            }
+
+            let after_version = match after_item {
+                Some(after_item) => after_item.current(),
+                None => item.latest(),
+            };
+
+            if item.current() == after_version {
+                return None;
+            }
+            if item.current().is_none() && after_version.is_none() {
+                return None;
+            }
+
+            Some(VersionChange::new(
+                item.name(),
+                item.current().map(str::to_owned),
+                after_version.map(str::to_owned),
+            ))
+        })
+        .collect()
 }
 
 #[cfg(test)]
