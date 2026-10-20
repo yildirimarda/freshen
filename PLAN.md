@@ -43,7 +43,7 @@ Goal: one tool for macOS, Linux and Windows, written in Rust and shipped as a si
 - [x] Scaffold a Cargo workspace (library crate with all logic, thin binary crate `freshen`), pin the toolchain with `rust-toolchain.toml`, set the MSRV, and wire `cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` into CI and the AGENTS.md project reference
 - [x] Choose and document the core dependencies in the ADR (candidates: `clap` for the CLI, `serde` + `toml` for config, `anyhow`/`thiserror` for errors, `ctrlc` for signals, `which` for tool detection, `indicatif` for progress) and add `cargo-deny` (licenses, advisories) to CI
 - [x] Define the step abstraction: each step has an id, display name, `detect()` (is the tool installed), `check()` (what is outdated, read-only), `run()` (upgrade), `cleanup()` and a list of conflicts/prerequisites
-- [ ] Implement a step registry with ordering, dependencies (e.g. brew formulae before casks, mise after brew) and per-step platform filter (`macos`, `linux`, `windows`)
+- [x] Implement a step registry with ordering, dependencies (e.g. brew formulae before casks, mise after brew) and per-step platform filter (`macos`, `linux`, `windows`)
 - [ ] Implement a subprocess runner with live output streaming, per-step timeout, environment control, optional retry with backoff, and capture of stdout/stderr for the log
 - [ ] Implement an OS abstraction layer: detect OS/distro/arch, privilege level, interactive vs non-interactive terminal, and the terminal application running the tool
 - [ ] Implement failure collection and the final summary (steps ok / skipped / failed, duration per step) with the same exit-code semantics as the zsh script
@@ -59,6 +59,8 @@ Goal: one tool for macOS, Linux and Windows, written in Rust and shipped as a si
 - [ ] Remove the zsh implementation once parity tests pass and document the migration in README and CHANGELOG
 - [ ] Add a CI job that checks the code compiles against the MSRV (`rust-version` in the workspace manifest) with `cargo check --workspace`, so an accidental use of a newer language feature fails before release
 - [ ] Validate the step graph in the registry: unknown prerequisite/conflict ids and dependency cycles fail with a clear message, covered by tests
+- [ ] Enforce declared step conflicts when building a run: when two conflicting steps are available on the platform, skip the later one and report it as skipped with the reason, covered by tests
+- [ ] Detect duplicate step ids in the registry and fail with a clear message instead of letting one shadow the other during dependency resolution, covered by tests
 
 ## Milestone 3: Safety and Reliability
 
