@@ -14,6 +14,7 @@ use std::fmt;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
+use crate::check::{CheckResult, CheckSummary};
 use crate::options::{RunOptions, SelectionFlag};
 use crate::step::{Detection, Step, StepError, StepId};
 
@@ -401,6 +402,41 @@ impl<'a> Runner<'a> {
                 .collect(),
         )
     }
+
+    /// Detects every step and asks each installed one what is outdated,
+    /// without running or cleaning up anything.
+    #[must_use]
+    pub fn check(&self) -> CheckSummary {
+        CheckSummary::from_results(
+            self.steps
+                .iter()
+                .copied()
+                .map(|planned| match planned {
+                    PlannedStep::Run(step) => check_step(step),
+                    PlannedStep::Skip { step, reason } => {
+                        CheckResult::skipped(step, reason, Duration::ZERO)
+                    }
+                })
+                .collect(),
+        )
+    }
+}
+
+fn check_step(step: &dyn Step) -> CheckResult {
+    let started = Instant::now();
+    match step.detect() {
+        Ok(Detection::NotInstalled) => {
+            CheckResult::skipped(step, SkipReason::NotInstalled, started.elapsed())
+        }
+        Ok(Detection::Installed) => match step.check() {
+            Ok(report) if report.is_up_to_date() => {
+                CheckResult::up_to_date(step, started.elapsed())
+            }
+            Ok(report) => CheckResult::outdated(step, report, started.elapsed()),
+            Err(error) => CheckResult::failed(step, error, started.elapsed()),
+        },
+        Err(error) => CheckResult::failed(step, error, started.elapsed()),
+    }
 }
 
 fn run_step(step: &dyn Step, options: &RunOptions) -> StepResult {
@@ -424,9 +460,10 @@ fn run_step(step: &dyn Step, options: &RunOptions) -> StepResult {
 #[cfg(test)]
 mod tests {
     use super::{RunSummary, Runner, SkipReason, StepStatus};
+    use crate::check::CheckStatus;
     use crate::options::{RunOptions, StepSelection};
     use crate::platform::Platform;
-    use crate::step::{CheckReport, Detection, Step, StepError, StepId};
+    use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
     use std::cell::Cell;
     use std::process::ExitCode;
     use std::rc::Rc;
@@ -435,6 +472,7 @@ mod tests {
     #[derive(Default)]
     struct Calls {
         detect: Cell<usize>,
+        check: Cell<usize>,
         run: Cell<usize>,
         cleanup: Cell<usize>,
     }
@@ -443,7 +481,9 @@ mod tests {
         id: StepId,
         name: &'static str,
         detection: Detection,
+        report: CheckReport,
         fail_detect: bool,
+        fail_check: bool,
         fail_run: bool,
         fail_cleanup: bool,
         conflicts: &'static [StepId],
@@ -457,7 +497,9 @@ mod tests {
                 id,
                 name,
                 detection: Detection::Installed,
+                report: CheckReport::up_to_date(),
                 fail_detect: false,
+                fail_check: false,
                 fail_run: false,
                 fail_cleanup: false,
                 conflicts: &[],
@@ -471,6 +513,11 @@ mod tests {
             self
         }
 
+        fn report(mut self, report: CheckReport) -> Self {
+            self.report = report;
+            self
+        }
+
         fn conflicting(mut self, conflicts: &'static [StepId]) -> Self {
             self.conflicts = conflicts;
             self
@@ -478,6 +525,11 @@ mod tests {
 
         fn fail_detect(mut self) -> Self {
             self.fail_detect = true;
+            self
+        }
+
+        fn fail_check(mut self) -> Self {
+            self.fail_check = true;
             self
         }
 
@@ -519,7 +571,11 @@ mod tests {
         }
 
         fn check(&self) -> Result<CheckReport, StepError> {
-            Ok(CheckReport::up_to_date())
+            self.calls.check.set(self.calls.check.get() + 1);
+            if self.fail_check {
+                return Err(StepError::check(self.id, "cannot check"));
+            }
+            Ok(self.report.clone())
         }
 
         fn run(&self) -> Result<(), StepError> {
@@ -627,6 +683,86 @@ mod tests {
         assert_eq!(calls.detect.get(), 1);
         assert_eq!(calls.run.get(), 0);
         assert_eq!(calls.cleanup.get(), 0);
+    }
+
+    #[test]
+    fn check_queries_installed_steps_without_running_or_cleaning_up() {
+        let outdated =
+            FakeStep::new("brew", "Homebrew").report(CheckReport::from_items([OutdatedItem::new(
+                "jq",
+            )
+            .with_current("1.7.1")
+            .with_latest("1.8.0")]));
+        let current = FakeStep::new("uv", "uv");
+        let missing = FakeStep::new("mise", "mise").detection(Detection::NotInstalled);
+        let outdated_calls = outdated.calls();
+        let current_calls = current.calls();
+        let missing_calls = missing.calls();
+        let steps: [&dyn Step; 3] = [&outdated, &current, &missing];
+
+        let summary = Runner::new(steps).check();
+
+        assert_eq!(summary.steps()[0].status(), CheckStatus::Outdated);
+        assert_eq!(summary.steps()[1].status(), CheckStatus::UpToDate);
+        assert_eq!(summary.steps()[2].status(), CheckStatus::Skipped);
+        assert_eq!(summary.outdated_steps(), 1);
+        assert_eq!(summary.up_to_date_count(), 1);
+        assert_eq!(summary.skipped_count(), 1);
+        assert_eq!(summary.pending(), 1);
+        assert_eq!(
+            summary.steps()[2].skip_reason(),
+            Some(SkipReason::NotInstalled)
+        );
+        assert_exit_code(summary.exit_code(), ExitCode::from(2));
+        assert_eq!(
+            summary.to_string(),
+            "Homebrew:\n  jq 1.7.1 -> 1.8.0\n1 update(s) pending across 1 step(s).\n"
+        );
+
+        assert_eq!(outdated_calls.detect.get(), 1);
+        assert_eq!(outdated_calls.check.get(), 1);
+        assert_eq!(outdated_calls.run.get(), 0);
+        assert_eq!(outdated_calls.cleanup.get(), 0);
+        assert_eq!(current_calls.check.get(), 1);
+        assert_eq!(current_calls.run.get(), 0);
+        assert_eq!(missing_calls.check.get(), 0);
+    }
+
+    #[test]
+    fn check_exits_zero_when_every_installed_step_is_current() {
+        let step = FakeStep::new("uv", "uv");
+
+        let summary = Runner::new([&step as &dyn Step]).check();
+
+        assert_exit_code(summary.exit_code(), ExitCode::SUCCESS);
+        assert_eq!(summary.to_string(), "Everything is up to date.\n");
+    }
+
+    #[test]
+    fn check_failures_take_precedence_over_pending_updates() {
+        let outdated = FakeStep::new("brew", "Homebrew")
+            .report(CheckReport::from_items([OutdatedItem::new("jq")]));
+        let failing = FakeStep::new("uv", "uv").fail_check();
+        let steps: [&dyn Step; 2] = [&outdated, &failing];
+
+        let summary = Runner::new(steps).check();
+
+        assert!(summary.has_updates());
+        assert!(summary.has_failures());
+        assert_exit_code(summary.exit_code(), ExitCode::FAILURE);
+        assert!(summary.to_string().contains("cannot check"));
+    }
+
+    #[test]
+    fn a_detection_failure_is_reported_by_check() {
+        let step = FakeStep::new("brew", "Homebrew").fail_detect();
+        let calls = step.calls();
+
+        let summary = Runner::new([&step as &dyn Step]).check();
+
+        assert_eq!(summary.steps()[0].status(), CheckStatus::Failed);
+        assert_exit_code(summary.exit_code(), ExitCode::FAILURE);
+        assert_eq!(calls.check.get(), 0);
     }
 
     #[test]
