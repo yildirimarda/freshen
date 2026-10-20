@@ -30,4 +30,25 @@ if [[ -f PLAN.md ]]; then
   if (( seq_ok )); then ok "PLAN.md milestones numbered 0..$((n - 1))"; else bad "PLAN.md milestone numbering is not consecutive"; fi
 fi
 
+# 3. ADR files: valid number, template sections, and the index table links them
+if [[ -d docs/adr ]]; then
+  n=0; adr_ok=1
+  for f in docs/adr/[0-9][0-9][0-9][0-9]-*.md; do
+    [[ -e "$f" ]] || continue
+    num="${f#docs/adr/}"; num="${num%%-*}"
+    if [[ "$num" == "0000" ]]; then
+      n=1; continue   # 0000 is the template placeholder; real ADRs start at 0001
+    fi
+    if [[ "$num" != "$(printf '%04d' "$n")" ]]; then adr_ok=0; echo "  $f is not numbered $n"; fi
+    for section in '## Context' '## Decision' '## Alternatives considered' '## Consequences'; do
+      grep -q "^${section}" "$f" || { adr_ok=0; echo "  $f missing section: $section"; }
+    done
+    grep -qE '^- Status: (proposed|accepted|superseded by [0-9]{4})' "$f" || { adr_ok=0; echo "  $f missing/invalid Status line"; }
+    grep -qE '^- Date: [0-9]{4}-[0-9]{2}-[0-9]{2}' "$f" || { adr_ok=0; echo "  $f missing/invalid Date line"; }
+    grep -q "$(basename "$f")" docs/adr/README.md || { adr_ok=0; echo "  $f not linked from docs/adr/README.md"; }
+    n=$((n + 1))
+  done
+  if (( adr_ok )); then ok "docs/adr files (numbering, sections, index links)"; else bad "docs/adr file checks"; fi
+fi
+
 exit "$fail"

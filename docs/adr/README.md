@@ -5,4 +5,4 @@ Copy [0000-template.md](0000-template.md) to start a new one.
 
 | ADR | Title | Status |
 |---|---|---|
-| 0001 | Implement freshen in Rust | planned (PLAN.md Milestone 2) |
+| 0001 | [Implement freshen in Rust](0001-implement-freshen-in-rust.md) | accepted |

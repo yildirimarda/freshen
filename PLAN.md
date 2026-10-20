@@ -39,7 +39,7 @@
 
 Goal: one tool for macOS, Linux and Windows, written in Rust and shipped as a single binary. This milestone replaces the zsh script as the implementation while keeping its behaviour (parity tests). The zsh script stays as-is until then; no further features are added to it.
 
-- [ ] Write ADR 0001 in `docs/adr/` recording the decision to implement in Rust (single static binary, no runtime to install, first-class Windows/macOS/Linux support, strong subprocess and signal handling, easy cross-compilation) and the alternatives considered (Go, Python via `uv tool install`) with the reasons they were not chosen
+- [x] Write ADR 0001 in `docs/adr/` recording the decision to implement in Rust (single static binary, no runtime to install, first-class Windows/macOS/Linux support, strong subprocess and signal handling, easy cross-compilation) and the alternatives considered (Go, Python via `uv tool install`) with the reasons they were not chosen
 - [ ] Scaffold a Cargo workspace (library crate with all logic, thin binary crate `freshen`), pin the toolchain with `rust-toolchain.toml`, set the MSRV, and wire `cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` into CI and the AGENTS.md project reference
 - [ ] Choose and document the core dependencies in the ADR (candidates: `clap` for the CLI, `serde` + `toml` for config, `anyhow`/`thiserror` for errors, `ctrlc` for signals, `which` for tool detection, `indicatif` for progress) and add `cargo-deny` (licenses, advisories) to CI
 - [ ] Define the step abstraction: each step has an id, display name, `detect()` (is the tool installed), `check()` (what is outdated, read-only), `run()` (upgrade), `cleanup()` and a list of conflicts/prerequisites
