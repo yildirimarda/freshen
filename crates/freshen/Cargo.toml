@@ -1,0 +1,20 @@
+[package]
+name = "freshen"
+description = "Keep a developer machine up to date: package managers, language toolchains and containers, on macOS, Linux and Windows"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+
+[[bin]]
+name = "freshen"
+path = "src/main.rs"
+
+[dependencies]
+freshen-lib = { path = "../freshen-lib" }
+
+[lints]
+workspace = true

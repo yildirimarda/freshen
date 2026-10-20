@@ -9,5 +9,13 @@
   valid `Status`/`Date` and the four template sections
   (`Context`/`Decision`/`Alternatives considered`/`Consequences`), and is
   linked from `docs/adr/README.md`
+- once the Cargo workspace exists (`Cargo.toml` at the root): the workspace
+  sets an MSRV (`rust-version`), `rust-toolchain.toml` pins an exact channel
+  with `rustfmt`/`clippy`, and every crate under `crates/` inherits the
+  workspace MSRV and lints
 
-PLAN.md Milestone 2 adds a stub-based harness (fake `brew`, `uv`, `mise`, `docker`, `colima` on `PATH`) that asserts the order of calls. Tests must never invoke the real tools. Once the Rust workspace exists, unit and integration tests live in the Cargo workspace and this script keeps only the repository-level checks.
+Unit and integration tests for the Rust implementation live in the Cargo
+workspace (`cargo test --all-features`); this script keeps only the
+repository-level checks. PLAN.md Milestone 2 adds a stub-based harness (fake
+`brew`, `uv`, `mise`, `docker`, `colima` on `PATH`) that asserts the order of
+calls. Tests must never invoke the real tools.

@@ -144,10 +144,10 @@ Leave the `PLAN.md` checkbox unchecked. Then stop.
 
 ## Project reference
 
-freshen keeps a developer machine up to date (package managers, language toolchains, containers) on macOS, Linux and Windows. Until the Rust port lands (PLAN.md Milestone 2) the implementation is the zsh script `update-all.sh`.
+freshen keeps a developer machine up to date (package managers, language toolchains, containers) on macOS, Linux and Windows. The implementation is the Rust workspace under `crates/` (`freshen-lib` holds all logic, the `freshen` binary is a thin CLI wrapper); the zsh script `update-all.sh` stays until the port reaches parity and is removed afterwards.
 
-- Language:     Rust (after Milestone 2); `update-all.sh` is zsh and is removed once the port reaches parity
-- Format:       `cargo fmt --all -- --check` (once the Cargo workspace exists)
+- Language:     Rust; toolchain pinned by `rust-toolchain.toml`, MSRV in `[workspace.package] rust-version`; `update-all.sh` is zsh and is removed once the port reaches parity
+- Format:       `cargo fmt --all -- --check`
 - Lint:         `cargo clippy --all-targets --all-features -- -D warnings`
 - Tests:        `cargo test --all-features`
 - Zsh phase:    `zsh -n update-all.sh` is the syntax gate; tests in `tests/` use stub executables on PATH
@@ -156,3 +156,4 @@ freshen keeps a developer machine up to date (package managers, language toolcha
 - Cross-platform: any OS-specific code lives behind `#[cfg(target_os = ...)]` in an OS abstraction module; every step declares the platforms it supports
 - Safety:       never add a step that deletes user data without an explicit opt-in flag; never quit the terminal running the tool; restore everything that was stopped (apps, containers) even on error or Ctrl-C
 - Tests must not touch the real system: never call the real `brew`, `apt`, `winget`, `docker`, `colima`, `uv` or `mise` from tests — use stub executables or recorded transcripts
+- CI: Rust jobs live in `ci-proposals/rust.yml` until a human runs `git mv ci-proposals/rust.yml .github/workflows/rust.yml` (agents cannot modify `.github/workflows/`); the existing `ci.yml` Rust step becomes active by itself once `Cargo.toml` exists
