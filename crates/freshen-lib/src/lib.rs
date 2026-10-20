@@ -4,8 +4,12 @@
 //! Every step of a run lives here; the `freshen` binary crate is a thin CLI
 //! wrapper around this library. One module per step.
 
+pub mod platform;
+pub mod registry;
 pub mod step;
 
+pub use platform::Platform;
+pub use registry::{Registry, RegistryError};
 pub use step::{CheckReport, Detection, Operation, OutdatedItem, Step, StepError, StepId};
 
 /// Major and minor feature release this binary implements, e.g. `"0.1"`.

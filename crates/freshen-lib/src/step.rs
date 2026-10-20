@@ -7,13 +7,16 @@
 //! * [`Step::run`] — perform the upgrade.
 //! * [`Step::cleanup`] — remove leftovers after a successful run.
 //!
-//! [`Step::prerequisites`] and [`Step::conflicts`] name other steps by id;
-//! the registry resolves and enforces them.
+//! [`Step::prerequisites`] and [`Step::conflicts`] name other steps by id.
+//! The registry uses prerequisites to order a run; conflicts are checked by
+//! the run planner before anything is executed.
 //!
 //! Steps are object-safe: the registry stores `Box<dyn Step>` and dispatches
 //! through the trait without knowing the concrete type.
 
 use std::fmt;
+
+use crate::platform::Platform;
 
 /// Stable identifier of a step, e.g. `"brew"` or `"uv"`.
 pub type StepId = &'static str;
@@ -258,11 +261,18 @@ pub trait Step {
     fn conflicts(&self) -> &'static [StepId] {
         &[]
     }
+
+    /// Operating systems on which this step can run.
+    ///
+    /// The registry filters out steps that do not list the platform of the
+    /// current run, so they are never detected, checked or run.
+    fn platforms(&self) -> &'static [Platform];
 }
 
 #[cfg(test)]
 mod tests {
     use super::{CheckReport, Detection, Operation, OutdatedItem, Step, StepError, StepId};
+    use crate::platform::Platform;
     use std::cell::Cell;
 
     struct FakeStep {
@@ -272,6 +282,7 @@ mod tests {
         report: CheckReport,
         prerequisites: &'static [StepId],
         conflicts: &'static [StepId],
+        platforms: &'static [Platform],
         run_calls: Cell<usize>,
         cleanup_calls: Cell<usize>,
         fail_run: bool,
@@ -286,6 +297,7 @@ mod tests {
                 report: CheckReport::up_to_date(),
                 prerequisites: &[],
                 conflicts: &[],
+                platforms: &Platform::ALL,
                 run_calls: Cell::new(0),
                 cleanup_calls: Cell::new(0),
                 fail_run: false,
@@ -330,6 +342,10 @@ mod tests {
         fn conflicts(&self) -> &'static [StepId] {
             self.conflicts
         }
+
+        fn platforms(&self) -> &'static [Platform] {
+            self.platforms
+        }
     }
 
     struct MinimalStep;
@@ -353,6 +369,10 @@ mod tests {
 
         fn run(&self) -> Result<(), StepError> {
             Ok(())
+        }
+
+        fn platforms(&self) -> &'static [Platform] {
+            &Platform::ALL
         }
     }
 
@@ -449,6 +469,15 @@ mod tests {
 
         assert_eq!(step.prerequisites(), ["brew"]);
         assert_eq!(step.conflicts(), ["mas"]);
+    }
+
+    #[test]
+    fn platforms_are_declared_by_the_step() {
+        static MACOS_AND_LINUX: [Platform; 2] = [Platform::Macos, Platform::Linux];
+        let mut step = FakeStep::new("brew", "Homebrew");
+        step.platforms = &MACOS_AND_LINUX;
+
+        assert_eq!(step.platforms(), [Platform::Macos, Platform::Linux]);
     }
 
     #[test]
