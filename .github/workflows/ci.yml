@@ -18,12 +18,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install zsh
-        run: sudo apt-get update -q && sudo apt-get install -y -q zsh
-
-      # shellcheck does not support zsh, so the syntax check is `zsh -n`.
-      - name: Zsh syntax
-        run: zsh -n update-all.sh
+      # The zsh implementation and its deprecated sh wrapper are gone; this
+      # guard fails if the compatibility shim is ever reintroduced by accident.
+      - name: update-all.sh shim removed
+        run: test ! -e update-all.sh
 
       - name: Bash syntax (agentloop scripts)
         run: |
@@ -39,9 +37,8 @@ jobs:
               print("ok", f)
           PY
 
-      - name: Tests (zsh phase)
-        run: |
-          if [ -f tests/run-tests.sh ]; then bash tests/run-tests.sh; else echo "no zsh tests yet"; fi
+      - name: Repository checks
+        run: bash tests/run-tests.sh
 
       # Rust phase: active as soon as the Cargo workspace exists (PLAN.md Milestone 2).
       - name: Rust fmt, clippy, tests
