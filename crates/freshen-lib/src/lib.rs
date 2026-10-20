@@ -4,6 +4,7 @@
 //! Every step of a run lives here; the `freshen` binary crate is a thin CLI
 //! wrapper around this library. One module per step.
 
+pub mod apps;
 pub mod homebrew;
 pub mod listing;
 pub mod options;
@@ -14,6 +15,10 @@ pub mod runner;
 pub mod step;
 pub mod system;
 
+pub use apps::{
+    find_running_apps, quit_apps, quit_choice, reopen_apps, AppScan, AppSystem, MacAppSystem,
+    QuitChoice, QuitPolicy, RunningApp,
+};
 pub use listing::{list_steps, DetectionState, StepList, StepListing};
 pub use options::{PlanError, RunOptions, SelectionFlag, StepSelection};
 pub use platform::Platform;
