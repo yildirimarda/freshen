@@ -76,7 +76,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] `--check` mode: query every detected step read-only and print what is outdated (names, current -> new version) without changing anything; exit code 0 when up to date, 2 when updates are pending
 - [x] Before/after version diff in the summary for every step (what actually changed), with `--json` and `--markdown` report output
 - [x] Pre-upgrade snapshot: record installed versions per step (brew list --versions, brew bundle dump, uv tool list, mise ls, package lists) to a timestamped file so a rollback is possible
-- [ ] Rollback hints in the summary: print the exact commands to return to the previous versions recorded in the snapshot
+- [x] Rollback hints in the summary: print the exact commands to return to the previous versions recorded in the snapshot
 - [ ] Preflight checks: network reachable, enough free disk space, not on battery below a threshold, not on a metered/hotspot connection (configurable, each skippable with a flag)
 - [ ] Add a lock file so two freshen runs cannot overlap, with a clear message naming the PID that holds it
 - [ ] Detect when another package manager process is running (brew, apt/dpkg lock, winget) and wait or abort with a clear message
