@@ -14,6 +14,7 @@ use std::fmt;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
+use crate::options::RunOptions;
 use crate::step::{Detection, Step, StepError, StepId};
 
 /// The outcome of one step in a run.
@@ -21,6 +22,8 @@ use crate::step::{Detection, Step, StepError, StepId};
 pub enum StepStatus {
     /// The step ran (including its cleanup) successfully.
     Ok,
+    /// The tool is installed but `--dry-run` prevented the upgrade.
+    Planned,
     /// The step did not run because its tool is not installed.
     Skipped,
     /// Detection, the upgrade or the cleanup failed.
@@ -33,6 +36,7 @@ impl StepStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Ok => "ok",
+            Self::Planned => "planned",
             Self::Skipped => "skipped",
             Self::Failed => "failed",
         }
@@ -99,6 +103,10 @@ impl StepResult {
 
     fn ok(step: &dyn Step, duration: Duration) -> Self {
         Self::new(step, StepStatus::Ok, duration)
+    }
+
+    fn planned(step: &dyn Step, duration: Duration) -> Self {
+        Self::new(step, StepStatus::Planned, duration)
     }
 
     fn skipped(step: &dyn Step, duration: Duration) -> Self {
@@ -184,6 +192,12 @@ impl RunSummary {
         self.count(StepStatus::Ok)
     }
 
+    /// Number of steps that `--dry-run` planned but did not execute.
+    #[must_use]
+    pub fn planned_count(&self) -> usize {
+        self.count(StepStatus::Planned)
+    }
+
     /// Number of steps whose tool was not installed.
     #[must_use]
     pub fn skipped_count(&self) -> usize {
@@ -230,8 +244,9 @@ impl fmt::Display for RunSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
-            "Summary: {} ok, {} skipped, {} failed ({})",
+            "Summary: {} ok, {} planned, {} skipped, {} failed ({})",
             self.ok_count(),
+            self.planned_count(),
             self.skipped_count(),
             self.failed_count(),
             format_duration(self.total_duration())
@@ -272,31 +287,61 @@ fn format_duration(duration: Duration) -> String {
 ///
 /// Each step is detected first. A missing tool skips the step; an installed
 /// tool is run and, when that succeeds, cleaned up. A failure in any of those
-/// phases is recorded and the next step still runs.
+/// phases is recorded and the next step still runs. With `--dry-run`, an
+/// installed tool is detected and recorded as planned, but never run or
+/// cleaned up.
 #[derive(Clone)]
 pub struct Runner<'a> {
     steps: Vec<&'a dyn Step>,
+    options: RunOptions,
 }
 
 impl<'a> Runner<'a> {
     /// Creates a runner for steps that are already in execution order.
     pub fn new(steps: impl IntoIterator<Item = &'a dyn Step>) -> Self {
+        Self::with_options(steps, RunOptions::new())
+    }
+
+    /// Creates a runner that applies `options`, including `--dry-run` and the
+    /// `--only`/`--skip` selection.
+    pub fn with_options(
+        steps: impl IntoIterator<Item = &'a dyn Step>,
+        options: RunOptions,
+    ) -> Self {
+        let selection = options.selection();
         Self {
-            steps: steps.into_iter().collect(),
+            steps: steps
+                .into_iter()
+                .filter(|step| selection.includes(step.id()))
+                .collect(),
+            options,
         }
+    }
+
+    /// Options that control this run.
+    #[must_use]
+    pub fn options(&self) -> &RunOptions {
+        &self.options
     }
 
     /// Runs every step and returns the collected results.
     #[must_use]
     pub fn run(&self) -> RunSummary {
-        RunSummary::from_results(self.steps.iter().map(|step| run_step(*step)).collect())
+        let dry_run = self.options.is_dry_run();
+        RunSummary::from_results(
+            self.steps
+                .iter()
+                .map(|step| run_step(*step, dry_run))
+                .collect(),
+        )
     }
 }
 
-fn run_step(step: &dyn Step) -> StepResult {
+fn run_step(step: &dyn Step, dry_run: bool) -> StepResult {
     let started = Instant::now();
     match step.detect() {
         Ok(Detection::NotInstalled) => StepResult::skipped(step, started.elapsed()),
+        Ok(Detection::Installed) if dry_run => StepResult::planned(step, started.elapsed()),
         Ok(Detection::Installed) => match step.run() {
             Ok(()) => match step.cleanup() {
                 Ok(()) => StepResult::ok(step, started.elapsed()),
@@ -311,6 +356,7 @@ fn run_step(step: &dyn Step) -> StepResult {
 #[cfg(test)]
 mod tests {
     use super::{RunSummary, Runner, SkipReason, StepStatus};
+    use crate::options::{RunOptions, StepSelection};
     use crate::platform::Platform;
     use crate::step::{CheckReport, Detection, Step, StepError, StepId};
     use std::cell::Cell;
@@ -478,6 +524,63 @@ mod tests {
     }
 
     #[test]
+    fn dry_run_detects_but_never_runs_or_cleans_up() {
+        let installed = FakeStep::new("brew", "Homebrew");
+        let missing = FakeStep::new("uv", "uv").detection(Detection::NotInstalled);
+        let calls = installed.calls();
+        let steps: [&dyn Step; 2] = [&installed, &missing];
+
+        let summary = Runner::with_options(steps, RunOptions::new().with_dry_run(true)).run();
+
+        assert_eq!(summary.steps()[0].status(), StepStatus::Planned);
+        assert_eq!(summary.planned_count(), 1);
+        assert_eq!(summary.ok_count(), 0);
+        assert_eq!(summary.steps()[1].status(), StepStatus::Skipped);
+        assert_eq!(summary.skipped_count(), 1);
+        assert_eq!(summary.failed_count(), 0);
+        assert_eq!(summary.exit_code(), ExitCode::SUCCESS);
+        assert!(summary.to_string().contains("1 planned"));
+
+        assert_eq!(calls.detect.get(), 1);
+        assert_eq!(calls.run.get(), 0);
+        assert_eq!(calls.cleanup.get(), 0);
+    }
+
+    #[test]
+    fn runner_applies_only_and_skip_from_options() {
+        let brew = FakeStep::new("brew", "Homebrew");
+        let uv = FakeStep::new("uv", "uv");
+        let mise = FakeStep::new("mise", "mise");
+        let steps: [&dyn Step; 3] = [&brew, &uv, &mise];
+        let options = RunOptions::new().with_selection(
+            StepSelection::new()
+                .with_only(["brew", "uv", "mise"])
+                .with_skip(["uv"]),
+        );
+
+        let summary = Runner::with_options(steps, options).run();
+
+        assert_eq!(summary.steps().len(), 2);
+        assert_eq!(summary.steps()[0].id(), "brew");
+        assert_eq!(summary.steps()[1].id(), "mise");
+    }
+
+    #[test]
+    fn dry_run_still_reports_a_detection_failure() {
+        let failing = FakeStep::new("mise", "mise").fail_detect();
+
+        let summary = Runner::with_options(
+            [&failing as &dyn Step],
+            RunOptions::new().with_dry_run(true),
+        )
+        .run();
+
+        assert_eq!(summary.steps()[0].status(), StepStatus::Failed);
+        assert_eq!(summary.planned_count(), 0);
+        assert_eq!(summary.exit_code(), ExitCode::FAILURE);
+    }
+
+    #[test]
     fn a_failing_step_is_recorded_and_does_not_abort_the_run() {
         let failing = FakeStep::new("brew", "Homebrew").fail_run();
         let healthy = FakeStep::new("uv", "uv");
@@ -586,7 +689,7 @@ mod tests {
         let summary = run(&[&ok, &skipped, &failed]);
         let text = summary.to_string();
 
-        assert!(text.contains("1 ok, 1 skipped, 1 failed"));
+        assert!(text.contains("1 ok, 0 planned, 1 skipped, 1 failed"));
         assert!(text.contains("ok"));
         assert!(text.contains("Homebrew"));
         assert!(text.contains("skipped"));
