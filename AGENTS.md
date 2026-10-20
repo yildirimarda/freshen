@@ -144,9 +144,9 @@ Leave the `PLAN.md` checkbox unchecked. Then stop.
 
 ## Project reference
 
-freshen keeps a developer machine up to date (package managers, language toolchains, containers) on macOS, Linux and Windows. Until the Rust port lands (PLAN.md Milestone 3) the implementation is the zsh script `update-all.sh`.
+freshen keeps a developer machine up to date (package managers, language toolchains, containers) on macOS, Linux and Windows. Until the Rust port lands (PLAN.md Milestone 2) the implementation is the zsh script `update-all.sh`.
 
-- Language:     Rust (after Milestone 3); `update-all.sh` is zsh and is removed once the port reaches parity
+- Language:     Rust (after Milestone 2); `update-all.sh` is zsh and is removed once the port reaches parity
 - Format:       `cargo fmt --all -- --check` (once the Cargo workspace exists)
 - Lint:         `cargo clippy --all-targets --all-features -- -D warnings`
 - Tests:        `cargo test --all-features`

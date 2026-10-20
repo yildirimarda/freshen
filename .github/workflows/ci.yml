@@ -43,7 +43,7 @@ jobs:
         run: |
           if [ -f tests/run-tests.sh ]; then bash tests/run-tests.sh; else echo "no zsh tests yet"; fi
 
-      # Rust phase: active as soon as the Cargo workspace exists (PLAN.md Milestone 3).
+      # Rust phase: active as soon as the Cargo workspace exists (PLAN.md Milestone 2).
       - name: Rust fmt, clippy, tests
         run: |
           if [ -f Cargo.toml ]; then
