@@ -12,12 +12,13 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use crate::check::{CheckResult, CheckSummary};
 use crate::options::{RunOptions, SelectionFlag};
-use crate::snapshot::SnapshotRecorder;
+use crate::snapshot::{RollbackCommand, SnapshotRecorder};
 use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
 
 /// The outcome of one step in a run.
@@ -258,11 +259,27 @@ impl StepResult {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunSummary {
     steps: Vec<StepResult>,
+    snapshot: Option<PathBuf>,
+    rollback: Vec<RollbackCommand>,
 }
 
 impl RunSummary {
     fn from_results(steps: Vec<StepResult>) -> Self {
-        Self { steps }
+        Self {
+            steps,
+            snapshot: None,
+            rollback: Vec::new(),
+        }
+    }
+
+    fn with_snapshot(mut self, snapshot: Option<PathBuf>) -> Self {
+        self.snapshot = snapshot;
+        self
+    }
+
+    fn with_rollback(mut self, rollback: Vec<RollbackCommand>) -> Self {
+        self.rollback = rollback;
+        self
     }
 
     /// Results of every step that was part of the run, in execution order.
@@ -323,6 +340,18 @@ impl RunSummary {
         self.steps.iter().map(StepResult::duration).sum()
     }
 
+    /// Path of the pre-upgrade snapshot written by this run, when one was.
+    #[must_use]
+    pub fn snapshot_path(&self) -> Option<&Path> {
+        self.snapshot.as_deref()
+    }
+
+    /// Commands that restore the versions recorded before the run.
+    #[must_use]
+    pub fn rollback_commands(&self) -> &[RollbackCommand] {
+        &self.rollback
+    }
+
     /// Renders the summary as a JSON report.
     #[must_use]
     pub fn to_json(&self) -> String {
@@ -374,6 +403,17 @@ impl fmt::Display for RunSummary {
             writeln!(f)?;
             for change in result.changes() {
                 writeln!(f, "          - {change}")?;
+            }
+        }
+
+        if let Some(path) = &self.snapshot {
+            writeln!(f)?;
+            writeln!(f, "Snapshot: {}", path.display())?;
+        }
+        if !self.rollback.is_empty() {
+            writeln!(f, "Rollback hints (previous versions from the snapshot):")?;
+            for command in &self.rollback {
+                writeln!(f, "  {}", command.command())?;
             }
         }
         Ok(())
@@ -482,18 +522,21 @@ impl<'a> Runner<'a> {
     pub fn run(&self) -> RunSummary {
         let mut snapshots = SnapshotRecorder::new();
 
-        RunSummary::from_results(
-            self.steps
-                .iter()
-                .copied()
-                .map(|planned| match planned {
-                    PlannedStep::Run(step) => run_step(step, &self.options, &mut snapshots),
-                    PlannedStep::Skip { step, reason } => {
-                        StepResult::skipped_because(step, reason, Duration::ZERO)
-                    }
-                })
-                .collect(),
-        )
+        let steps = self
+            .steps
+            .iter()
+            .copied()
+            .map(|planned| match planned {
+                PlannedStep::Run(step) => run_step(step, &self.options, &mut snapshots),
+                PlannedStep::Skip { step, reason } => {
+                    StepResult::skipped_because(step, reason, Duration::ZERO)
+                }
+            })
+            .collect();
+
+        RunSummary::from_results(steps)
+            .with_snapshot(snapshots.path().map(Path::to_path_buf))
+            .with_rollback(snapshots.rollback_commands())
     }
 
     /// Detects every step and asks each installed one what is outdated,

@@ -23,6 +23,9 @@ fn install_brew(tools: &StubTools) {
     tools.set_script(
         "brew",
         r#"case "$*" in
+  "list --versions")
+    printf 'jq 1.7.1\n'
+    ;;
   "outdated --formula")
     if [ -f "$FRESHEN_STUB_STATE/upgraded" ]; then
       exit 0
@@ -72,6 +75,14 @@ fn json_report_contains_the_before_and_after_versions() {
     assert_eq!(report["steps"][0]["changes"][0]["name"], "jq");
     assert_eq!(report["steps"][0]["changes"][0]["before"], "1.7.1");
     assert_eq!(report["steps"][0]["changes"][0]["after"], "1.8.0");
+    assert_eq!(report["rollback"][0]["group"], "brew");
+    assert_eq!(report["rollback"][0]["command"], "brew install jq@1.7.1");
+    assert!(
+        report["snapshot"]
+            .as_str()
+            .is_some_and(|path| path.ends_with(".txt")),
+        "report: {report}"
+    );
     assert_eq!(
         tools.step_calls(),
         [
@@ -107,6 +118,8 @@ fn markdown_report_contains_a_table_with_the_before_and_after_versions() {
         "report: {text}"
     );
     assert!(text.contains("jq 1.7.1 -> 1.8.0"), "report: {text}");
+    assert!(text.contains("## Rollback hints"), "report: {text}");
+    assert!(text.contains("brew install jq@1.7.1"), "report: {text}");
 }
 
 #[test]
@@ -125,6 +138,12 @@ fn the_plain_summary_lists_the_same_version_changes() {
     let text = stdout(&output);
     assert!(text.contains("Summary: 1 ok"), "summary: {text}");
     assert!(text.contains("jq 1.7.1 -> 1.8.0"), "summary: {text}");
+    assert!(text.contains("Snapshot:"), "summary: {text}");
+    assert!(
+        text.contains("Rollback hints (previous versions from the snapshot):"),
+        "summary: {text}"
+    );
+    assert!(text.contains("brew install jq@1.7.1"), "summary: {text}");
 }
 
 #[test]

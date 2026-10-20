@@ -27,7 +27,7 @@ A failing step never aborts the run. Failures are collected and listed at the en
 - **Reopening uses `open -g`**, so apps do not steal focus.
 - **`mise upgrade` is used without `--bump`** on purpose: with `node@lts` in your config, `--bump` would pin `lts` to a fixed version.
 - **Zellij**: if zellij is outdated and you run freshen inside a session, you get a warning (server/client versions must match).
-- **Every run records a pre-upgrade snapshot** of installed versions (`brew list --versions`, `brew bundle dump`, `uv tool list`, `mise ls`, Docker images) in a timestamped file under the platform state directory (`~/.local/state/freshen/snapshots` on Linux, `~/Library/Application Support/freshen/snapshots` on macOS, `%LOCALAPPDATA%\freshen\snapshots` on Windows). Set `FRESHEN_SNAPSHOT_DIR` to override the location.
+- **Every run records a pre-upgrade snapshot** of installed versions (`brew list --versions`, `brew bundle dump`, `uv tool list`, `mise ls`, Docker images) in a timestamped file under the platform state directory (`~/.local/state/freshen/snapshots` on Linux, `~/Library/Application Support/freshen/snapshots` on macOS, `%LOCALAPPDATA%\freshen\snapshots` on Windows). Set `FRESHEN_SNAPSHOT_DIR` to override the location. The summary prints the commands that reinstall the recorded versions.
 
 ## Requirements
 
