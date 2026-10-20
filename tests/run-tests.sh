@@ -125,4 +125,18 @@ PY
   fi
 fi
 
+# 6. MSRV job: the CI proposal reads the workspace rust-version and checks the
+#    whole workspace with that exact toolchain, so a newer language feature
+#    cannot slip in unnoticed.
+if [[ -f Cargo.toml && -f ci-proposals/rust.yml ]]; then
+  msrv_ok=1
+  msrv="$(sed -n 's/^rust-version[[:space:]]*=[[:space:]]*"\([^"]*\)"/\1/p' Cargo.toml | head -n1)"
+  [[ -n "$msrv" ]] || { echo "  Cargo.toml has no rust-version"; msrv_ok=0; }
+  grep -q '^  msrv:' ci-proposals/rust.yml || { echo "  no msrv job"; msrv_ok=0; }
+  grep -q 'rust-version' ci-proposals/rust.yml || { echo "  msrv job does not read rust-version"; msrv_ok=0; }
+  grep -q 'steps.msrv.outputs.version' ci-proposals/rust.yml || { echo "  msrv job does not use the manifest value"; msrv_ok=0; }
+  grep -q 'cargo +.*check --workspace' ci-proposals/rust.yml || { echo "  msrv job does not run cargo check --workspace"; msrv_ok=0; }
+  if (( msrv_ok )); then ok "ci-proposals/rust.yml MSRV job (rust-version -> cargo check --workspace)"; else bad "ci-proposals/rust.yml missing an MSRV check job"; fi
+fi
+
 exit "$fail"

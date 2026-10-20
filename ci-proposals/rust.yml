@@ -32,6 +32,33 @@ jobs:
       - name: Rust tests
         run: cargo test --all-features
 
+  # The MSRV job is deliberately separate from the main `rust` job: the pinned
+  # toolchain in rust-toolchain.toml is much newer than the workspace
+  # `rust-version`, so compiling with the old toolchain is the only way to catch
+  # a dependency on a newer language or standard-library feature. The version is
+  # read from Cargo.toml rather than hard-coded so the job follows the manifest.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read MSRV from workspace manifest
+        id: msrv
+        run: |
+          msrv="$(sed -n 's/^rust-version[[:space:]]*=[[:space:]]*"\([^"]*\)"/\1/p' Cargo.toml | head -n1)"
+          if [ -z "$msrv" ]; then
+            echo "::error::Cargo.toml does not set a workspace rust-version"
+            exit 1
+          fi
+          echo "version=$msrv" >> "$GITHUB_OUTPUT"
+          echo "Checking against MSRV $msrv"
+
+      - name: Install MSRV toolchain
+        run: rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal
+
+      - name: Check workspace against MSRV
+        run: cargo +"${{ steps.msrv.outputs.version }}" check --workspace --all-features --locked
+
   # cargo-deny gates licenses (against deny.toml's allow-list) and known
   # vulnerabilities (RustSec advisories) for the whole dependency tree, so a
   # new dependency can never slip a non-permissive license or a vulnerable
