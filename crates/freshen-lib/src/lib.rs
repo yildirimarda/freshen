@@ -40,7 +40,11 @@ mod tests {
             .parse()
             .expect("minor component is a number");
         assert!(major > 0 || minor > 0, "version must be non-zero");
-        assert_eq!(parts.next().is_some(), true, "version has a patch component");
+        assert_eq!(
+            parts.next().is_some(),
+            true,
+            "version has a patch component"
+        );
     }
 
     #[test]
