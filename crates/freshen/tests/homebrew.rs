@@ -265,6 +265,16 @@ fn run_apps(
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
 }
 
+fn run_apps_with_stdin(tools: &StubTools, state: &std::path::Path, stdin: &str) -> Output {
+    let mut command = tools.command();
+    command
+        .env("FRESHEN_BREW_INFO_JSON", CASK_INFO)
+        .env("FRESHEN_PS_STATE", state)
+        .env_remove("ZELLIJ")
+        .args(["--only", HOMEBREW_STEPS]);
+    tools.run_with_stdin(command, stdin)
+}
+
 #[test]
 fn quits_running_cask_apps_before_the_upgrade_and_reopens_after_cleanup() {
     let (tools, app, state) = app_tools(true);
@@ -306,6 +316,125 @@ fn quits_running_cask_apps_before_the_upgrade_and_reopens_after_cleanup() {
     assert!(
         text.contains("Opening: com.example.firefox"),
         "output: {text}"
+    );
+}
+
+#[test]
+fn yes_at_the_prompt_quits_apps_and_upgrades_casks() {
+    let (tools, app, state) = app_tools(true);
+
+    let output = run_apps_with_stdin(&tools, &state, "yes\n");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let info = app.join("Contents/Info");
+    assert_eq!(
+        tools.calls(),
+        [
+            "brew update".to_owned(),
+            "brew outdated --formula --quiet".to_owned(),
+            "brew upgrade --formula".to_owned(),
+            "brew outdated --cask --greedy --quiet".to_owned(),
+            "brew info --cask --json=v2 firefox".to_owned(),
+            format!("defaults read {} CFBundleIdentifier", info.display()),
+            "ps -axo command=".to_owned(),
+            "osascript -e with timeout of 3 seconds -e tell application id \"com.example.firefox\" to quit -e end timeout".to_owned(),
+            "ps -axo command=".to_owned(),
+            "brew upgrade --cask --greedy".to_owned(),
+            "brew autoremove".to_owned(),
+            "brew cleanup --prune=all".to_owned(),
+            "open -g -b com.example.firefox".to_owned(),
+        ]
+    );
+
+    let text = stdout(&output);
+    assert!(
+        text.contains("Quit these apps and upgrade casks? [Y]es / [s]kip quitting / [n]o:"),
+        "prompt was not shown: {text}"
+    );
+    assert!(text.contains("Quitting: Firefox.app"), "output: {text}");
+    assert!(
+        text.contains("Reopening apps that were quit"),
+        "output: {text}"
+    );
+    assert!(
+        text.contains("Opening: com.example.firefox"),
+        "output: {text}"
+    );
+}
+
+#[test]
+fn skip_quitting_at_the_prompt_upgrades_casks_without_quitting_apps() {
+    let (tools, app, state) = app_tools(true);
+
+    let output = run_apps_with_stdin(&tools, &state, "s\n");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let info = app.join("Contents/Info");
+    assert_eq!(
+        tools.calls(),
+        [
+            "brew update".to_owned(),
+            "brew outdated --formula --quiet".to_owned(),
+            "brew upgrade --formula".to_owned(),
+            "brew outdated --cask --greedy --quiet".to_owned(),
+            "brew info --cask --json=v2 firefox".to_owned(),
+            format!("defaults read {} CFBundleIdentifier", info.display()),
+            "ps -axo command=".to_owned(),
+            "brew upgrade --cask --greedy".to_owned(),
+            "brew autoremove".to_owned(),
+            "brew cleanup --prune=all".to_owned(),
+        ]
+    );
+
+    let text = stdout(&output);
+    assert!(
+        text.contains("Quit these apps and upgrade casks? [Y]es / [s]kip quitting / [n]o:"),
+        "prompt was not shown: {text}"
+    );
+    assert!(!text.contains("Quitting:"), "apps were quit: {text}");
+    assert!(
+        !text.contains("Reopening apps that were quit"),
+        "apps were reopened: {text}"
+    );
+    assert!(!text.contains("Opening:"), "apps were reopened: {text}");
+}
+
+#[test]
+fn skip_casks_at_the_prompt_skips_the_cask_upgrade() {
+    let (tools, app, state) = app_tools(true);
+
+    let output = run_apps_with_stdin(&tools, &state, "n\n");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let info = app.join("Contents/Info");
+    assert_eq!(
+        tools.calls(),
+        [
+            "brew update".to_owned(),
+            "brew outdated --formula --quiet".to_owned(),
+            "brew upgrade --formula".to_owned(),
+            "brew outdated --cask --greedy --quiet".to_owned(),
+            "brew info --cask --json=v2 firefox".to_owned(),
+            format!("defaults read {} CFBundleIdentifier", info.display()),
+            "ps -axo command=".to_owned(),
+            "brew autoremove".to_owned(),
+            "brew cleanup --prune=all".to_owned(),
+        ]
+    );
+
+    let text = stdout(&output);
+    assert!(
+        text.contains("Quit these apps and upgrade casks? [Y]es / [s]kip quitting / [n]o:"),
+        "prompt was not shown: {text}"
+    );
+    assert!(
+        text.contains("warning: Cask upgrade skipped by user."),
+        "output: {text}"
+    );
+    assert!(!text.contains("Quitting:"), "apps were quit: {text}");
+    assert!(
+        !text.contains("Reopening apps that were quit"),
+        "apps were reopened: {text}"
     );
 }
 

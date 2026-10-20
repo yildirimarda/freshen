@@ -19,8 +19,9 @@
 //! (`cargo test --all-features`) enables it.
 
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
@@ -126,6 +127,33 @@ impl StubTools {
             .args(args)
             .output()
             .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
+    }
+
+    /// Runs a command built from [`StubTools::command`] with scripted `stdin`.
+    ///
+    /// The caller configures the command's environment and arguments; the
+    /// harness pipes all three standard streams and writes `stdin` before
+    /// waiting for the process to exit. This drives interactive prompts (for
+    /// example the cask quit prompt) end to end.
+    #[allow(dead_code)]
+    pub fn run_with_stdin(&self, mut command: Command, stdin: &str) -> Output {
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+        let mut input = child
+            .stdin
+            .take()
+            .unwrap_or_else(|| panic!("freshen standard input was not piped"));
+        input
+            .write_all(stdin.as_bytes())
+            .unwrap_or_else(|error| panic!("failed to write scripted stdin: {error}"));
+        drop(input);
+        child
+            .wait_with_output()
+            .unwrap_or_else(|error| panic!("failed to wait for freshen: {error}"))
     }
 
     /// Recorded invocations, one `"tool arg arg"` line per call, in order.
