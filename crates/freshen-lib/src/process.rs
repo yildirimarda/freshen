@@ -23,6 +23,8 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crate::signals;
+
 /// How often the parent checks whether the child exited or timed out.
 ///
 /// This bounds how quickly a timeout is noticed and how quickly buffered
@@ -309,10 +311,17 @@ impl CommandSpec {
         let mut attempt = 1;
 
         loop {
+            if signals::requested() {
+                return Err(ProcessError::Interrupted { program });
+            }
+
             if attempt > 1 {
                 let delay = self.backoff.delay_before(attempt);
                 if !delay.is_zero() {
                     thread::sleep(delay);
+                }
+                if signals::requested() {
+                    return Err(ProcessError::Interrupted { program });
                 }
             }
 
@@ -321,6 +330,9 @@ impl CommandSpec {
             stderr.extend_from_slice(&result.captured.stderr);
 
             let outcome = result.outcome;
+            if matches!(outcome, AttemptOutcome::Interrupted) {
+                return Err(ProcessError::Interrupted { program });
+            }
             if let AttemptOutcome::Exited(status) = outcome {
                 if status.success() {
                     return Ok(ProcessOutput {
@@ -339,7 +351,7 @@ impl CommandSpec {
                     stderr: String::from_utf8_lossy(&stderr).into_owned(),
                     status: match outcome {
                         AttemptOutcome::Exited(status) => Some(status),
-                        AttemptOutcome::TimedOut => None,
+                        AttemptOutcome::TimedOut | AttemptOutcome::Interrupted => None,
                     },
                     attempts: attempt,
                     duration: started.elapsed(),
@@ -355,6 +367,7 @@ impl CommandSpec {
                         timeout: self.timeout.unwrap_or_default(),
                         output,
                     },
+                    AttemptOutcome::Interrupted => ProcessError::Interrupted { program },
                 });
             }
 
@@ -441,6 +454,13 @@ impl CommandSpec {
                 break;
             }
 
+            if signals::requested() {
+                let _ = child.kill();
+                let _ = child.wait();
+                outcome = AttemptOutcome::Interrupted;
+                break;
+            }
+
             thread::sleep(POLL_INTERVAL);
         }
 
@@ -512,6 +532,7 @@ struct Captured {
 enum AttemptOutcome {
     Exited(ExitStatus),
     TimedOut,
+    Interrupted,
 }
 
 /// The result of one attempt: how it ended and what it printed.
@@ -691,6 +712,13 @@ pub enum ProcessError {
         output: Box<ProcessOutput>,
     },
 
+    /// The run was interrupted and the child was stopped.
+    #[error("`{program}` was interrupted")]
+    Interrupted {
+        /// Program that was stopped.
+        program: String,
+    },
+
     /// The parent could not wait for the child.
     #[error("could not wait for `{program}`: {source}")]
     Wait {
@@ -718,7 +746,10 @@ impl ProcessError {
     pub fn output(&self) -> Option<&ProcessOutput> {
         match self {
             Self::Failed { output, .. } | Self::TimedOut { output, .. } => Some(output),
-            Self::Spawn { .. } | Self::Wait { .. } | Self::Capture { .. } => None,
+            Self::Spawn { .. }
+            | Self::Interrupted { .. }
+            | Self::Wait { .. }
+            | Self::Capture { .. } => None,
         }
     }
 }

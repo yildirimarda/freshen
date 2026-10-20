@@ -32,6 +32,9 @@ pub enum StepStatus {
     Skipped,
     /// Detection, the upgrade or the cleanup failed.
     Failed,
+    /// The run was interrupted while this step was running or before it could
+    /// start.
+    Interrupted,
 }
 
 impl StepStatus {
@@ -43,6 +46,7 @@ impl StepStatus {
             Self::Planned => "planned",
             Self::Skipped => "skipped",
             Self::Failed => "failed",
+            Self::Interrupted => "interrupted",
         }
     }
 
@@ -70,6 +74,8 @@ pub enum SkipReason {
     NotSelected(SelectionFlag),
     /// The step conflicts with an earlier step that is part of the run.
     Conflict(StepId),
+    /// The run was interrupted before the step started.
+    Interrupted,
 }
 
 impl SkipReason {
@@ -82,6 +88,7 @@ impl SkipReason {
             Self::NotSelected(SelectionFlag::Only) => "not selected by --only",
             Self::NotSelected(SelectionFlag::Skip) => "excluded by --skip",
             Self::Conflict(_) => "conflicts with another step",
+            Self::Interrupted => "interrupted before it started",
         }
     }
 }
@@ -206,6 +213,10 @@ impl StepResult {
         }
     }
 
+    fn interrupted(step: &dyn Step, duration: Duration) -> Self {
+        Self::new(step, StepStatus::Interrupted, duration)
+    }
+
     /// Stable id of the step.
     #[must_use]
     pub fn id(&self) -> StepId {
@@ -261,6 +272,8 @@ pub struct RunSummary {
     steps: Vec<StepResult>,
     snapshot: Option<PathBuf>,
     rollback: Vec<RollbackCommand>,
+    interrupted: bool,
+    restore_failures: Vec<String>,
 }
 
 impl RunSummary {
@@ -269,6 +282,8 @@ impl RunSummary {
             steps,
             snapshot: None,
             rollback: Vec::new(),
+            interrupted: false,
+            restore_failures: Vec::new(),
         }
     }
 
@@ -279,6 +294,16 @@ impl RunSummary {
 
     fn with_rollback(mut self, rollback: Vec<RollbackCommand>) -> Self {
         self.rollback = rollback;
+        self
+    }
+
+    fn with_interrupted(mut self, interrupted: bool) -> Self {
+        self.interrupted = interrupted;
+        self
+    }
+
+    fn with_restore_failures(mut self, failures: Vec<String>) -> Self {
+        self.restore_failures = failures;
         self
     }
 
@@ -319,6 +344,24 @@ impl RunSummary {
     #[must_use]
     pub fn failed_count(&self) -> usize {
         self.count(StepStatus::Failed)
+    }
+
+    /// Number of steps that were interrupted.
+    #[must_use]
+    pub fn interrupted_count(&self) -> usize {
+        self.count(StepStatus::Interrupted)
+    }
+
+    /// Returns `true` when the run was interrupted by a signal.
+    #[must_use]
+    pub fn was_interrupted(&self) -> bool {
+        self.interrupted
+    }
+
+    /// Restore commands that failed after an interrupt.
+    #[must_use]
+    pub fn restore_failures(&self) -> &[String] {
+        &self.restore_failures
     }
 
     /// Returns `true` when at least one step failed.
@@ -364,10 +407,13 @@ impl RunSummary {
         crate::report::run_markdown(self)
     }
 
-    /// Process exit code matching the zsh script: `0` unless a step failed.
+    /// Process exit code: `0` when every step succeeded, `1` when a step
+    /// failed and `130` when the run was interrupted.
     #[must_use]
     pub fn exit_code(&self) -> ExitCode {
-        if self.has_failures() {
+        if self.interrupted {
+            ExitCode::from(130)
+        } else if self.has_failures() {
             ExitCode::FAILURE
         } else {
             ExitCode::SUCCESS
@@ -379,11 +425,12 @@ impl fmt::Display for RunSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
-            "Summary: {} ok, {} planned, {} skipped, {} failed ({})",
+            "Summary: {} ok, {} planned, {} skipped, {} failed, {} interrupted ({})",
             self.ok_count(),
             self.planned_count(),
             self.skipped_count(),
             self.failed_count(),
+            self.interrupted_count(),
             format_duration(self.total_duration())
         )?;
         for result in &self.steps {
@@ -414,6 +461,12 @@ impl fmt::Display for RunSummary {
             writeln!(f, "Rollback hints (previous versions from the snapshot):")?;
             for command in &self.rollback {
                 writeln!(f, "  {}", command.command())?;
+            }
+        }
+        if !self.restore_failures.is_empty() {
+            writeln!(f, "Restore warnings:")?;
+            for failure in &self.restore_failures {
+                writeln!(f, "  {failure}")?;
             }
         }
         Ok(())
@@ -447,6 +500,7 @@ pub(crate) fn format_duration(duration: Duration) -> String {
 pub struct Runner<'a> {
     steps: Vec<PlannedStep<'a>>,
     options: RunOptions,
+    interrupt: fn() -> bool,
 }
 
 #[derive(Clone, Copy)]
@@ -508,7 +562,14 @@ impl<'a> Runner<'a> {
         Self {
             steps: planned,
             options,
+            interrupt: crate::signals::requested,
         }
+    }
+
+    #[cfg(test)]
+    fn with_interrupt_check(mut self, interrupt: fn() -> bool) -> Self {
+        self.interrupt = interrupt;
+        self
     }
 
     /// Options that control this run.
@@ -521,22 +582,59 @@ impl<'a> Runner<'a> {
     #[must_use]
     pub fn run(&self) -> RunSummary {
         let mut snapshots = SnapshotRecorder::new();
+        let mut results = Vec::with_capacity(self.steps.len());
+        let mut interrupted = false;
 
-        let steps = self
-            .steps
-            .iter()
-            .copied()
-            .map(|planned| match planned {
-                PlannedStep::Run(step) => run_step(step, &self.options, &mut snapshots),
+        for planned in self.steps.iter().copied() {
+            if interrupted || (self.interrupt)() {
+                interrupted = true;
+                let step = match planned {
+                    PlannedStep::Run(step) | PlannedStep::Skip { step, .. } => step,
+                };
+                results.push(StepResult::skipped_because(
+                    step,
+                    SkipReason::Interrupted,
+                    Duration::ZERO,
+                ));
+                continue;
+            }
+
+            let result = match planned {
+                PlannedStep::Run(step) => {
+                    run_step(step, &self.options, &mut snapshots, self.interrupt)
+                }
                 PlannedStep::Skip { step, reason } => {
                     StepResult::skipped_because(step, reason, Duration::ZERO)
                 }
-            })
-            .collect();
+            };
+            interrupted |= result.status() == StepStatus::Interrupted;
+            results.push(result);
+        }
 
-        RunSummary::from_results(steps)
+        let mut restore_failures = Vec::new();
+        if interrupted {
+            eprintln!("freshen: interrupted; restoring everything that was stopped");
+            crate::signals::reset();
+
+            for planned in self.steps.iter().rev().copied() {
+                let Some(step) = planned.running() else {
+                    continue;
+                };
+                if let Err(error) = step.restore() {
+                    eprintln!(
+                        "freshen: could not restore {}: {error}",
+                        step.display_name()
+                    );
+                    restore_failures.push(format!("{}: {error}", step.display_name()));
+                }
+            }
+        }
+
+        RunSummary::from_results(results)
             .with_snapshot(snapshots.path().map(Path::to_path_buf))
             .with_rollback(snapshots.rollback_commands())
+            .with_interrupted(interrupted)
+            .with_restore_failures(restore_failures)
     }
 
     /// Detects every step and asks each installed one what is outdated,
@@ -575,8 +673,17 @@ fn check_step(step: &dyn Step) -> CheckResult {
     }
 }
 
-fn run_step(step: &dyn Step, options: &RunOptions, snapshots: &mut SnapshotRecorder) -> StepResult {
+fn run_step(
+    step: &dyn Step,
+    options: &RunOptions,
+    snapshots: &mut SnapshotRecorder,
+    interrupt: fn() -> bool,
+) -> StepResult {
     let started = Instant::now();
+    if interrupt() {
+        return StepResult::interrupted(step, started.elapsed());
+    }
+
     match step.detect() {
         Ok(Detection::NotInstalled) => StepResult::skipped(step, started.elapsed()),
         Ok(Detection::Installed) if options.is_dry_run() => {
@@ -584,25 +691,42 @@ fn run_step(step: &dyn Step, options: &RunOptions, snapshots: &mut SnapshotRecor
         }
         Ok(Detection::Installed) => {
             capture_snapshot(step, snapshots);
+            if interrupt() {
+                return StepResult::interrupted(step, started.elapsed());
+            }
+
             let before = step.check().ok();
+            if interrupt() {
+                return StepResult::interrupted(step, started.elapsed());
+            }
+
             let result = match step.run_with_options(options) {
+                Ok(()) if interrupt() => StepResult::interrupted(step, started.elapsed()),
                 Ok(()) => match step.cleanup() {
+                    Ok(()) if interrupt() => StepResult::interrupted(step, started.elapsed()),
                     Ok(()) => StepResult::ok(step, started.elapsed()),
+                    Err(_error) if interrupt() => StepResult::interrupted(step, started.elapsed()),
                     Err(error) => StepResult::failed(step, started.elapsed(), error),
                 },
+                Err(_error) if interrupt() => StepResult::interrupted(step, started.elapsed()),
                 Err(error) => StepResult::failed(step, started.elapsed(), error),
             };
 
-            let changes = match before {
-                Some(before) if !before.is_up_to_date() => match step.check() {
-                    Ok(after) => diff_reports(&before, &after),
-                    Err(_) => Vec::new(),
-                },
-                _ => Vec::new(),
+            let changes = if result.status() == StepStatus::Interrupted {
+                Vec::new()
+            } else {
+                match before {
+                    Some(before) if !before.is_up_to_date() => match step.check() {
+                        Ok(after) => diff_reports(&before, &after),
+                        Err(_) => Vec::new(),
+                    },
+                    _ => Vec::new(),
+                }
             };
 
             result.with_changes(changes)
         }
+        Err(_error) if interrupt() => StepResult::interrupted(step, started.elapsed()),
         Err(error) => StepResult::failed(step, started.elapsed(), error),
     }
 }
@@ -682,7 +806,14 @@ mod tests {
     use std::cell::Cell;
     use std::process::ExitCode;
     use std::rc::Rc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
+
+    static INTERRUPT: AtomicBool = AtomicBool::new(false);
+
+    fn interrupt_flag() -> bool {
+        INTERRUPT.load(Ordering::SeqCst)
+    }
 
     #[derive(Default)]
     struct Calls {
@@ -690,6 +821,7 @@ mod tests {
         check: Cell<usize>,
         run: Cell<usize>,
         cleanup: Cell<usize>,
+        restore: Cell<usize>,
     }
 
     struct FakeStep {
@@ -703,6 +835,7 @@ mod tests {
         fail_cleanup: bool,
         conflicts: &'static [StepId],
         sleep: Duration,
+        interrupt_on_run: bool,
         calls: Rc<Calls>,
     }
 
@@ -719,6 +852,7 @@ mod tests {
                 fail_cleanup: false,
                 conflicts: &[],
                 sleep: Duration::ZERO,
+                interrupt_on_run: false,
                 calls: Rc::new(Calls::default()),
             }
         }
@@ -763,6 +897,11 @@ mod tests {
             self
         }
 
+        fn interrupt_on_run(mut self) -> Self {
+            self.interrupt_on_run = true;
+            self
+        }
+
         fn calls(&self) -> Rc<Calls> {
             Rc::clone(&self.calls)
         }
@@ -798,6 +937,9 @@ mod tests {
             if !self.sleep.is_zero() {
                 std::thread::sleep(self.sleep);
             }
+            if self.interrupt_on_run {
+                INTERRUPT.store(true, Ordering::SeqCst);
+            }
             if self.fail_run {
                 return Err(StepError::run(self.id, "upgrade failed"));
             }
@@ -809,6 +951,11 @@ mod tests {
             if self.fail_cleanup {
                 return Err(StepError::cleanup(self.id, "cleanup failed"));
             }
+            Ok(())
+        }
+
+        fn restore(&self) -> Result<(), StepError> {
+            self.calls.restore.set(self.calls.restore.get() + 1);
             Ok(())
         }
 
@@ -1206,5 +1353,44 @@ mod tests {
         assert!(text.contains("failed"));
         assert!(text.contains("mise"));
         assert!(text.contains("upgrade failed"));
+    }
+
+    #[test]
+    fn an_interrupt_stops_the_run_skips_cleanup_and_restores_in_reverse_order() {
+        INTERRUPT.store(false, Ordering::SeqCst);
+        let first = FakeStep::new("brew", "Homebrew");
+        let second = FakeStep::new("uv", "uv").interrupt_on_run();
+        let third = FakeStep::new("mise", "mise");
+        let first_calls = first.calls();
+        let second_calls = second.calls();
+        let third_calls = third.calls();
+        let steps: [&dyn Step; 3] = [&first, &second, &third];
+
+        let summary = Runner::new(steps)
+            .with_interrupt_check(interrupt_flag)
+            .run();
+
+        assert!(summary.was_interrupted());
+        assert_eq!(summary.interrupted_count(), 1);
+        assert_eq!(summary.steps()[0].status(), StepStatus::Ok);
+        assert_eq!(summary.steps()[1].status(), StepStatus::Interrupted);
+        assert_eq!(summary.steps()[2].status(), StepStatus::Skipped);
+        assert_eq!(
+            summary.steps()[2].skip_reason(),
+            Some(SkipReason::Interrupted)
+        );
+        assert_exit_code(summary.exit_code(), ExitCode::from(130));
+        assert!(summary.to_string().contains("interrupted"));
+
+        assert_eq!(first_calls.cleanup.get(), 1);
+        assert_eq!(second_calls.cleanup.get(), 0);
+        assert_eq!(third_calls.detect.get(), 0);
+        assert_eq!(third_calls.run.get(), 0);
+
+        assert_eq!(first_calls.restore.get(), 1);
+        assert_eq!(second_calls.restore.get(), 1);
+        assert_eq!(third_calls.restore.get(), 1);
+
+        INTERRUPT.store(false, Ordering::SeqCst);
     }
 }

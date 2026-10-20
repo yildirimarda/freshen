@@ -18,7 +18,8 @@ use std::rc::Rc;
 use serde_json::Value;
 
 use crate::apps::{
-    find_running_apps, quit_apps, quit_choice, reopen_apps, MacAppSystem, QuitChoice, QuitPolicy,
+    find_running_apps, quit_apps, quit_choice, reopen_apps, AppSystem, MacAppSystem, QuitChoice,
+    QuitPolicy,
 };
 use crate::options::RunOptions;
 use crate::platform::Platform;
@@ -46,8 +47,25 @@ impl ReopenQueue {
         self.0.borrow_mut().extend(bundle_ids);
     }
 
-    fn take(&self) -> Vec<String> {
-        std::mem::take(&mut *self.0.borrow_mut())
+    fn bundle_ids(&self) -> Vec<String> {
+        self.0.borrow().clone()
+    }
+
+    fn clear(&self) {
+        self.0.borrow_mut().clear();
+    }
+}
+
+fn reopen_queued(queue: &ReopenQueue, system: &dyn AppSystem, message: &str, interrupted: bool) {
+    let bundle_ids = queue.bundle_ids();
+    if bundle_ids.is_empty() {
+        return;
+    }
+
+    println!("{message}");
+    reopen_apps(system, &bundle_ids);
+    if !interrupted {
+        queue.clear();
     }
 }
 
@@ -327,11 +345,20 @@ impl Step for FormulaeStep {
 
 struct CasksStep {
     reopen: ReopenQueue,
+    system: Rc<dyn AppSystem>,
 }
 
 impl CasksStep {
     fn new(reopen: ReopenQueue) -> Self {
-        Self { reopen }
+        Self {
+            reopen,
+            system: Rc::new(MacAppSystem),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_system(reopen: ReopenQueue, system: Rc<dyn AppSystem>) -> Self {
+        Self { reopen, system }
     }
 
     fn quit_running_apps(&self, apps: &[String], options: &RunOptions) -> QuitChoice {
@@ -343,8 +370,8 @@ impl CasksStep {
         let self_bundle_id = env::var("__CFBundleIdentifier")
             .ok()
             .filter(|bundle_id| !bundle_id.is_empty());
-        let system = MacAppSystem;
-        let scan = find_running_apps(&system, &installed, self_bundle_id.as_deref());
+        let system = self.system.as_ref();
+        let scan = find_running_apps(system, &installed, self_bundle_id.as_deref());
 
         for name in scan.protected() {
             println!(
@@ -372,7 +399,7 @@ impl CasksStep {
         }
 
         let policy = QuitPolicy::from_env(options.force_kill());
-        let reopen_ids = quit_apps(&system, scan.running(), &policy);
+        let reopen_ids = quit_apps(system, scan.running(), &policy);
         self.reopen.extend(reopen_ids);
         QuitChoice::Quit
     }
@@ -452,6 +479,16 @@ impl Step for CasksStep {
 
     fn snapshot(&self) -> Option<SnapshotSection> {
         Some(snapshot::homebrew_section())
+    }
+
+    fn restore(&self) -> Result<(), StepError> {
+        reopen_queued(
+            &self.reopen,
+            self.system.as_ref(),
+            "Restoring apps that were quit",
+            false,
+        );
+        Ok(())
     }
 
     fn prerequisites(&self) -> &'static [StepId] {
@@ -541,11 +578,20 @@ impl Step for CleanupStep {
 
 struct ReopenStep {
     reopen: ReopenQueue,
+    system: Rc<dyn AppSystem>,
 }
 
 impl ReopenStep {
     fn new(reopen: ReopenQueue) -> Self {
-        Self { reopen }
+        Self {
+            reopen,
+            system: Rc::new(MacAppSystem),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_system(reopen: ReopenQueue, system: Rc<dyn AppSystem>) -> Self {
+        Self { reopen, system }
     }
 }
 
@@ -567,18 +613,27 @@ impl Step for ReopenStep {
     }
 
     fn run(&self) -> Result<(), StepError> {
-        let bundle_ids = self.reopen.take();
-        if bundle_ids.is_empty() {
-            return Ok(());
-        }
-
-        println!("Reopening apps that were quit");
-        reopen_apps(&MacAppSystem, &bundle_ids);
+        reopen_queued(
+            &self.reopen,
+            self.system.as_ref(),
+            "Reopening apps that were quit",
+            crate::signals::requested(),
+        );
         Ok(())
     }
 
     fn snapshot(&self) -> Option<SnapshotSection> {
         Some(snapshot::homebrew_section())
+    }
+
+    fn restore(&self) -> Result<(), StepError> {
+        reopen_queued(
+            &self.reopen,
+            self.system.as_ref(),
+            "Restoring apps that were quit",
+            false,
+        );
+        Ok(())
     }
 
     fn prerequisites(&self) -> &'static [StepId] {
@@ -593,12 +648,44 @@ impl Step for ReopenStep {
 #[cfg(test)]
 mod tests {
     use super::{
-        cask_app_artifacts, installed_app_paths, parse_outdated, register, CaskError, CASKS,
-        FORMULAE, REOPEN,
+        cask_app_artifacts, installed_app_paths, parse_outdated, register, CaskError, CasksStep,
+        ReopenQueue, ReopenStep, CASKS, FORMULAE, REOPEN,
     };
+    use crate::apps::AppSystem;
     use crate::platform::Platform;
     use crate::registry::Registry;
-    use crate::step::StepId;
+    use crate::step::{Step, StepId};
+    use std::cell::RefCell;
+    use std::path::Path;
+    use std::rc::Rc;
+
+    #[derive(Default)]
+    struct FakeAppSystem {
+        opened: RefCell<Vec<String>>,
+    }
+
+    impl AppSystem for FakeAppSystem {
+        fn bundle_id(&self, _app: &Path) -> Option<String> {
+            None
+        }
+
+        fn is_running(&self, _app: &Path) -> bool {
+            false
+        }
+
+        fn pids(&self, _app: &Path) -> Vec<u32> {
+            Vec::new()
+        }
+
+        fn quit(&self, _bundle_id: &str) {}
+
+        fn force_kill(&self, _pids: &[u32]) {}
+
+        fn open(&self, bundle_id: &str) -> bool {
+            self.opened.borrow_mut().push(bundle_id.to_owned());
+            true
+        }
+    }
 
     fn ordered_ids(platform: Platform) -> Vec<StepId> {
         register(Registry::new())
@@ -748,6 +835,37 @@ mod tests {
                 "expected ident at line 1 column 2".to_owned()
             ))
         );
+    }
+
+    #[test]
+    fn an_interrupted_cask_step_reopens_the_apps_it_quit() {
+        let queue = ReopenQueue::default();
+        queue.extend(["com.firefox".to_owned(), "com.editor".to_owned()]);
+        let system = Rc::new(FakeAppSystem::default());
+        let step = CasksStep::with_system(queue.clone(), system.clone());
+
+        step.restore()
+            .unwrap_or_else(|error| panic!("restore failed: {error}"));
+
+        assert_eq!(
+            system.opened.borrow().as_slice(),
+            ["com.firefox", "com.editor"]
+        );
+        assert!(queue.bundle_ids().is_empty());
+    }
+
+    #[test]
+    fn the_reopen_step_restores_apps_after_an_interrupt() {
+        let queue = ReopenQueue::default();
+        queue.extend(["com.firefox".to_owned()]);
+        let system = Rc::new(FakeAppSystem::default());
+        let step = ReopenStep::with_system(queue.clone(), system.clone());
+
+        step.restore()
+            .unwrap_or_else(|error| panic!("restore failed: {error}"));
+
+        assert_eq!(system.opened.borrow().as_slice(), ["com.firefox"]);
+        assert!(queue.bundle_ids().is_empty());
     }
 
     #[test]

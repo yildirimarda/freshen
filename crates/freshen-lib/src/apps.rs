@@ -212,7 +212,7 @@ pub trait AppSystem {
 /// `self_bundle_id` is reported in [`AppScan::protected`] instead of being
 /// considered for quitting.
 #[must_use]
-pub fn find_running_apps<S: AppSystem>(
+pub fn find_running_apps<S: AppSystem + ?Sized>(
     system: &S,
     installed: &[PathBuf],
     self_bundle_id: Option<&str>,
@@ -245,7 +245,7 @@ pub fn find_running_apps<S: AppSystem>(
 /// A bundle id is recorded before the quit is attempted, exactly like the zsh
 /// script, so an app that refuses to quit is still reopened (it never closed).
 #[must_use]
-pub fn quit_apps<S: AppSystem>(
+pub fn quit_apps<S: AppSystem + ?Sized>(
     system: &S,
     apps: &[RunningApp],
     policy: &QuitPolicy,
@@ -262,7 +262,7 @@ pub fn quit_apps<S: AppSystem>(
 }
 
 /// Reopens the apps with the given bundle ids, warning about failures.
-pub fn reopen_apps<S: AppSystem>(system: &S, bundle_ids: &[String]) {
+pub fn reopen_apps<S: AppSystem + ?Sized>(system: &S, bundle_ids: &[String]) {
     for bundle_id in bundle_ids {
         println!("Opening: {bundle_id}");
         if !system.open(bundle_id) {
@@ -271,7 +271,7 @@ pub fn reopen_apps<S: AppSystem>(system: &S, bundle_ids: &[String]) {
     }
 }
 
-fn quit_one<S: AppSystem>(system: &S, app: &RunningApp, policy: &QuitPolicy) -> bool {
+fn quit_one<S: AppSystem + ?Sized>(system: &S, app: &RunningApp, policy: &QuitPolicy) -> bool {
     system.quit(app.bundle_id());
 
     let mut running = system.is_running(app.path());

@@ -175,7 +175,7 @@ pub fn register(registry: Registry) -> Registry {
         .with(DockerStep)
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct Snapshot {
     compose: Vec<ComposeProject>,
     standalone: Vec<StandaloneContainer>,
@@ -189,8 +189,12 @@ impl ContainerSnapshot {
         *self.0.borrow_mut() = Some(snapshot);
     }
 
-    fn take(&self) -> Option<Snapshot> {
-        self.0.borrow_mut().take()
+    fn get(&self) -> Option<Snapshot> {
+        self.0.borrow().clone()
+    }
+
+    fn clear(&self) {
+        *self.0.borrow_mut() = None;
     }
 }
 
@@ -239,38 +243,40 @@ impl Step for ColimaStopStep {
         let mut failures = Vec::new();
 
         if command_exists("docker") {
-            let compose = list_compose_projects();
-            let standalone = list_standalone_containers();
-
-            for project in &compose {
-                println!("docker compose down: {}", project.name());
-                if let Err(error) = compose_command(project, &["down"]).run() {
-                    failures.push(error.to_string());
-                }
-            }
-            for container in &standalone {
-                println!("docker stop: {}", container.name());
-                if let Err(error) = docker_command(&["stop"], container.id()).run() {
-                    failures.push(error.to_string());
-                }
-            }
-
             snapshot = Snapshot {
-                compose,
-                standalone,
+                compose: list_compose_projects(),
+                standalone: list_standalone_containers(),
             };
+        }
+
+        self.snapshot.store(snapshot.clone());
+
+        for project in &snapshot.compose {
+            println!("docker compose down: {}", project.name());
+            if let Err(error) = compose_command(project, &["down"]).run() {
+                failures.push(error.to_string());
+            }
+        }
+        for container in &snapshot.standalone {
+            println!("docker stop: {}", container.name());
+            if let Err(error) = docker_command(&["stop"], container.id()).run() {
+                failures.push(error.to_string());
+            }
         }
 
         if let Err(error) = CommandSpec::new("colima").arg("stop").run() {
             failures.push(error.to_string());
         }
-        self.snapshot.store(snapshot);
 
         finish(COLIMA_STOP, failures)
     }
 
     fn snapshot(&self) -> Option<SnapshotSection> {
         Some(snapshot::homebrew_section())
+    }
+
+    fn restore(&self) -> Result<(), StepError> {
+        restore_colima(&self.snapshot, COLIMA_STOP)
     }
 
     fn prerequisites(&self) -> &'static [StepId] {
@@ -290,31 +296,13 @@ impl ColimaStartStep {
     fn new(snapshot: ContainerSnapshot) -> Self {
         Self { snapshot }
     }
-}
 
-impl Step for ColimaStartStep {
-    fn id(&self) -> StepId {
-        COLIMA_START
-    }
-
-    fn display_name(&self) -> &str {
-        "Colima/lima start"
-    }
-
-    fn detect(&self) -> Result<Detection, StepError> {
-        Ok(detect_with_brew("colima"))
-    }
-
-    fn check(&self) -> Result<CheckReport, StepError> {
-        Ok(CheckReport::up_to_date())
-    }
-
-    fn run(&self) -> Result<(), StepError> {
-        let Some(snapshot) = self.snapshot.take() else {
+    fn start_and_restore(&self, message: &str) -> Result<(), StepError> {
+        let Some(snapshot) = self.snapshot.get() else {
             return Ok(());
         };
 
-        println!("Starting colima and containers");
+        println!("{message}");
         let mut failures = Vec::new();
 
         if let Err(error) = CommandSpec::new("colima").arg("start").run() {
@@ -335,11 +323,74 @@ impl Step for ColimaStartStep {
             }
         }
 
-        finish(COLIMA_START, failures)
+        let result = finish(COLIMA_START, failures);
+        if result.is_ok() {
+            self.snapshot.clear();
+        }
+        result
+    }
+}
+
+fn restore_colima(snapshot: &ContainerSnapshot, step: StepId) -> Result<(), StepError> {
+    let Some(stopped) = snapshot.get() else {
+        return Ok(());
+    };
+
+    println!("Restoring colima and containers");
+    let mut failures = Vec::new();
+
+    if let Err(error) = CommandSpec::new("colima").arg("start").run() {
+        println!("warning: colima did not start; containers were NOT restarted");
+        return Err(StepError::run(step, error.to_string()));
+    }
+
+    for container in &stopped.standalone {
+        println!("docker start: {}", container.name());
+        if let Err(error) = docker_command(&["start"], container.id()).run() {
+            failures.push(error.to_string());
+        }
+    }
+    for project in &stopped.compose {
+        println!("docker compose up -d: {}", project.name());
+        if let Err(error) = compose_command(project, &["up", "-d"]).run() {
+            failures.push(error.to_string());
+        }
+    }
+
+    let result = finish(step, failures);
+    if result.is_ok() {
+        snapshot.clear();
+    }
+    result
+}
+
+impl Step for ColimaStartStep {
+    fn id(&self) -> StepId {
+        COLIMA_START
+    }
+
+    fn display_name(&self) -> &str {
+        "Colima/lima start"
+    }
+
+    fn detect(&self) -> Result<Detection, StepError> {
+        Ok(detect_with_brew("colima"))
+    }
+
+    fn check(&self) -> Result<CheckReport, StepError> {
+        Ok(CheckReport::up_to_date())
+    }
+
+    fn run(&self) -> Result<(), StepError> {
+        self.start_and_restore("Starting colima and containers")
     }
 
     fn snapshot(&self) -> Option<SnapshotSection> {
         Some(snapshot::homebrew_section())
+    }
+
+    fn restore(&self) -> Result<(), StepError> {
+        self.start_and_restore("Restoring colima and containers")
     }
 
     fn prerequisites(&self) -> &'static [StepId] {

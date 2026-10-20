@@ -5,9 +5,9 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use freshen_lib::{
-    list_steps, wait_for_package_managers, HostPackageManagerProbe, HostPreflightProbe,
-    PackageManagerConfig, PackageManagerProbe, Platform, PreflightReport, Registry, RunLock,
-    Runner, WaitOutcome,
+    install_interrupt_handler, list_steps, wait_for_package_managers, HostPackageManagerProbe,
+    HostPreflightProbe, PackageManagerConfig, PackageManagerProbe, Platform, PreflightReport,
+    Registry, RunLock, Runner, WaitOutcome,
 };
 
 mod cli;
@@ -18,6 +18,11 @@ mod test_steps;
 use cli::Cli;
 
 fn main() -> ExitCode {
+    if let Err(error) = install_interrupt_handler() {
+        eprintln!("freshen: {error}");
+        return ExitCode::FAILURE;
+    }
+
     let cli = Cli::parse();
     let options = cli.run_options();
     let registry = build_registry();
