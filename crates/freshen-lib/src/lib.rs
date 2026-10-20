@@ -4,6 +4,10 @@
 //! Every step of a run lives here; the `freshen` binary crate is a thin CLI
 //! wrapper around this library. One module per step.
 
+pub mod step;
+
+pub use step::{CheckReport, Detection, Operation, OutdatedItem, Step, StepError, StepId};
+
 /// Major and minor feature release this binary implements, e.g. `"0.1"`.
 ///
 /// Kept in sync with `Cargo.toml` by a unit test; patch releases may drift
