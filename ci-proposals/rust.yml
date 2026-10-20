@@ -57,7 +57,7 @@ jobs:
         run: rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal
 
       - name: Check workspace against MSRV
-        run: cargo +"${{ steps.msrv.outputs.version }}" check --workspace --all-features --locked
+        run: cargo +"${{ steps.msrv.outputs.version }}" check --workspace --all-targets --all-features --locked
 
   # cargo-deny gates licenses (against deny.toml's allow-list) and known
   # vulnerabilities (RustSec advisories) for the whole dependency tree, so a
