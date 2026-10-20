@@ -24,6 +24,7 @@ use crate::options::RunOptions;
 use crate::platform::Platform;
 use crate::process::{CommandSpec, ProcessOutput};
 use crate::registry::Registry;
+use crate::snapshot::{self, SnapshotSection};
 use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
 use crate::warnings::warn_if_zellij_upgrade;
 
@@ -268,6 +269,10 @@ impl Step for UpdateStep {
         run_brew(BREW, CommandSpec::new("brew").arg("update")).map(|_| ())
     }
 
+    fn snapshot(&self) -> Option<SnapshotSection> {
+        Some(snapshot::homebrew_section())
+    }
+
     fn platforms(&self) -> &'static [Platform] {
         &HOMEBREW_PLATFORMS
     }
@@ -305,6 +310,10 @@ impl Step for FormulaeStep {
             CommandSpec::new("brew").args(["upgrade", "--formula"]),
         )
         .map(|_| ())
+    }
+
+    fn snapshot(&self) -> Option<SnapshotSection> {
+        Some(snapshot::homebrew_section())
     }
 
     fn prerequisites(&self) -> &'static [StepId] {
@@ -441,6 +450,10 @@ impl Step for CasksStep {
         .map(|_| ())
     }
 
+    fn snapshot(&self) -> Option<SnapshotSection> {
+        Some(snapshot::homebrew_section())
+    }
+
     fn prerequisites(&self) -> &'static [StepId] {
         &[FORMULAE]
     }
@@ -471,6 +484,10 @@ impl Step for AutoremoveStep {
 
     fn run(&self) -> Result<(), StepError> {
         run_brew(AUTOREMOVE, CommandSpec::new("brew").arg("autoremove")).map(|_| ())
+    }
+
+    fn snapshot(&self) -> Option<SnapshotSection> {
+        Some(snapshot::homebrew_section())
     }
 
     fn prerequisites(&self) -> &'static [StepId] {
@@ -507,6 +524,10 @@ impl Step for CleanupStep {
             CommandSpec::new("brew").args(["cleanup", "--prune=all"]),
         )
         .map(|_| ())
+    }
+
+    fn snapshot(&self) -> Option<SnapshotSection> {
+        Some(snapshot::homebrew_section())
     }
 
     fn prerequisites(&self) -> &'static [StepId] {
@@ -554,6 +575,10 @@ impl Step for ReopenStep {
         println!("Reopening apps that were quit");
         reopen_apps(&MacAppSystem, &bundle_ids);
         Ok(())
+    }
+
+    fn snapshot(&self) -> Option<SnapshotSection> {
+        Some(snapshot::homebrew_section())
     }
 
     fn prerequisites(&self) -> &'static [StepId] {

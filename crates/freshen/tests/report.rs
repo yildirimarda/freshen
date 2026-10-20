@@ -73,7 +73,7 @@ fn json_report_contains_the_before_and_after_versions() {
     assert_eq!(report["steps"][0]["changes"][0]["before"], "1.7.1");
     assert_eq!(report["steps"][0]["changes"][0]["after"], "1.8.0");
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         [
             "brew outdated --formula",
             "brew outdated --formula --quiet",

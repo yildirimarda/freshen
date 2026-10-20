@@ -62,7 +62,7 @@ fn a_stub_returns_canned_stdout_stderr_and_status_per_invocation() {
     assert!(stderr(&unconfigured).is_empty());
 
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         ["probe status", "probe status", "probe status"]
     );
 }
@@ -76,6 +76,8 @@ fn a_ported_step_replays_a_recorded_command_transcript() {
     tools.set_responses(
         "brew",
         &[
+            StubOutput::new(),
+            StubOutput::new(),
             StubOutput::new(),
             StubOutput::new(),
             StubOutput::new(),
@@ -102,7 +104,7 @@ fn a_ported_step_replays_a_recorded_command_transcript() {
 
     assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         [
             "brew update",
             "brew outdated --formula",
@@ -145,7 +147,7 @@ fn runs_stub_tools_in_step_order() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
-        tools.calls(),
+        tools.step_calls(),
         [
             "brew update",
             "brew upgrade --formula",
@@ -169,7 +171,7 @@ fn list_steps_reports_detection_without_calling_any_stub() {
     );
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert!(tools.calls().is_empty());
+    assert!(tools.step_calls().is_empty());
 
     let text = stdout(&output);
     assert!(text.contains("Steps (2):"), "listing: {text}");
@@ -186,7 +188,7 @@ fn dry_run_detects_steps_without_calling_any_stub() {
     let output = tools.run("brew update;uv tool upgrade --all", &["--dry-run"]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert!(tools.calls().is_empty());
+    assert!(tools.step_calls().is_empty());
     assert!(stdout(&output).contains("0 ok, 2 planned, 0 skipped, 0 failed"));
 }
 
@@ -197,7 +199,7 @@ fn a_tool_missing_from_the_stub_path_is_never_replaced_by_the_real_one() {
     let output = tools.run("freshen-definitely-not-a-real-tool", &[]);
 
     assert!(!output.status.success());
-    assert!(tools.calls().is_empty());
+    assert!(tools.step_calls().is_empty());
     assert!(stdout(&output).contains("1 failed"));
 }
 
@@ -211,7 +213,7 @@ fn a_failing_step_is_recorded_and_the_run_continues_to_exit_1() {
     );
 
     assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
-    assert_eq!(tools.calls(), ["brew update"]);
+    assert_eq!(tools.step_calls(), ["brew update"]);
 
     let text = stdout(&output);
     assert!(

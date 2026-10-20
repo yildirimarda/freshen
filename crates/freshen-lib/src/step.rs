@@ -18,6 +18,7 @@ use std::fmt;
 
 use crate::options::RunOptions;
 use crate::platform::Platform;
+use crate::snapshot::SnapshotSection;
 
 /// Stable identifier of a step, e.g. `"brew"` or `"uv"`.
 pub type StepId = &'static str;
@@ -275,6 +276,16 @@ pub trait Step {
         Ok(())
     }
 
+    /// Read-only commands that record the installed versions this step can
+    /// change, captured before the step runs.
+    ///
+    /// Steps that manage the same package manager return the same
+    /// [`SnapshotSection::group`], so the runner records those versions only
+    /// once per run. The default is no snapshot.
+    fn snapshot(&self) -> Option<SnapshotSection> {
+        None
+    }
+
     /// Steps that must run before this one, by id.
     fn prerequisites(&self) -> &'static [StepId] {
         &[]
@@ -297,6 +308,7 @@ mod tests {
     use super::{CheckReport, Detection, Operation, OutdatedItem, Step, StepError, StepId};
     use crate::options::RunOptions;
     use crate::platform::Platform;
+    use crate::snapshot::{SnapshotCommand, SnapshotSection};
     use std::cell::Cell;
 
     struct FakeStep {
@@ -307,6 +319,7 @@ mod tests {
         prerequisites: &'static [StepId],
         conflicts: &'static [StepId],
         platforms: &'static [Platform],
+        snapshot: Option<SnapshotSection>,
         run_calls: Cell<usize>,
         cleanup_calls: Cell<usize>,
         fail_run: bool,
@@ -322,6 +335,7 @@ mod tests {
                 prerequisites: &[],
                 conflicts: &[],
                 platforms: &Platform::ALL,
+                snapshot: None,
                 run_calls: Cell::new(0),
                 cleanup_calls: Cell::new(0),
                 fail_run: false,
@@ -357,6 +371,10 @@ mod tests {
         fn cleanup(&self) -> Result<(), StepError> {
             self.cleanup_calls.set(self.cleanup_calls.get() + 1);
             Ok(())
+        }
+
+        fn snapshot(&self) -> Option<SnapshotSection> {
+            self.snapshot.clone()
         }
 
         fn prerequisites(&self) -> &'static [StepId] {
@@ -484,6 +502,28 @@ mod tests {
         let step = MinimalStep;
 
         assert!(step.cleanup().is_ok());
+    }
+
+    #[test]
+    fn snapshot_is_optional_and_defaults_to_none() {
+        let step = MinimalStep;
+
+        assert!(step.snapshot().is_none());
+    }
+
+    #[test]
+    fn snapshot_is_exposed_through_the_trait() {
+        let mut step = FakeStep::new("brew", "Homebrew");
+        step.snapshot = Some(SnapshotSection::new(
+            "brew",
+            vec![SnapshotCommand::new("brew", ["list", "--versions"])],
+        ));
+
+        let section = step
+            .snapshot()
+            .unwrap_or_else(|| panic!("snapshot should be present"));
+        assert_eq!(section.group(), "brew");
+        assert_eq!(section.commands()[0].arguments(), ["list", "--versions"]);
     }
 
     #[test]

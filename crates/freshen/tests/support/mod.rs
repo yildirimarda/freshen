@@ -114,6 +114,7 @@ impl StubTools {
             .env("PATH", self.path())
             .env("FRESHEN_STUB_LOG", &self.log)
             .env("FRESHEN_STUB_STATE", &self.dir)
+            .env("FRESHEN_SNAPSHOT_DIR", self.dir.join("snapshots"))
             .env("HOME", &self.dir)
             .env("USERPROFILE", &self.dir);
         command
@@ -163,6 +164,19 @@ impl StubTools {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(error) => panic!("failed to read stub log {}: {error}", self.log.display()),
         }
+    }
+
+    /// Recorded invocations excluding the read-only pre-upgrade snapshot
+    /// commands.
+    ///
+    /// Parity tests assert the commands that change the machine. Snapshot
+    /// capture has its own tests, so it does not shift those transcripts.
+    #[allow(dead_code)]
+    pub fn step_calls(&self) -> Vec<String> {
+        self.calls()
+            .into_iter()
+            .filter(|call| !is_snapshot_capture(call))
+            .collect()
     }
 
     /// The temporary home directory the binary runs with.
@@ -387,6 +401,14 @@ impl StubTools {
 #[cfg(unix)]
 fn shell_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
+}
+
+fn is_snapshot_capture(call: &str) -> bool {
+    call == "brew list --versions"
+        || call.starts_with("brew bundle dump ")
+        || call == "uv tool list"
+        || call == "mise ls"
+        || call.starts_with("docker image ls ")
 }
 
 impl Drop for StubTools {
