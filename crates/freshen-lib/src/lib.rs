@@ -4,6 +4,7 @@
 //! Every step of a run lives here; the `freshen` binary crate is a thin CLI
 //! wrapper around this library. One module per step.
 
+pub mod options;
 pub mod platform;
 pub mod process;
 pub mod registry;
@@ -11,6 +12,7 @@ pub mod runner;
 pub mod step;
 pub mod system;
 
+pub use options::{PlanError, RunOptions, SelectionFlag, StepSelection};
 pub use platform::Platform;
 pub use process::{Backoff, CommandSpec, OutputStream, ProcessError, ProcessOutput};
 pub use registry::{Registry, RegistryError};

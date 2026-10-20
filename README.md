@@ -69,6 +69,16 @@ The project is plan-driven: see [PLAN.md](PLAN.md) for what exists and what is n
 
 ```bash
 zsh -n update-all.sh        # syntax check (what CI runs)
+cargo test --all-features   # Rust workspace tests
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+The Rust binary accepts the same options on macOS, Linux and Windows:
+
+```bash
+cargo run -p freshen -- --dry-run                    # detect, change nothing
+cargo run -p freshen -- --only brew,uv --skip casks  # select steps
+cargo run -p freshen -- --yes --force-kill           # no prompts, kill stubborn apps
 ```
 
 ## License

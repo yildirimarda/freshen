@@ -3,14 +3,32 @@
 
 use std::process::ExitCode;
 
+use clap::Parser;
+use freshen_lib::{Platform, Registry, Runner};
+
+mod cli;
+
+use cli::Cli;
+
 fn main() -> ExitCode {
-    if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
-        println!("freshen {}", freshen_lib::version());
-        return ExitCode::SUCCESS;
-    }
-    println!(
-        "freshen {} (library scaffold; steps land in PLAN.md Milestone 2)",
-        freshen_lib::version()
-    );
-    ExitCode::SUCCESS
+    let cli = Cli::parse();
+    let options = cli.run_options();
+    let registry = Registry::new();
+
+    let Some(platform) = Platform::current() else {
+        eprintln!("freshen: unsupported operating system");
+        return ExitCode::FAILURE;
+    };
+
+    let steps = match options.plan(&registry, platform) {
+        Ok(steps) => steps,
+        Err(error) => {
+            eprintln!("freshen: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let summary = Runner::with_options(steps, options).run();
+    print!("{summary}");
+    summary.exit_code()
 }
