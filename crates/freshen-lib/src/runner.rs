@@ -64,6 +64,8 @@ pub enum SkipReason {
     UnsupportedPlatform,
     /// `--only` or `--skip` excluded the step from the run.
     NotSelected(SelectionFlag),
+    /// The step conflicts with an earlier step that is part of the run.
+    Conflict(StepId),
 }
 
 impl SkipReason {
@@ -75,13 +77,17 @@ impl SkipReason {
             Self::UnsupportedPlatform => "not supported on this platform",
             Self::NotSelected(SelectionFlag::Only) => "not selected by --only",
             Self::NotSelected(SelectionFlag::Skip) => "excluded by --skip",
+            Self::Conflict(_) => "conflicts with another step",
         }
     }
 }
 
 impl fmt::Display for SkipReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        match self {
+            Self::Conflict(conflict) => write!(f, "conflicts with `{conflict}`"),
+            other => f.write_str(other.as_str()),
+        }
     }
 }
 
@@ -117,8 +123,12 @@ impl StepResult {
     }
 
     fn skipped(step: &dyn Step, duration: Duration) -> Self {
+        Self::skipped_because(step, SkipReason::NotInstalled, duration)
+    }
+
+    fn skipped_because(step: &dyn Step, reason: SkipReason, duration: Duration) -> Self {
         Self {
-            skip_reason: Some(SkipReason::NotInstalled),
+            skip_reason: Some(reason),
             ..Self::new(step, StepStatus::Skipped, duration)
         }
     }
@@ -297,10 +307,32 @@ fn format_duration(duration: Duration) -> String {
 /// phases is recorded and the next step still runs. With `--dry-run`, an
 /// installed tool is detected and recorded as planned, but never run or
 /// cleaned up.
+///
+/// When two steps that are part of the run declare a conflict, the later one
+/// is skipped without being detected or run, and its [`SkipReason::Conflict`]
+/// names the earlier step that won.
 #[derive(Clone)]
 pub struct Runner<'a> {
-    steps: Vec<&'a dyn Step>,
+    steps: Vec<PlannedStep<'a>>,
     options: RunOptions,
+}
+
+#[derive(Clone, Copy)]
+enum PlannedStep<'a> {
+    Run(&'a dyn Step),
+    Skip {
+        step: &'a dyn Step,
+        reason: SkipReason,
+    },
+}
+
+impl<'a> PlannedStep<'a> {
+    fn running(self) -> Option<&'a dyn Step> {
+        match self {
+            Self::Run(step) => Some(step),
+            Self::Skip { .. } => None,
+        }
+    }
 }
 
 impl<'a> Runner<'a> {
@@ -316,11 +348,33 @@ impl<'a> Runner<'a> {
         options: RunOptions,
     ) -> Self {
         let selection = options.selection();
+        let mut planned = Vec::new();
+
+        for step in steps
+            .into_iter()
+            .filter(|step| selection.includes(step.id()))
+        {
+            let conflict = planned
+                .iter()
+                .copied()
+                .filter_map(PlannedStep::running)
+                .find(|earlier| {
+                    earlier.conflicts().contains(&step.id())
+                        || step.conflicts().contains(&earlier.id())
+                })
+                .map(|earlier| earlier.id());
+
+            match conflict {
+                Some(earlier) => planned.push(PlannedStep::Skip {
+                    step,
+                    reason: SkipReason::Conflict(earlier),
+                }),
+                None => planned.push(PlannedStep::Run(step)),
+            }
+        }
+
         Self {
-            steps: steps
-                .into_iter()
-                .filter(|step| selection.includes(step.id()))
-                .collect(),
+            steps: planned,
             options,
         }
     }
@@ -337,7 +391,13 @@ impl<'a> Runner<'a> {
         RunSummary::from_results(
             self.steps
                 .iter()
-                .map(|step| run_step(*step, &self.options))
+                .copied()
+                .map(|planned| match planned {
+                    PlannedStep::Run(step) => run_step(step, &self.options),
+                    PlannedStep::Skip { step, reason } => {
+                        StepResult::skipped_because(step, reason, Duration::ZERO)
+                    }
+                })
                 .collect(),
         )
     }
@@ -386,6 +446,7 @@ mod tests {
         fail_detect: bool,
         fail_run: bool,
         fail_cleanup: bool,
+        conflicts: &'static [StepId],
         sleep: Duration,
         calls: Rc<Calls>,
     }
@@ -399,6 +460,7 @@ mod tests {
                 fail_detect: false,
                 fail_run: false,
                 fail_cleanup: false,
+                conflicts: &[],
                 sleep: Duration::ZERO,
                 calls: Rc::new(Calls::default()),
             }
@@ -406,6 +468,11 @@ mod tests {
 
         fn detection(mut self, detection: Detection) -> Self {
             self.detection = detection;
+            self
+        }
+
+        fn conflicting(mut self, conflicts: &'static [StepId]) -> Self {
+            self.conflicts = conflicts;
             self
         }
 
@@ -472,6 +539,10 @@ mod tests {
                 return Err(StepError::cleanup(self.id, "cleanup failed"));
             }
             Ok(())
+        }
+
+        fn conflicts(&self) -> &'static [StepId] {
+            self.conflicts
         }
 
         fn platforms(&self) -> &'static [Platform] {
@@ -571,6 +642,80 @@ mod tests {
         assert_eq!(summary.steps().len(), 2);
         assert_eq!(summary.steps()[0].id(), "brew");
         assert_eq!(summary.steps()[1].id(), "mise");
+    }
+
+    #[test]
+    fn a_later_conflicting_step_is_skipped_with_the_reason() {
+        let earlier = FakeStep::new("brew", "Homebrew");
+        let later = FakeStep::new("mas", "Mac App Store").conflicting(&["brew"]);
+        let earlier_calls = earlier.calls();
+        let later_calls = later.calls();
+
+        let summary = run(&[&earlier, &later]);
+
+        assert_eq!(summary.steps().len(), 2);
+        assert_eq!(summary.steps()[0].status(), StepStatus::Ok);
+        assert_eq!(summary.steps()[1].status(), StepStatus::Skipped);
+        assert_eq!(
+            summary.steps()[1].skip_reason(),
+            Some(SkipReason::Conflict("brew"))
+        );
+        assert_eq!(summary.ok_count(), 1);
+        assert_eq!(summary.skipped_count(), 1);
+        assert_eq!(summary.failed_count(), 0);
+        assert_eq!(summary.exit_code(), ExitCode::SUCCESS);
+        assert!(summary.to_string().contains("conflicts with `brew`"));
+
+        assert_eq!(earlier_calls.run.get(), 1);
+        assert_eq!(later_calls.detect.get(), 0);
+        assert_eq!(later_calls.run.get(), 0);
+        assert_eq!(later_calls.cleanup.get(), 0);
+    }
+
+    #[test]
+    fn the_earlier_step_wins_even_when_it_declares_the_conflict() {
+        let earlier = FakeStep::new("brew", "Homebrew").conflicting(&["mas"]);
+        let later = FakeStep::new("mas", "Mac App Store");
+
+        let summary = run(&[&earlier, &later]);
+
+        assert_eq!(summary.steps()[0].status(), StepStatus::Ok);
+        assert_eq!(summary.steps()[1].status(), StepStatus::Skipped);
+        assert_eq!(
+            summary.steps()[1].skip_reason(),
+            Some(SkipReason::Conflict("brew"))
+        );
+    }
+
+    #[test]
+    fn an_excluded_step_does_not_conflict_with_the_rest_of_the_run() {
+        let brew = FakeStep::new("brew", "Homebrew");
+        let mas = FakeStep::new("mas", "Mac App Store").conflicting(&["brew"]);
+        let options = RunOptions::new().with_selection(StepSelection::new().with_skip(["brew"]));
+        let steps: [&dyn Step; 2] = [&brew, &mas];
+
+        let summary = Runner::with_options(steps, options).run();
+
+        assert_eq!(summary.steps().len(), 1);
+        assert_eq!(summary.steps()[0].id(), "mas");
+        assert_eq!(summary.steps()[0].status(), StepStatus::Ok);
+        assert_eq!(summary.skipped_count(), 0);
+    }
+
+    #[test]
+    fn a_conflict_skipped_step_does_not_hide_the_steps_that_follow() {
+        let first = FakeStep::new("brew", "Homebrew");
+        let conflicting = FakeStep::new("mas", "Mac App Store").conflicting(&["brew"]);
+        let last = FakeStep::new("uv", "uv");
+
+        let summary = run(&[&first, &conflicting, &last]);
+
+        assert_eq!(summary.steps().len(), 3);
+        assert_eq!(summary.steps()[0].status(), StepStatus::Ok);
+        assert_eq!(summary.steps()[1].status(), StepStatus::Skipped);
+        assert_eq!(summary.steps()[2].status(), StepStatus::Ok);
+        assert_eq!(summary.ok_count(), 2);
+        assert_eq!(summary.skipped_count(), 1);
     }
 
     #[test]
