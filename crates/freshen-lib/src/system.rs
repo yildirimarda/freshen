@@ -11,9 +11,10 @@
 //! facts instead of reading the machine they run on. [`SystemInfo::detect`]
 //! uses the real host.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::io::IsTerminal;
+use std::path::Path;
 #[cfg(any(unix, windows))]
 use std::process::{Command, Stdio};
 
@@ -392,6 +393,101 @@ fn detect_terminal_app(get: impl Fn(&str) -> Option<String>) -> Option<TerminalA
     None
 }
 
+/// Maps an executable name from the process table to a terminal application.
+///
+/// The name may be a bare executable (`konsole`), a full path
+/// (`/usr/bin/konsole`) or a Windows executable (`WindowsTerminal.exe`).
+fn terminal_app_for_process(name: &str) -> Option<TerminalApp> {
+    let file_name = Path::new(name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(name);
+    let stem = file_name
+        .strip_suffix(".exe")
+        .or_else(|| file_name.strip_suffix(".EXE"))
+        .unwrap_or(file_name);
+    let key = stem.to_ascii_lowercase();
+
+    let (display_name, bundle_id) = match key.as_str() {
+        "gnome-terminal" | "gnome-terminal-server" => {
+            ("GNOME Terminal", Some("org.gnome.Terminal"))
+        }
+        "konsole" => ("Konsole", Some("org.kde.konsole")),
+        "kitty" => ("kitty", Some("net.kovidgoyal.kitty")),
+        "wezterm" | "wezterm-gui" => ("WezTerm", Some("com.github.wez.wezterm")),
+        "alacritty" => ("Alacritty", Some("org.alacritty")),
+        "ghostty" => ("Ghostty", Some("com.mitchellh.ghostty")),
+        "hyper" => ("Hyper", Some("co.zeit.hyper")),
+        "code" | "code-insiders" => ("Visual Studio Code", Some("com.microsoft.VSCode")),
+        "tabby" => ("Tabby", None),
+        "warp" | "warp-terminal" => ("Warp", Some("dev.warp.Warp-Stable")),
+        "windowsterminal" | "wt" => ("Windows Terminal", None),
+        "conhost" | "openconsole" => ("Windows Console", None),
+        "xterm" => ("xterm", None),
+        "xfce4-terminal" => ("Xfce Terminal", None),
+        "lxterminal" => ("LXTerminal", None),
+        "mate-terminal" => ("MATE Terminal", None),
+        "terminator" => ("Terminator", None),
+        "tilix" => ("Tilix", None),
+        "urxvt" => ("urxvt", None),
+        "foot" => ("foot", None),
+        "kgx" => ("GNOME Console", None),
+        "st" => ("st", None),
+        _ => return None,
+    };
+
+    Some(TerminalApp::new(
+        display_name,
+        bundle_id.map(str::to_string),
+    ))
+}
+
+/// Walks from `current_pid` towards the root of the process table and returns
+/// the first ancestor that is a known terminal application.
+///
+/// Intermediate processes (shells, `tmux`, `sudo`) are skipped, and a missing
+/// parent or a cycle ends the walk instead of looping forever.
+fn detect_terminal_app_from_processes(
+    current_pid: u32,
+    processes: &[ProcessInfo],
+) -> Option<TerminalApp> {
+    let by_pid: HashMap<u32, &ProcessInfo> = processes.iter().map(|p| (p.pid, p)).collect();
+    let mut pid = current_pid;
+    let mut seen = HashSet::new();
+
+    while seen.insert(pid) {
+        let process = by_pid.get(&pid)?;
+        if let Some(app) = terminal_app_for_process(&process.name) {
+            return Some(app);
+        }
+        if process.ppid == 0 || process.ppid == pid {
+            break;
+        }
+        pid = process.ppid;
+    }
+
+    None
+}
+
+/// Detects the terminal application from environment markers, then falls back
+/// to the parent process chain on Linux and Windows.
+fn detect_terminal_app_with_processes(
+    platform: Option<Platform>,
+    get: impl Fn(&str) -> Option<String>,
+    current_pid: u32,
+    processes: &[ProcessInfo],
+) -> Option<TerminalApp> {
+    if let Some(app) = detect_terminal_app(get) {
+        return Some(app);
+    }
+
+    if matches!(platform, Some(Platform::Linux | Platform::Windows)) {
+        return detect_terminal_app_from_processes(current_pid, processes);
+    }
+
+    None
+}
+
 /// The terminal attached to this process.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Terminal {
@@ -525,7 +621,12 @@ impl SystemInfo {
         let terminal = Terminal {
             stdin_is_terminal: probe.stdin_is_terminal(),
             stdout_is_terminal: probe.stdout_is_terminal(),
-            app: detect_terminal_app(|key| probe.var(key)),
+            app: detect_terminal_app_with_processes(
+                platform,
+                |key| probe.var(key),
+                probe.current_pid(),
+                &probe.processes(),
+            ),
         };
 
         Self {
@@ -584,6 +685,19 @@ impl SystemInfo {
     }
 }
 
+/// One entry in a host process table.
+///
+/// `name` is the executable name or path reported by the operating system.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessInfo {
+    /// Process id.
+    pub pid: u32,
+    /// Parent process id.
+    pub ppid: u32,
+    /// Executable name or path.
+    pub name: String,
+}
+
 /// Raw facts about the host, used by [`SystemInfo::detect_with`].
 ///
 /// The real implementation is [`HostProbe`]. Tests and embedders can provide
@@ -616,6 +730,16 @@ pub trait SystemProbe {
     /// Reads an environment variable, returning `None` when it is unset or not
     /// valid Unicode.
     fn var(&self, key: &str) -> Option<String>;
+
+    /// The process id of the running freshen process.
+    fn current_pid(&self) -> u32 {
+        std::process::id()
+    }
+
+    /// A snapshot of the host process table.
+    fn processes(&self) -> Vec<ProcessInfo> {
+        Vec::new()
+    }
 }
 
 /// The real host freshen is running on.
@@ -665,6 +789,148 @@ impl SystemProbe for HostProbe {
     fn var(&self, key: &str) -> Option<String> {
         std::env::var(key).ok()
     }
+
+    fn current_pid(&self) -> u32 {
+        std::process::id()
+    }
+
+    fn processes(&self) -> Vec<ProcessInfo> {
+        #[cfg(target_os = "linux")]
+        {
+            linux_processes()
+        }
+        #[cfg(all(unix, not(target_os = "linux")))]
+        {
+            ps_processes()
+        }
+        #[cfg(windows)]
+        {
+            windows_processes()
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            Vec::new()
+        }
+    }
+}
+
+/// Reads the process table from `/proc`, which is available on every Linux
+/// system without spawning an external command.
+#[cfg(target_os = "linux")]
+fn linux_processes() -> Vec<ProcessInfo> {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+
+    entries
+        .filter_map(|entry| {
+            let pid = entry.ok()?.file_name().to_str()?.parse().ok()?;
+            linux_process_info(pid)
+        })
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_info(pid: u32) -> Option<ProcessInfo> {
+    let directory = format!("/proc/{pid}");
+    let stat = std::fs::read_to_string(format!("{directory}/stat")).ok()?;
+    let (ppid, comm) = parse_proc_stat(&stat)?;
+    let name = std::fs::read_to_string(format!("{directory}/cmdline"))
+        .ok()
+        .and_then(|cmdline| cmdline.split('\0').next().map(str::to_string))
+        .filter(|name| !name.is_empty())
+        .unwrap_or(comm);
+
+    Some(ProcessInfo { pid, ppid, name })
+}
+
+/// Parses the parent id and command name from a `/proc/<pid>/stat` line.
+///
+/// The command is wrapped in parentheses and may itself contain spaces or
+/// parentheses, so the last `)` separates it from the numeric fields.
+#[cfg(target_os = "linux")]
+fn parse_proc_stat(stat: &str) -> Option<(u32, String)> {
+    let open = stat.find('(')?;
+    let close = stat.rfind(')')?;
+    let name = stat.get(open + 1..close)?.to_string();
+    let mut fields = stat.get(close + 1..)?.split_whitespace();
+    let _state = fields.next()?;
+    let ppid = fields.next()?.parse().ok()?;
+
+    Some((ppid, name))
+}
+
+/// Reads the process table with `ps` on Unix systems that do not expose
+/// `/proc` (macOS and the BSDs).
+#[cfg(all(unix, not(target_os = "linux")))]
+fn ps_processes() -> Vec<ProcessInfo> {
+    let Ok(output) = Command::new("ps")
+        .args(["-axo", "pid=,ppid=,comm="])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    parse_ps_processes(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn parse_ps_processes(table: &str) -> Vec<ProcessInfo> {
+    table
+        .lines()
+        .filter_map(|line| {
+            let rest = line.trim_start();
+            let pid_end = rest.find(char::is_whitespace)?;
+            let pid = rest.get(..pid_end)?.parse().ok()?;
+            let rest = rest.get(pid_end..)?.trim_start();
+            let ppid_end = rest.find(char::is_whitespace)?;
+            let ppid = rest.get(..ppid_end)?.parse().ok()?;
+            let name = rest.get(ppid_end..)?.trim_start().to_string();
+            if name.is_empty() {
+                return None;
+            }
+            Some(ProcessInfo { pid, ppid, name })
+        })
+        .collect()
+}
+
+/// Reads the process table through CIM on Windows.
+#[cfg(windows)]
+fn windows_processes() -> Vec<ProcessInfo> {
+    let script = "Get-CimInstance Win32_Process | ForEach-Object { \
+                  \"$($_.ProcessId) $($_.ParentProcessId) $($_.Name)\" }";
+    let Ok(output) = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    parse_windows_processes(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(windows)]
+fn parse_windows_processes(table: &str) -> Vec<ProcessInfo> {
+    table
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let pid = fields.next()?.parse().ok()?;
+            let ppid = fields.next()?.parse().ok()?;
+            let name = fields.next()?.to_string();
+            Some(ProcessInfo { pid, ppid, name })
+        })
+        .collect()
 }
 
 /// Markers found in `/proc/1/cgroup` inside common container runtimes.
@@ -760,8 +1026,8 @@ fn detect_privilege() -> Privilege {
 #[cfg(test)]
 mod tests {
     use super::{
-        detect_terminal_app, Arch, Distro, Environment, Privilege, SystemInfo, SystemProbe,
-        Terminal, TerminalApp,
+        detect_terminal_app, terminal_app_for_process, Arch, Distro, Environment, Privilege,
+        ProcessInfo, SystemInfo, SystemProbe, Terminal, TerminalApp,
     };
     use crate::platform::Platform;
 
@@ -774,6 +1040,8 @@ mod tests {
         stdout_is_terminal: bool,
         vars: Vec<(&'static str, &'static str)>,
         files: Vec<(String, String)>,
+        current_pid: u32,
+        processes: Vec<ProcessInfo>,
     }
 
     impl FakeProbe {
@@ -787,6 +1055,8 @@ mod tests {
                 stdout_is_terminal: true,
                 vars: Vec::new(),
                 files: Vec::new(),
+                current_pid: 1,
+                processes: Vec::new(),
             }
         }
 
@@ -802,6 +1072,20 @@ mod tests {
 
         fn with_file(mut self, path: &str, contents: &str) -> Self {
             self.files.push((path.to_string(), contents.to_string()));
+            self
+        }
+
+        fn with_process(mut self, pid: u32, ppid: u32, name: &str) -> Self {
+            self.processes.push(ProcessInfo {
+                pid,
+                ppid,
+                name: name.to_string(),
+            });
+            self
+        }
+
+        fn with_current_pid(mut self, pid: u32) -> Self {
+            self.current_pid = pid;
             self
         }
     }
@@ -847,6 +1131,14 @@ mod tests {
                 .iter()
                 .find(|(name, _)| *name == key)
                 .map(|(_, value)| (*value).to_string())
+        }
+
+        fn current_pid(&self) -> u32 {
+            self.current_pid
+        }
+
+        fn processes(&self) -> Vec<ProcessInfo> {
+            self.processes.clone()
         }
     }
 
@@ -1087,6 +1379,138 @@ mod tests {
             ])),
             None
         );
+    }
+
+    #[test]
+    fn terminal_app_falls_back_to_the_parent_process_chain_on_linux() {
+        let system = SystemInfo::detect_with(
+            &FakeProbe::new("linux", "x86_64")
+                .with_current_pid(300)
+                .with_process(300, 250, "/usr/bin/freshen")
+                .with_process(250, 200, "/usr/bin/tmux")
+                .with_process(200, 100, "/bin/bash")
+                .with_process(100, 1, "/usr/libexec/gnome-terminal-server"),
+        );
+
+        let app = system_terminal_app(&system);
+        assert_eq!(app.name(), "GNOME Terminal");
+        assert_eq!(app.bundle_id(), Some("org.gnome.Terminal"));
+    }
+
+    #[test]
+    fn terminal_app_falls_back_to_the_parent_process_chain_on_windows() {
+        let system = SystemInfo::detect_with(
+            &FakeProbe::new("windows", "x86_64")
+                .with_current_pid(400)
+                .with_process(400, 300, "freshen.exe")
+                .with_process(300, 200, "powershell.exe")
+                .with_process(200, 100, "WindowsTerminal.exe")
+                .with_process(100, 0, "explorer.exe"),
+        );
+
+        let app = system_terminal_app(&system);
+        assert_eq!(app.name(), "Windows Terminal");
+        assert_eq!(app.bundle_id(), None);
+    }
+
+    #[test]
+    fn terminal_app_environment_markers_win_over_the_process_chain() {
+        let system = SystemInfo::detect_with(
+            &FakeProbe::new("windows", "x86_64")
+                .with_var("WT_SESSION", "session-id")
+                .with_current_pid(400)
+                .with_process(400, 300, "freshen.exe")
+                .with_process(300, 200, "powershell.exe")
+                .with_process(200, 100, "kitty.exe"),
+        );
+
+        assert_eq!(
+            system.terminal().app().map(TerminalApp::name),
+            Some("Windows Terminal")
+        );
+    }
+
+    #[test]
+    fn terminal_app_process_fallback_is_limited_to_linux_and_windows() {
+        for os in ["macos", "freebsd"] {
+            let system = SystemInfo::detect_with(
+                &FakeProbe::new(os, "x86_64")
+                    .with_current_pid(300)
+                    .with_process(300, 200, "freshen")
+                    .with_process(200, 100, "konsole"),
+            );
+
+            assert_eq!(
+                system.terminal().app(),
+                None,
+                "{os} must not use the process chain"
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_app_process_walk_stops_at_missing_parents_and_cycles() {
+        let missing_parent = SystemInfo::detect_with(
+            &FakeProbe::new("linux", "x86_64")
+                .with_current_pid(10)
+                .with_process(10, 20, "freshen"),
+        );
+        assert_eq!(missing_parent.terminal().app(), None);
+
+        let cycle = SystemInfo::detect_with(
+            &FakeProbe::new("linux", "x86_64")
+                .with_current_pid(10)
+                .with_process(10, 20, "freshen")
+                .with_process(20, 10, "bash"),
+        );
+        assert_eq!(cycle.terminal().app(), None);
+    }
+
+    #[test]
+    fn terminal_process_names_accept_paths_and_windows_executables() {
+        let cases = [
+            (
+                "/usr/bin/konsole",
+                Some(("Konsole", Some("org.kde.konsole"))),
+            ),
+            (
+                "C:/Program Files/WindowsApps/WindowsTerminal.exe",
+                Some(("Windows Terminal", None)),
+            ),
+            (
+                "/opt/wezterm/wezterm-gui",
+                Some(("WezTerm", Some("com.github.wez.wezterm"))),
+            ),
+            (
+                "/usr/bin/code-insiders",
+                Some(("Visual Studio Code", Some("com.microsoft.VSCode"))),
+            ),
+            ("/usr/bin/unknown-terminal", None),
+        ];
+
+        for (name, expected) in cases {
+            let app = terminal_app_for_process(name);
+            assert_eq!(
+                app.as_ref().map(|app| (app.name(), app.bundle_id())),
+                expected,
+                "unexpected mapping for {name}"
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn proc_stat_parses_names_with_spaces_and_parentheses() {
+        let stat = "42 (my (odd) shell) S 7 42 42 0 -1 4194304 0 0 0 0 1 2\n";
+
+        match super::parse_proc_stat(stat) {
+            Some((ppid, name)) => {
+                assert_eq!(ppid, 7);
+                assert_eq!(name, "my (odd) shell");
+            }
+            None => panic!("stat line should parse: {stat:?}"),
+        }
+        assert_eq!(super::parse_proc_stat("not a stat line"), None);
     }
 
     #[test]
