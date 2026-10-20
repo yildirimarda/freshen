@@ -60,7 +60,7 @@ Goal: one tool for macOS, Linux and Windows, written in Rust and shipped as a si
 - [x] Add a CI job that checks the code compiles against the MSRV (`rust-version` in the workspace manifest) with `cargo check --workspace`, so an accidental use of a newer language feature fails before release
 - [x] Validate the step graph in the registry: unknown prerequisite/conflict ids and dependency cycles fail with a clear message, covered by tests
 - [x] Enforce declared step conflicts when building a run: when two conflicting steps are available on the platform, skip the later one and report it as skipped with the reason, covered by tests
-- [ ] Detect duplicate step ids in the registry and fail with a clear message instead of letting one shadow the other during dependency resolution, covered by tests
+- [x] Detect duplicate step ids in the registry and fail with a clear message instead of letting one shadow the other during dependency resolution, covered by tests
 - [ ] Detect WSL and container environments in the OS abstraction layer (for example `/proc/version`, `/.dockerenv`, `WSL_DISTRO_NAME`) so Linux steps can adapt or skip, covered by tests with injected probe facts
 - [ ] Fall back to walking the parent process chain when no environment marker identifies the terminal application, so the host terminal is still known on Linux and Windows; cover it with a fake process table
 - [ ] Extend the stub harness so each stub can return canned stdout, stderr and exit status per invocation, so ported steps can be tested against recorded command transcripts
