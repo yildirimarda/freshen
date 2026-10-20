@@ -33,6 +33,8 @@ fn help_lists_every_flag() {
         "--dry-run",
         "--check",
         "--list-steps",
+        "--json",
+        "--markdown",
         "--only",
         "--skip",
         "--yes",

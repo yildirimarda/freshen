@@ -38,12 +38,24 @@ fn main() -> ExitCode {
 
     if cli.check {
         let summary = Runner::with_options(steps, options).check();
-        print!("{summary}");
+        if cli.json {
+            println!("{}", summary.to_json());
+        } else if cli.markdown {
+            print!("{}", summary.to_markdown());
+        } else {
+            print!("{summary}");
+        }
         return summary.exit_code();
     }
 
     let summary = Runner::with_options(steps, options).run();
-    print!("{summary}");
+    if cli.json {
+        println!("{}", summary.to_json());
+    } else if cli.markdown {
+        print!("{}", summary.to_markdown());
+    } else {
+        print!("{summary}");
+    }
     summary.exit_code()
 }
 

@@ -24,6 +24,14 @@ pub struct Cli {
     #[arg(long)]
     pub list_steps: bool,
 
+    /// Print the report as JSON instead of the plain-text summary.
+    #[arg(long, conflicts_with = "markdown")]
+    pub json: bool,
+
+    /// Print the report as Markdown instead of the plain-text summary.
+    #[arg(long, conflicts_with = "json")]
+    pub markdown: bool,
+
     /// Only run the named steps (comma-separated, repeatable).
     #[arg(long, value_name = "STEP", value_delimiter = ',', action = ArgAction::Append)]
     pub only: Vec<String>,
@@ -77,6 +85,8 @@ mod tests {
 
         assert!(!cli.list_steps);
         assert!(!cli.check);
+        assert!(!cli.json);
+        assert!(!cli.markdown);
         assert!(!options.is_dry_run());
         assert!(!options.assume_yes());
         assert!(!options.force_kill());
@@ -106,6 +116,19 @@ mod tests {
         assert!(options.force_kill());
         assert_eq!(options.selection().only(), ["brew"]);
         assert_eq!(options.selection().skip(), ["casks"]);
+    }
+
+    #[test]
+    fn parses_report_format_flags() {
+        assert!(parse(&["freshen", "--json"]).json);
+        assert!(parse(&["freshen", "--markdown"]).markdown);
+    }
+
+    #[test]
+    fn json_and_markdown_are_mutually_exclusive() {
+        let error = Cli::try_parse_from(["freshen", "--json", "--markdown"]).err();
+
+        assert!(error.is_some());
     }
 
     #[test]
@@ -152,6 +175,8 @@ mod tests {
             "--dry-run",
             "--check",
             "--list-steps",
+            "--json",
+            "--markdown",
             "--only",
             "--skip",
             "--yes",

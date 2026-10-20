@@ -221,6 +221,18 @@ impl CheckSummary {
         self.failed_count() > 0
     }
 
+    /// Renders the check summary as a JSON report.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        crate::report::check_json(self)
+    }
+
+    /// Renders the check summary as a Markdown report.
+    #[must_use]
+    pub fn to_markdown(&self) -> String {
+        crate::report::check_markdown(self)
+    }
+
     /// Exit code for check mode: `0` up to date, `1` failure, `2` updates pending.
     #[must_use]
     pub fn exit_code(&self) -> ExitCode {
