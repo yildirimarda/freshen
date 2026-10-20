@@ -1,7 +1,7 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "openrouter/deepseek/deepseek-v4-flash-0731",
-  "small_model": "openrouter/deepseek/deepseek-v4-flash-0731",
+  "model": "openrouter/deepseek/deepseek-v4.1-flash-1017",
+  "small_model": "openrouter/deepseek/deepseek-v4.1-flash-1017",
   "permission": {
     "*": "allow",
     "bash": {
@@ -60,6 +60,18 @@
                 "deepinfra",
                 "xiaomi",
                 "io-net"
+              ],
+              "allow_fallbacks": true
+            }
+          }
+        },
+        "deepseek/deepseek-v4.1-flash-1017": {
+          "options": {
+            "provider": {
+              "order": [
+                "deepinfra",
+                "inference-net",
+                "cloudflare"
               ],
               "allow_fallbacks": true
             }
