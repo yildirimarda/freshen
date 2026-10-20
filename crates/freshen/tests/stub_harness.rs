@@ -10,7 +10,7 @@ mod support;
 
 use std::process::Output;
 
-use support::StubTools;
+use support::{StubOutput, StubTools};
 
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
@@ -18,6 +18,110 @@ fn stderr(output: &Output) -> String {
 
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+fn run_stub(tools: &StubTools, tool: &str, args: &[&str]) -> Output {
+    tools
+        .stub_command(tool)
+        .args(args)
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run stub {tool}: {error}"))
+}
+
+#[test]
+fn a_stub_returns_canned_stdout_stderr_and_status_per_invocation() {
+    let tools = StubTools::new(&["probe"]);
+    tools.set_responses(
+        "probe",
+        &[
+            StubOutput::stdout("first\n").with_stderr("first warning\n"),
+            StubOutput::stdout("second\n")
+                .with_stderr("second warning\n")
+                .with_status(7),
+        ],
+    );
+
+    let first = run_stub(&tools, "probe", &["status"]);
+    assert_eq!(first.status.code(), Some(0), "stderr: {}", stderr(&first));
+    assert_eq!(stdout(&first), "first\n");
+    assert_eq!(stderr(&first), "first warning\n");
+
+    let second = run_stub(&tools, "probe", &["status"]);
+    assert_eq!(second.status.code(), Some(7), "stderr: {}", stderr(&second));
+    assert_eq!(stdout(&second), "second\n");
+    assert_eq!(stderr(&second), "second warning\n");
+
+    let unconfigured = run_stub(&tools, "probe", &["status"]);
+    assert_eq!(
+        unconfigured.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr(&unconfigured)
+    );
+    assert!(stdout(&unconfigured).is_empty());
+    assert!(stderr(&unconfigured).is_empty());
+
+    assert_eq!(
+        tools.calls(),
+        ["probe status", "probe status", "probe status"]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_ported_step_replays_a_recorded_command_transcript() {
+    const CASK_INFO: &str = include_str!("../../freshen-lib/tests/fixtures/brew-info-casks.json");
+
+    let tools = StubTools::new(&["brew"]);
+    tools.set_responses(
+        "brew",
+        &[
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::stdout("firefox\n"),
+            StubOutput::stdout(CASK_INFO),
+            StubOutput::stderr("cask upgrade failed\n").with_status(1),
+            StubOutput::new(),
+            StubOutput::new(),
+        ],
+    );
+
+    let output = tools
+        .command()
+        .env_remove("ZELLIJ")
+        .args([
+            "--only",
+            "brew,brew-formulae,brew-casks,brew-autoremove,brew-cleanup",
+            "--yes",
+        ])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.calls(),
+        [
+            "brew update",
+            "brew outdated --formula --quiet",
+            "brew upgrade --formula",
+            "brew outdated --cask --greedy --quiet",
+            "brew info --cask --json=v2 firefox",
+            "brew upgrade --cask --greedy",
+            "brew autoremove",
+            "brew cleanup --prune=all",
+        ]
+    );
+
+    let text = stdout(&output);
+    assert!(
+        text.contains("Casks to upgrade: firefox"),
+        "canned stdout was not replayed: {text}"
+    );
+    assert!(
+        text.contains("1 failed"),
+        "canned exit status was not reported: {text}"
+    );
 }
 
 #[test]
