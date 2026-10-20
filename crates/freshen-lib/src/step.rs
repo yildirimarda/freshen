@@ -276,6 +276,16 @@ pub trait Step {
         Ok(())
     }
 
+    /// Restores anything this step stopped when the run is interrupted.
+    ///
+    /// The runner calls this for every planned step, in reverse execution
+    /// order, after an interrupt. Steps that stop apps, containers or VMs
+    /// must implement it and must make it safe to call when they stopped
+    /// nothing. The default does nothing.
+    fn restore(&self) -> Result<(), StepError> {
+        Ok(())
+    }
+
     /// Read-only commands that record the installed versions this step can
     /// change, captured before the step runs.
     ///

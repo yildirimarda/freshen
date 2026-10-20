@@ -54,6 +54,9 @@ pub(crate) fn run_json(summary: &RunSummary) -> String {
         "planned": summary.planned_count(),
         "skipped": summary.skipped_count(),
         "failed": summary.failed_count(),
+        "interrupted": summary.interrupted_count(),
+        "was_interrupted": summary.was_interrupted(),
+        "restore_failures": summary.restore_failures(),
         "total_duration_ms": summary.total_duration().as_millis(),
         "snapshot": summary.snapshot_path().map(|path| path.display().to_string()),
         "rollback": rollback,
@@ -67,11 +70,12 @@ pub(crate) fn run_markdown(summary: &RunSummary) -> String {
     let mut out = String::new();
     out.push_str("# freshen report\n\n");
     out.push_str(&format!(
-        "**Summary:** {} ok, {} planned, {} skipped, {} failed ({})\n\n",
+        "**Summary:** {} ok, {} planned, {} skipped, {} failed, {} interrupted ({})\n\n",
         summary.ok_count(),
         summary.planned_count(),
         summary.skipped_count(),
         summary.failed_count(),
+        summary.interrupted_count(),
         format_duration(summary.total_duration())
     ));
     out.push_str("| Step | Status | Duration | Changes |\n");
@@ -107,6 +111,15 @@ pub(crate) fn run_markdown(summary: &RunSummary) -> String {
             format_duration(result.duration()),
             escape_cell(&changes)
         ));
+    }
+
+    if !summary.restore_failures().is_empty() {
+        out.push_str("\n## Restore warnings\n\n");
+        for failure in summary.restore_failures() {
+            out.push_str("- ");
+            out.push_str(failure);
+            out.push('\n');
+        }
     }
 
     if !summary.rollback_commands().is_empty() {
