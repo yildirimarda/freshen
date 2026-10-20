@@ -426,12 +426,51 @@ impl Terminal {
     }
 }
 
+/// A virtualized environment the operating system may be running in.
+///
+/// WSL and containers are not mutually exclusive: a container can run inside
+/// a WSL distribution. Steps that change the host system can use this to adapt
+/// to WSL or skip work inside a container.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Environment {
+    wsl: bool,
+    wsl_distro: Option<String>,
+    container: bool,
+}
+
+impl Environment {
+    /// Returns `true` when the host is neither WSL nor a container.
+    #[must_use]
+    pub fn is_native(&self) -> bool {
+        !self.wsl && !self.container
+    }
+
+    /// Returns `true` when running inside Windows Subsystem for Linux.
+    #[must_use]
+    pub fn is_wsl(&self) -> bool {
+        self.wsl
+    }
+
+    /// The WSL distribution name from `WSL_DISTRO_NAME`, when it was set.
+    #[must_use]
+    pub fn wsl_distro(&self) -> Option<&str> {
+        self.wsl_distro.as_deref()
+    }
+
+    /// Returns `true` when running inside a container such as Docker or Podman.
+    #[must_use]
+    pub fn is_container(&self) -> bool {
+        self.container
+    }
+}
+
 /// The operating system freshen is running on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OsInfo {
     name: String,
     platform: Option<Platform>,
     distro: Option<Distro>,
+    environment: Environment,
 }
 
 impl OsInfo {
@@ -451,6 +490,12 @@ impl OsInfo {
     #[must_use]
     pub fn distro(&self) -> Option<&Distro> {
         self.distro.as_ref()
+    }
+
+    /// The virtualized environment the operating system is running in.
+    #[must_use]
+    pub fn environment(&self) -> &Environment {
+        &self.environment
     }
 }
 
@@ -476,6 +521,7 @@ impl SystemInfo {
         let os_name = probe.os().to_string();
         let platform = Platform::from_name(&os_name);
         let distro = probe.os_release().as_deref().and_then(Distro::parse);
+        let environment = detect_environment(probe);
         let terminal = Terminal {
             stdin_is_terminal: probe.stdin_is_terminal(),
             stdout_is_terminal: probe.stdout_is_terminal(),
@@ -487,6 +533,7 @@ impl SystemInfo {
                 name: os_name,
                 platform,
                 distro,
+                environment,
             },
             arch: Arch::parse(probe.arch()),
             privilege: probe.privilege(),
@@ -504,6 +551,12 @@ impl SystemInfo {
     #[must_use]
     pub fn platform(&self) -> Option<Platform> {
         self.os.platform()
+    }
+
+    /// The virtualized environment the operating system is running in.
+    #[must_use]
+    pub fn environment(&self) -> &Environment {
+        self.os.environment()
     }
 
     /// The CPU architecture.
@@ -545,6 +598,12 @@ pub trait SystemProbe {
     /// Contents of the Linux `os-release` file, when available.
     fn os_release(&self) -> Option<String>;
 
+    /// Contents of a file, when it exists and is readable as UTF-8.
+    fn read_file(&self, path: &str) -> Option<String>;
+
+    /// Whether a path exists.
+    fn path_exists(&self, path: &str) -> bool;
+
     /// The privilege level of the current process.
     fn privilege(&self) -> Privilege;
 
@@ -583,6 +642,14 @@ impl SystemProbe for HostProbe {
         }
     }
 
+    fn read_file(&self, path: &str) -> Option<String> {
+        std::fs::read_to_string(path).ok()
+    }
+
+    fn path_exists(&self, path: &str) -> bool {
+        std::path::Path::new(path).exists()
+    }
+
     fn privilege(&self) -> Privilege {
         detect_privilege()
     }
@@ -597,6 +664,54 @@ impl SystemProbe for HostProbe {
 
     fn var(&self, key: &str) -> Option<String> {
         std::env::var(key).ok()
+    }
+}
+
+/// Markers found in `/proc/1/cgroup` inside common container runtimes.
+const CONTAINER_CGROUP_MARKERS: [&str; 5] = ["docker", "containerd", "kubepods", "lxc", "podman"];
+
+/// Detects WSL and containers from the facts provided by `probe`.
+///
+/// WSL is identified by `WSL_DISTRO_NAME`, `WSL_INTEROP` or a `/proc/version`
+/// containing `microsoft` or `wsl`. Containers are identified by the Docker and
+/// Podman marker files, the `container` environment variable, or a container
+/// runtime in `/proc/1/cgroup`. Only Linux can be WSL or a Linux container.
+fn detect_environment(probe: &dyn SystemProbe) -> Environment {
+    if Platform::from_name(probe.os()) != Some(Platform::Linux) {
+        return Environment::default();
+    }
+
+    let proc_version = probe
+        .read_file("/proc/version")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let wsl_distro = probe
+        .var("WSL_DISTRO_NAME")
+        .filter(|value| !value.is_empty());
+    let wsl = wsl_distro.is_some()
+        || probe
+            .var("WSL_INTEROP")
+            .is_some_and(|value| !value.is_empty())
+        || proc_version.contains("microsoft")
+        || proc_version.contains("wsl");
+
+    let cgroup = probe
+        .read_file("/proc/1/cgroup")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let container = probe.path_exists("/.dockerenv")
+        || probe.path_exists("/run/.containerenv")
+        || probe
+            .var("container")
+            .is_some_and(|value| !value.is_empty())
+        || CONTAINER_CGROUP_MARKERS
+            .iter()
+            .any(|marker| cgroup.contains(marker));
+
+    Environment {
+        wsl,
+        wsl_distro,
+        container,
     }
 }
 
@@ -645,8 +760,8 @@ fn detect_privilege() -> Privilege {
 #[cfg(test)]
 mod tests {
     use super::{
-        detect_terminal_app, Arch, Distro, Privilege, SystemInfo, SystemProbe, Terminal,
-        TerminalApp,
+        detect_terminal_app, Arch, Distro, Environment, Privilege, SystemInfo, SystemProbe,
+        Terminal, TerminalApp,
     };
     use crate::platform::Platform;
 
@@ -658,6 +773,7 @@ mod tests {
         stdin_is_terminal: bool,
         stdout_is_terminal: bool,
         vars: Vec<(&'static str, &'static str)>,
+        files: Vec<(String, String)>,
     }
 
     impl FakeProbe {
@@ -670,6 +786,7 @@ mod tests {
                 stdin_is_terminal: true,
                 stdout_is_terminal: true,
                 vars: Vec::new(),
+                files: Vec::new(),
             }
         }
 
@@ -680,6 +797,11 @@ mod tests {
 
         fn with_var(mut self, key: &'static str, value: &'static str) -> Self {
             self.vars.push((key, value));
+            self
+        }
+
+        fn with_file(mut self, path: &str, contents: &str) -> Self {
+            self.files.push((path.to_string(), contents.to_string()));
             self
         }
     }
@@ -695,6 +817,17 @@ mod tests {
 
         fn os_release(&self) -> Option<String> {
             self.os_release.clone()
+        }
+
+        fn read_file(&self, path: &str) -> Option<String> {
+            self.files
+                .iter()
+                .find(|(name, _)| name == path)
+                .map(|(_, contents)| contents.clone())
+        }
+
+        fn path_exists(&self, path: &str) -> bool {
+            self.files.iter().any(|(name, _)| name == path)
         }
 
         fn privilege(&self) -> Privilege {
@@ -973,6 +1106,123 @@ mod tests {
             assert_eq!(terminal.stdin_is_terminal(), stdin_is_terminal);
             assert_eq!(terminal.stdout_is_terminal(), stdout_is_terminal);
             assert_eq!(terminal.is_interactive(), interactive);
+        }
+    }
+
+    #[test]
+    fn environment_defaults_to_native_on_linux() {
+        let system = SystemInfo::detect_with(&FakeProbe::new("linux", "x86_64"));
+
+        let environment = system.environment();
+        assert_eq!(environment, &Environment::default());
+        assert!(environment.is_native());
+        assert!(!environment.is_wsl());
+        assert!(!environment.is_container());
+        assert_eq!(environment.wsl_distro(), None);
+        assert_eq!(system.os().environment(), environment);
+    }
+
+    #[test]
+    fn environment_detects_wsl_from_distro_name() {
+        let system = SystemInfo::detect_with(
+            &FakeProbe::new("linux", "x86_64").with_var("WSL_DISTRO_NAME", "Ubuntu-22.04"),
+        );
+
+        let environment = system.environment();
+        assert!(environment.is_wsl());
+        assert!(!environment.is_container());
+        assert!(!environment.is_native());
+        assert_eq!(environment.wsl_distro(), Some("Ubuntu-22.04"));
+    }
+
+    #[test]
+    fn environment_detects_wsl_from_proc_version() {
+        let system = SystemInfo::detect_with(&FakeProbe::new("linux", "x86_64").with_file(
+            "/proc/version",
+            "Linux version 5.15.90.1-microsoft-standard-WSL2 (root@build) #1 SMP\n",
+        ));
+
+        assert!(system.environment().is_wsl());
+        assert_eq!(system.environment().wsl_distro(), None);
+    }
+
+    #[test]
+    fn environment_detects_wsl_from_interop_marker() {
+        let system = SystemInfo::detect_with(
+            &FakeProbe::new("linux", "x86_64").with_var("WSL_INTEROP", "/run/WSL/1_interop"),
+        );
+
+        assert!(system.environment().is_wsl());
+    }
+
+    #[test]
+    fn environment_detects_container_marker_files() {
+        for path in ["/.dockerenv", "/run/.containerenv"] {
+            let system =
+                SystemInfo::detect_with(&FakeProbe::new("linux", "x86_64").with_file(path, ""));
+
+            let environment = system.environment();
+            assert!(
+                environment.is_container(),
+                "marker {path} should be detected"
+            );
+            assert!(!environment.is_wsl());
+            assert!(!environment.is_native());
+        }
+    }
+
+    #[test]
+    fn environment_detects_container_environment_variable() {
+        let system = SystemInfo::detect_with(
+            &FakeProbe::new("linux", "x86_64").with_var("container", "podman"),
+        );
+
+        assert!(system.environment().is_container());
+    }
+
+    #[test]
+    fn environment_detects_container_runtimes_in_cgroup() {
+        for marker in ["docker", "containerd", "kubepods", "lxc", "podman"] {
+            let cgroup = format!("12:devices:/{marker}/abc123\n");
+            let system = SystemInfo::detect_with(
+                &FakeProbe::new("linux", "x86_64").with_file("/proc/1/cgroup", &cgroup),
+            );
+
+            assert!(
+                system.environment().is_container(),
+                "cgroup marker {marker} should be detected"
+            );
+        }
+    }
+
+    #[test]
+    fn environment_can_be_wsl_and_container_at_once() {
+        let system = SystemInfo::detect_with(
+            &FakeProbe::new("linux", "x86_64")
+                .with_var("WSL_DISTRO_NAME", "Ubuntu")
+                .with_file("/.dockerenv", ""),
+        );
+
+        assert!(system.environment().is_wsl());
+        assert!(system.environment().is_container());
+        assert!(!system.environment().is_native());
+    }
+
+    #[test]
+    fn environment_markers_are_ignored_off_linux() {
+        for os in ["macos", "windows"] {
+            let system = SystemInfo::detect_with(
+                &FakeProbe::new(os, "x86_64")
+                    .with_var("WSL_DISTRO_NAME", "Ubuntu")
+                    .with_var("container", "podman")
+                    .with_file("/.dockerenv", "")
+                    .with_file(
+                        "/proc/version",
+                        "Linux version 5.15.90.1-microsoft-standard-WSL2\n",
+                    ),
+            );
+
+            assert_eq!(system.environment(), &Environment::default());
         }
     }
 
