@@ -48,7 +48,7 @@ Goal: one tool for macOS, Linux and Windows, written in Rust and shipped as a si
 - [x] Implement an OS abstraction layer: detect OS/distro/arch, privilege level, interactive vs non-interactive terminal, and the terminal application running the tool
 - [x] Implement failure collection and the final summary (steps ok / skipped / failed, duration per step) with the same exit-code semantics as the zsh script
 - [x] Add `--dry-run`, `--only`, `--skip`, `--yes`, `--force-kill` with identical semantics on every platform
-- [ ] Add a test harness that runs the built binary against stub `brew`, `uv`, `mise`, `docker`, `colima` executables on `PATH` and asserts the call order (tests never invoke the real tools)
+- [x] Add a test harness that runs the built binary against stub `brew`, `uv`, `mise`, `docker`, `colima` executables on `PATH` and asserts the call order (tests never invoke the real tools)
 - [ ] Add a test that a failing step is recorded, does not abort the run, and produces exit code 1 with the step listed in the summary
 - [ ] Add `--list-steps` showing every known step, whether it was detected on this machine, and why it would be skipped
 - [ ] Port the Homebrew steps (including formulae-before-casks ordering and cask artifact detection) with parity tests against recorded command transcripts
@@ -63,6 +63,7 @@ Goal: one tool for macOS, Linux and Windows, written in Rust and shipped as a si
 - [ ] Detect duplicate step ids in the registry and fail with a clear message instead of letting one shadow the other during dependency resolution, covered by tests
 - [ ] Detect WSL and container environments in the OS abstraction layer (for example `/proc/version`, `/.dockerenv`, `WSL_DISTRO_NAME`) so Linux steps can adapt or skip, covered by tests with injected probe facts
 - [ ] Fall back to walking the parent process chain when no environment marker identifies the terminal application, so the host terminal is still known on Linux and Windows; cover it with a fake process table
+- [ ] Extend the stub harness so each stub can return canned stdout, stderr and exit status per invocation, so ported steps can be tested against recorded command transcripts
 
 ## Milestone 3: Safety and Reliability
 
