@@ -4,7 +4,7 @@
 use std::process::ExitCode;
 
 use clap::Parser;
-use freshen_lib::{Platform, Registry, Runner};
+use freshen_lib::{list_steps, Platform, Registry, Runner};
 
 mod cli;
 
@@ -30,6 +30,11 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    if cli.list_steps {
+        print!("{}", list_steps(&registry, options.selection(), platform));
+        return ExitCode::SUCCESS;
+    }
 
     let summary = Runner::with_options(steps, options).run();
     print!("{summary}");

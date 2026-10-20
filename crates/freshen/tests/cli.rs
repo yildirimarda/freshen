@@ -29,9 +29,24 @@ fn help_lists_every_flag() {
 
     assert!(output.status.success());
     let text = stdout(&output);
-    for flag in ["--dry-run", "--only", "--skip", "--yes", "--force-kill"] {
+    for flag in [
+        "--dry-run",
+        "--list-steps",
+        "--only",
+        "--skip",
+        "--yes",
+        "--force-kill",
+    ] {
         assert!(text.contains(flag), "help does not mention {flag}: {text}");
     }
+}
+
+#[test]
+fn list_steps_with_no_steps_succeeds_and_says_so() {
+    let output = run(&["--list-steps"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(stdout(&output), "No known steps.\n");
 }
 
 #[test]

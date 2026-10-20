@@ -14,7 +14,7 @@ use std::fmt;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use crate::options::RunOptions;
+use crate::options::{RunOptions, SelectionFlag};
 use crate::step::{Detection, Step, StepError, StepId};
 
 /// The outcome of one step in a run.
@@ -60,6 +60,10 @@ impl fmt::Display for StepStatus {
 pub enum SkipReason {
     /// The tool managed by the step is not installed on this machine.
     NotInstalled,
+    /// The step does not support the platform of the run.
+    UnsupportedPlatform,
+    /// `--only` or `--skip` excluded the step from the run.
+    NotSelected(SelectionFlag),
 }
 
 impl SkipReason {
@@ -68,6 +72,9 @@ impl SkipReason {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::NotInstalled => "not installed",
+            Self::UnsupportedPlatform => "not supported on this platform",
+            Self::NotSelected(SelectionFlag::Only) => "not selected by --only",
+            Self::NotSelected(SelectionFlag::Skip) => "excluded by --skip",
         }
     }
 }

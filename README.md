@@ -77,6 +77,7 @@ The Rust binary accepts the same options on macOS, Linux and Windows:
 
 ```bash
 cargo run -p freshen -- --dry-run                    # detect, change nothing
+cargo run -p freshen -- --list-steps                 # detect every step and explain skips
 cargo run -p freshen -- --only brew,uv --skip casks  # select steps
 cargo run -p freshen -- --yes --force-kill           # no prompts, kill stubborn apps
 ```

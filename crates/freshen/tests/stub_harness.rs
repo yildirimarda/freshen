@@ -52,6 +52,26 @@ fn runs_stub_tools_in_step_order() {
 }
 
 #[test]
+fn list_steps_reports_detection_without_calling_any_stub() {
+    let tools = StubTools::new(&["brew", "uv"]);
+
+    let output = tools.run(
+        "brew update;uv tool upgrade --all",
+        &["--list-steps", "--skip", "probe-1"],
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(tools.calls().is_empty());
+
+    let text = stdout(&output);
+    assert!(text.contains("Steps (2):"), "listing: {text}");
+    assert!(text.contains("probe-0"), "listing: {text}");
+    assert!(text.contains("brew"), "listing: {text}");
+    assert!(text.contains("installed"), "listing: {text}");
+    assert!(text.contains("excluded by --skip"), "listing: {text}");
+}
+
+#[test]
 fn dry_run_detects_steps_without_calling_any_stub() {
     let tools = StubTools::new(&["brew", "uv", "mise", "docker", "colima"]);
 
