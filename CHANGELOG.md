@@ -12,8 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The Rust `freshen` binary is now the implementation; the zsh script has been retired.
-- `update-all.sh` is now a deprecated POSIX `sh` compatibility wrapper that forwards to `freshen` and maps `ASSUME_YES`/`FORCE_KILL` to `--yes`/`--force-kill`.
 
 ### Removed
 
-- The zsh implementation of the update steps. Use `freshen`, or the compatibility wrapper for existing aliases; see the migration section in the README.
+- The zsh implementation of the update steps. Use `freshen`; see the migration section in the README.
+- The deprecated `update-all.sh` compatibility shim.

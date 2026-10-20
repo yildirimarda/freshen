@@ -144,13 +144,13 @@ Leave the `PLAN.md` checkbox unchecked. Then stop.
 
 ## Project reference
 
-freshen keeps a developer machine up to date (package managers, language toolchains, containers) on macOS, Linux and Windows. The implementation is the Rust workspace under `crates/` (`freshen-lib` holds all logic, the `freshen` binary is a thin CLI wrapper); the zsh implementation has been removed, and `update-all.sh` remains only as a deprecated `sh` compatibility shim that forwards to `freshen`.
+freshen keeps a developer machine up to date (package managers, language toolchains, containers) on macOS, Linux and Windows. The implementation is the Rust workspace under `crates/` (`freshen-lib` holds all logic, the `freshen` binary is a thin CLI wrapper); the zsh implementation and the deprecated `update-all.sh` shim have been removed.
 
-- Language:     Rust; toolchain pinned by `rust-toolchain.toml`, MSRV in `[workspace.package] rust-version`; `update-all.sh` is a deprecated `sh` shim, not an implementation
+- Language:     Rust; toolchain pinned by `rust-toolchain.toml`, MSRV in `[workspace.package] rust-version`
 - Format:       `cargo fmt --all -- --check`
 - Lint:         `cargo clippy --all-targets --all-features -- -D warnings`
 - Tests:        `cargo test --all-features`
-- Repository checks: `bash tests/run-tests.sh` (includes `sh -n update-all.sh` for the shim); tests in `tests/` use stub executables on PATH
+- Repository checks: `bash tests/run-tests.sh` (also checks that the removed `update-all.sh` shim stays gone); tests in `tests/` use stub executables on PATH
 - Layout:       library crate holds all logic, the binary crate is a thin CLI wrapper; one module per step
 - Style:        no `unwrap()`/`expect()` outside tests, errors via `thiserror`/`anyhow`, English comments and messages
 - Cross-platform: any OS-specific code lives behind `#[cfg(target_os = ...)]` in an OS abstraction module; every step declares the platforms it supports

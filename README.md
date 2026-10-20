@@ -54,7 +54,7 @@ freshen --only brew,uv --skip brew-casks   # select steps
 
 ## Migrating from update-all.sh
 
-The zsh implementation has been removed now that the Rust port reached parity, and `freshen` is the implementation. For one release `update-all.sh` remains as a deprecated POSIX `sh` wrapper: it forwards to `freshen` and translates `ASSUME_YES=1`/`FORCE_KILL=1` into `--yes`/`--force-kill`, so existing aliases keep working. The wrapper needs `freshen` on `PATH` (install it with `cargo install --path crates/freshen` or use a release binary) and will be removed in a later release.
+The zsh implementation and its deprecated POSIX `sh` compatibility wrapper have been removed now that the Rust port reached parity, and `freshen` is the implementation. Existing aliases and scripts should call `freshen` directly; install it with `cargo install --path crates/freshen` or use a release binary.
 
 | Old | New |
 |---|---|

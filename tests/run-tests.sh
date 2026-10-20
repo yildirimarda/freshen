@@ -8,59 +8,29 @@ fail=0
 ok()  { echo "ok    $1"; }
 bad() { echo "FAIL  $1"; fail=1; }
 
-# 1. The legacy zsh implementation is gone: update-all.sh is a POSIX sh shim
-#    that forwards to the Rust binary.
-if [[ -f update-all.sh ]]; then
-  if [[ "$(head -n 1 update-all.sh)" == "#!/bin/sh" ]]; then
-    ok "update-all.sh is a POSIX sh compatibility shim"
-  else
-    bad "update-all.sh still has a non-sh shebang"
-  fi
-  if grep -q 'exec freshen "\$@"' update-all.sh; then
-    ok "update-all.sh forwards to freshen"
-  else
-    bad "update-all.sh does not exec freshen"
-  fi
-  if grep -qE 'compose_cmd|quit_app|brew upgrade --cask|uv tool upgrade|mise upgrade' update-all.sh; then
-    bad "legacy zsh implementation still present in update-all.sh"
-  else
-    ok "legacy zsh implementation removed"
-  fi
-  if command -v sh >/dev/null 2>&1; then
-    sh -n update-all.sh && ok "sh -n update-all.sh" || bad "sh -n update-all.sh"
-  fi
-
-  tmp="$(mktemp -d)"
-  cat > "$tmp/freshen" <<'SH'
-#!/bin/sh
-printf '%s\n' "$@"
-SH
-  chmod +x "$tmp/freshen"
-  forwarded="$(ASSUME_YES=1 FORCE_KILL=1 PATH="$tmp:$PATH" sh ./update-all.sh --dry-run)"
-  shim_ok=1
-  for flag in --yes --force-kill --dry-run; do
-    grep -qx -- "$flag" <<<"$forwarded" || shim_ok=0
-  done
-  rm -rf "$tmp"
-  if (( shim_ok )); then
-    ok "update-all.sh shim forwards flags and maps the old environment variables"
-  else
-    bad "update-all.sh shim did not forward flags/environment: $forwarded"
-  fi
+# 1. The legacy zsh implementation and its deprecated sh compatibility shim
+#    are gone.
+if [[ ! -e update-all.sh ]]; then
+  ok "update-all.sh compatibility shim removed"
 else
-  bad "update-all.sh compatibility shim is missing"
+  bad "update-all.sh compatibility shim is still present"
 fi
 
-# 2. The migration is documented where users look for it.
+# 2. The migration is documented where users look for it, and the docs no
+#    longer promise that the removed shim is still available.
 if grep -q '^## Migrating from update-all.sh' README.md && grep -q 'freshen' README.md; then
-  ok "README.md documents the migration to freshen"
+  if grep -q 'remains as a deprecated' README.md; then
+    bad "README.md still advertises the removed update-all.sh shim"
+  else
+    ok "README.md documents the migration to freshen"
+  fi
 else
   bad "README.md is missing the update-all.sh migration section"
 fi
-if grep -q '^## \[Unreleased\]' CHANGELOG.md && grep -qi 'zsh implementation' CHANGELOG.md; then
-  ok "CHANGELOG.md records the zsh removal"
+if grep -q '^## \[Unreleased\]' CHANGELOG.md && grep -qi 'zsh implementation' CHANGELOG.md && grep -qi 'compatibility shim' CHANGELOG.md; then
+  ok "CHANGELOG.md records the zsh and shim removal"
 else
-  bad "CHANGELOG.md is missing the zsh removal entry"
+  bad "CHANGELOG.md is missing the zsh/shim removal entry"
 fi
 
 # 3. PLAN.md format: lines that look like tasks must match the exact format
@@ -137,6 +107,24 @@ if [[ -f Cargo.toml && -f ci-proposals/rust.yml ]]; then
   grep -q 'steps.msrv.outputs.version' ci-proposals/rust.yml || { echo "  msrv job does not use the manifest value"; msrv_ok=0; }
   grep -q 'cargo +.*check --workspace' ci-proposals/rust.yml || { echo "  msrv job does not run cargo check --workspace"; msrv_ok=0; }
   if (( msrv_ok )); then ok "ci-proposals/rust.yml MSRV job (rust-version -> cargo check --workspace)"; else bad "ci-proposals/rust.yml missing an MSRV check job"; fi
+fi
+
+# 7. CI replaces the old zsh syntax step with a guard that the compatibility
+#    shim stays removed. Check the proposal until a human applies it, then the
+#    active workflow.
+ci_file=""
+if [[ -f ci-proposals/ci.yml ]]; then
+  ci_file="ci-proposals/ci.yml"
+elif [[ -f .github/workflows/ci.yml ]]; then
+  ci_file=".github/workflows/ci.yml"
+fi
+if [[ -n "$ci_file" ]]; then
+  ci_ok=1
+  grep -q 'test ! -e update-all.sh' "$ci_file" || { echo "  no shim-removal guard"; ci_ok=0; }
+  if grep -qE 'zsh -n|Zsh syntax' "$ci_file"; then echo "  still runs a zsh syntax check"; ci_ok=0; fi
+  if (( ci_ok )); then ok "$ci_file checks that the update-all.sh shim is gone"; else bad "$ci_file does not replace the zsh syntax step with a shim check"; fi
+else
+  bad "no CI workflow proposal or active workflow found"
 fi
 
 exit "$fail"
