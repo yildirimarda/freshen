@@ -79,7 +79,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Rollback hints in the summary: print the exact commands to return to the previous versions recorded in the snapshot
 - [x] Preflight checks: network reachable, enough free disk space, not on battery below a threshold, not on a metered/hotspot connection (configurable, each skippable with a flag)
 - [x] Add a lock file so two freshen runs cannot overlap, with a clear message naming the PID that holds it
-- [ ] Detect when another package manager process is running (brew, apt/dpkg lock, winget) and wait or abort with a clear message
+- [x] Detect when another package manager process is running (brew, apt/dpkg lock, winget) and wait or abort with a clear message
 - [ ] Graceful handling of SIGINT/SIGTERM on every OS: stop the running step, restore everything that was stopped (apps, containers, VMs), print a partial summary
 - [ ] Idempotency guarantee: running the tool twice in a row must be a no-op the second time; add a test asserting it
 - [ ] Per-step and global timeouts with a clear "timed out" status distinct from "failed"
