@@ -8,16 +8,62 @@ fail=0
 ok()  { echo "ok    $1"; }
 bad() { echo "FAIL  $1"; fail=1; }
 
-# 1. zsh syntax of the legacy script
+# 1. The legacy zsh implementation is gone: update-all.sh is a POSIX sh shim
+#    that forwards to the Rust binary.
 if [[ -f update-all.sh ]]; then
-  if command -v zsh >/dev/null 2>&1; then
-    zsh -n update-all.sh && ok "zsh -n update-all.sh" || bad "zsh -n update-all.sh"
+  if [[ "$(head -n 1 update-all.sh)" == "#!/bin/sh" ]]; then
+    ok "update-all.sh is a POSIX sh compatibility shim"
   else
-    echo "skip  zsh not installed, syntax check skipped"
+    bad "update-all.sh still has a non-sh shebang"
   fi
+  if grep -q 'exec freshen "\$@"' update-all.sh; then
+    ok "update-all.sh forwards to freshen"
+  else
+    bad "update-all.sh does not exec freshen"
+  fi
+  if grep -qE 'compose_cmd|quit_app|brew upgrade --cask|uv tool upgrade|mise upgrade' update-all.sh; then
+    bad "legacy zsh implementation still present in update-all.sh"
+  else
+    ok "legacy zsh implementation removed"
+  fi
+  if command -v sh >/dev/null 2>&1; then
+    sh -n update-all.sh && ok "sh -n update-all.sh" || bad "sh -n update-all.sh"
+  fi
+
+  tmp="$(mktemp -d)"
+  cat > "$tmp/freshen" <<'SH'
+#!/bin/sh
+printf '%s\n' "$@"
+SH
+  chmod +x "$tmp/freshen"
+  forwarded="$(ASSUME_YES=1 FORCE_KILL=1 PATH="$tmp:$PATH" sh ./update-all.sh --dry-run)"
+  shim_ok=1
+  for flag in --yes --force-kill --dry-run; do
+    grep -qx -- "$flag" <<<"$forwarded" || shim_ok=0
+  done
+  rm -rf "$tmp"
+  if (( shim_ok )); then
+    ok "update-all.sh shim forwards flags and maps the old environment variables"
+  else
+    bad "update-all.sh shim did not forward flags/environment: $forwarded"
+  fi
+else
+  bad "update-all.sh compatibility shim is missing"
 fi
 
-# 2. PLAN.md format: lines that look like tasks must match the exact format
+# 2. The migration is documented where users look for it.
+if grep -q '^## Migrating from update-all.sh' README.md && grep -q 'freshen' README.md; then
+  ok "README.md documents the migration to freshen"
+else
+  bad "README.md is missing the update-all.sh migration section"
+fi
+if grep -q '^## \[Unreleased\]' CHANGELOG.md && grep -qi 'zsh implementation' CHANGELOG.md; then
+  ok "CHANGELOG.md records the zsh removal"
+else
+  bad "CHANGELOG.md is missing the zsh removal entry"
+fi
+
+# 3. PLAN.md format: lines that look like tasks must match the exact format
 if [[ -f PLAN.md ]]; then
   malformed="$(grep -nE '^[[:space:]]*-[[:space:]]*\[' PLAN.md | grep -vE '^[0-9]+:- \[( |x)\] .+' || true)"
   if [[ -z "$malformed" ]]; then ok "PLAN.md task lines"; else bad "PLAN.md malformed task lines:"; echo "$malformed"; fi
@@ -30,7 +76,7 @@ if [[ -f PLAN.md ]]; then
   if (( seq_ok )); then ok "PLAN.md milestones numbered 0..$((n - 1))"; else bad "PLAN.md milestone numbering is not consecutive"; fi
 fi
 
-# 3. ADR files: valid number, template sections, and the index table links them
+# 4. ADR files: valid number, template sections, and the index table links them
 if [[ -d docs/adr ]]; then
   n=0; adr_ok=1
   for f in docs/adr/[0-9][0-9][0-9][0-9]-*.md; do
@@ -51,7 +97,7 @@ if [[ -d docs/adr ]]; then
   if (( adr_ok )); then ok "docs/adr files (numbering, sections, index links)"; else bad "docs/adr file checks"; fi
 fi
 
-# 4. cargo-deny: deny.toml is a valid TOML with a licenses allow-list and an
+# 5. cargo-deny: deny.toml is a valid TOML with a licenses allow-list and an
 #    advisories section, and the CI proposal actually runs both checks
 if [[ -f deny.toml ]]; then
   deny_ok=1

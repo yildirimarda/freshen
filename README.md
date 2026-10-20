@@ -1,12 +1,12 @@
 # freshen
 
-One command to keep a developer machine current. Today it targets macOS: **Homebrew**, **Docker (Colima) images**, **uv tools** and **mise** (Node & friends) — in the right order, without babysitting.
+One command to keep a developer machine current: **Homebrew**, **Docker (Colima) images**, **uv tools** and **mise** (Node & friends) — in the right order, without babysitting.
 
 ```bash
-./update-all.sh
+freshen
 ```
 
-Currently a single zsh script, no dependencies beyond the tools it updates. The roadmap ([PLAN.md](PLAN.md)) is a Rust rewrite with Linux and Windows support, a config file, `--check`/`--dry-run`, rollback snapshots and scheduling. Every step is optional: if a tool is not installed, its section is skipped.
+The implementation is the Rust workspace under `crates/`: `freshen-lib` holds all logic and the `freshen` binary is a thin CLI wrapper. It runs on macOS, Linux and Windows. The roadmap ([PLAN.md](PLAN.md)) covers the remaining steps, a config file, rollback snapshots and scheduling. Every step is optional: if a tool is not installed, its section is skipped.
 
 ## What it does
 
@@ -22,40 +22,47 @@ A failing step never aborts the run. Failures are collected and listed at the en
 ### Details worth knowing
 
 - **Formulae are upgraded before apps are closed**, so apps stay open during the slow part.
-- **Apps are only quit when a cask upgrade will replace them.** Quit is graceful (AppleScript, 3 s timeout so a "Save changes?" dialog cannot hang the script). Apps that do not quit within `QUIT_TIMEOUT` are left alone unless `FORCE_KILL=1`.
-- **The terminal running the script is never quit.** Detected via `__CFBundleIdentifier` (works with Terminal, iTerm2, Ghostty, ...).
+- **Apps are only quit when a cask upgrade will replace them.** Quit is graceful (AppleScript, 3 s timeout so a "Save changes?" dialog cannot hang the run). Apps that do not quit within `QUIT_TIMEOUT` are left alone unless `--force-kill` is given.
+- **The terminal running freshen is never quit.** Detected via `__CFBundleIdentifier` (works with Terminal, iTerm2, Ghostty, ...).
 - **Reopening uses `open -g`**, so apps do not steal focus.
 - **`mise upgrade` is used without `--bump`** on purpose: with `node@lts` in your config, `--bump` would pin `lts` to a fixed version.
-- **Zellij**: if zellij is outdated and you run the script inside a session, you get a warning (server/client versions must match).
+- **Zellij**: if zellij is outdated and you run freshen inside a session, you get a warning (server/client versions must match).
 
 ## Requirements
 
-- macOS, zsh (the default shell)
+- macOS, Linux or Windows; a prebuilt `freshen` binary or Rust 1.81+ to build from source
 - [Homebrew](https://brew.sh) — required for the Homebrew section
 - Optional: `colima` + `docker`, `uv`, `mise`
-- `python3` (ships with the Xcode command line tools) for parsing `brew info --json` / `docker compose ls --format json`
 
 ## Usage
 
 ```bash
-chmod +x update-all.sh
-./update-all.sh                       # interactive: asks before quitting apps
-ASSUME_YES=1 ./update-all.sh          # no prompt
-FORCE_KILL=1 ./update-all.sh          # kill apps that refuse to quit (unsaved data may be lost)
-QUIT_TIMEOUT=40 ./update-all.sh       # wait longer for apps to quit
+freshen                       # interactive: asks before quitting apps
+freshen --yes                 # no prompt
+freshen --force-kill          # kill apps that refuse to quit (unsaved data may be lost)
+QUIT_TIMEOUT=40 freshen       # wait longer for apps to quit
+freshen --dry-run             # detect and plan, change nothing
+freshen --list-steps          # show every step, its detection and skip reason
+freshen --only brew,uv --skip brew-casks   # select steps
 ```
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ASSUME_YES` | `0` | Do not ask before quitting apps for cask upgrades |
-| `FORCE_KILL` | `0` | `kill -9` apps that did not quit within the timeout |
 | `QUIT_TIMEOUT` | `20` | Seconds to wait for an app to quit |
 
-Handy alias:
+`--yes` and `--force-kill` replace the old `ASSUME_YES`/`FORCE_KILL` environment variables.
 
-```bash
-alias update-all="$HOME/path/to/freshen/update-all.sh"
-```
+## Migrating from update-all.sh
+
+The zsh implementation has been removed now that the Rust port reached parity, and `freshen` is the implementation. For one release `update-all.sh` remains as a deprecated POSIX `sh` wrapper: it forwards to `freshen` and translates `ASSUME_YES=1`/`FORCE_KILL=1` into `--yes`/`--force-kill`, so existing aliases keep working. The wrapper needs `freshen` on `PATH` (install it with `cargo install --path crates/freshen` or use a release binary) and will be removed in a later release.
+
+| Old | New |
+|---|---|
+| `./update-all.sh` | `freshen` |
+| `ASSUME_YES=1 ./update-all.sh` | `freshen --yes` |
+| `FORCE_KILL=1 ./update-all.sh` | `freshen --force-kill` |
+| `QUIT_TIMEOUT=40 ./update-all.sh` | `QUIT_TIMEOUT=40 freshen` |
+| `alias update-all=.../update-all.sh` | `alias update-all=freshen` |
 
 ## Safety notes
 
@@ -68,9 +75,10 @@ alias update-all="$HOME/path/to/freshen/update-all.sh"
 The project is plan-driven: see [PLAN.md](PLAN.md) for what exists and what is next, [CONTRIBUTING.md](CONTRIBUTING.md) for how to contribute, and [AGENTS.md](AGENTS.md) if you use an autonomous coding agent ([agentloop](https://github.com/yildirimarda/agentloop)).
 
 ```bash
-zsh -n update-all.sh        # syntax check (what CI runs)
-cargo test --all-features   # Rust workspace tests
+cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features   # Rust workspace tests
+bash tests/run-tests.sh     # repository-level checks
 ```
 
 The Rust binary accepts the same options on macOS, Linux and Windows:
