@@ -1,7 +1,7 @@
 //! End-to-end checks for the `freshen` binary's command-line surface.
 //!
-//! The binary is run with an empty step registry, so these tests never touch a
-//! package manager or any other real tool on the host.
+//! These tests never run a package manager: detection only looks for an
+//! executable on `PATH`, and the run cases exclude every built-in step.
 
 use std::process::{Command, Output};
 
@@ -42,11 +42,14 @@ fn help_lists_every_flag() {
 }
 
 #[test]
-fn list_steps_with_no_steps_succeeds_and_says_so() {
+fn list_steps_lists_the_builtin_homebrew_steps() {
     let output = run(&["--list-steps"]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert_eq!(stdout(&output), "No known steps.\n");
+    let text = stdout(&output);
+    assert!(text.contains("Steps (5):"), "listing: {text}");
+    assert!(text.contains("brew"), "listing: {text}");
+    assert!(text.contains("brew-casks"), "listing: {text}");
 }
 
 #[test]
@@ -58,10 +61,14 @@ fn version_prints_the_binary_name_and_version() {
 }
 
 #[test]
-fn dry_run_with_no_steps_succeeds_and_plans_nothing() {
-    let output = run(&["--dry-run"]);
+fn dry_run_with_every_builtin_step_excluded_plans_nothing() {
+    let output = run(&[
+        "--dry-run",
+        "--skip",
+        "brew,brew-formulae,brew-casks,brew-autoremove,brew-cleanup",
+    ]);
 
-    assert!(output.status.success());
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(stdout(&output).contains("0 ok, 0 planned, 0 skipped, 0 failed"));
 }
 

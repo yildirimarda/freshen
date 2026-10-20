@@ -1,0 +1,45 @@
+{
+  "formulae": [],
+  "casks": [
+    {
+      "token": "firefox",
+      "artifacts": [
+        {
+          "app": [
+            "Firefox.app"
+          ]
+        },
+        {
+          "binary": [
+            {
+              "target": "firefox"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "token": "google-chrome",
+      "artifacts": [
+        {
+          "app": [
+            {
+              "source": "Google Chrome.app",
+              "target": "/Applications/Google Chrome.app"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "token": "font-hack",
+      "artifacts": [
+        {
+          "font": [
+            "Hack.ttf"
+          ]
+        }
+      ]
+    }
+  ]
+}

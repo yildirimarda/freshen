@@ -42,10 +42,10 @@ fn main() -> ExitCode {
 }
 
 fn build_registry() -> Registry {
-    let registry = Registry::new();
-
     #[cfg(feature = "test-harness")]
-    let registry = test_steps::with_probe_steps(registry);
+    if test_steps::requested() {
+        return test_steps::with_probe_steps(Registry::new());
+    }
 
-    registry
+    freshen_lib::homebrew::register(Registry::new())
 }

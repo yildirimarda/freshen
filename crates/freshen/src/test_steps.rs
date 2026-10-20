@@ -18,6 +18,14 @@ const IDS: [StepId; 16] = [
     "probe-8", "probe-9", "probe-10", "probe-11", "probe-12", "probe-13", "probe-14", "probe-15",
 ];
 
+/// Returns `true` when the test harness asked for probe steps.
+///
+/// The probe steps replace the built-in registry, so a test that describes its
+/// own steps never also runs the real Homebrew steps.
+pub fn requested() -> bool {
+    std::env::var_os(ENV_VAR).is_some()
+}
+
 /// Registers one probe step per `FRESHEN_TEST_STEPS` entry.
 pub fn with_probe_steps(mut registry: Registry) -> Registry {
     let Some(value) = std::env::var_os(ENV_VAR) else {
