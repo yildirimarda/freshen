@@ -195,6 +195,13 @@ mod tests {
     }
 
     #[test]
+    fn built_in_registry_is_valid() {
+        let registry = register(homebrew::register(containers::register(Registry::new())));
+
+        assert_eq!(registry.validate(), Ok(()));
+    }
+
+    #[test]
     fn registry_runs_uv_and_mise_last() {
         for platform in [Platform::Macos, Platform::Linux] {
             assert_eq!(

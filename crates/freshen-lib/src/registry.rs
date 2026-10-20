@@ -8,7 +8,8 @@
 //! [`Registry::ordered_for`] also drops steps that do not support the platform
 //! of the run. A prerequisite that is filtered out this way does not constrain
 //! its dependants: a step can declare a macOS-only prerequisite and still run
-//! on Linux.
+//! on Linux. Prerequisites and conflicts that name no registered step are
+//! rejected, as are dependency cycles.
 
 use std::collections::{HashMap, HashSet};
 
@@ -18,6 +19,24 @@ use crate::step::{Step, StepId};
 /// A problem that prevents the registry from producing a run order.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RegistryError {
+    /// A step names a prerequisite that is not registered.
+    #[error("step `{step}` declares unknown prerequisite `{prerequisite}`")]
+    UnknownPrerequisite {
+        /// Step that declared the prerequisite.
+        step: StepId,
+        /// Prerequisite id that is not registered.
+        prerequisite: StepId,
+    },
+
+    /// A step names a conflict that is not registered.
+    #[error("step `{step}` declares unknown conflict `{conflict}`")]
+    UnknownConflict {
+        /// Step that declared the conflict.
+        step: StepId,
+        /// Conflict id that is not registered.
+        conflict: StepId,
+    },
+
     /// The prerequisites of the listed steps form a cycle.
     #[error("step dependency cycle: {}", .steps.join(" -> "))]
     DependencyCycle {
@@ -72,16 +91,66 @@ impl Registry {
         self.steps.iter().map(|step| step.as_ref())
     }
 
-    /// Steps that support `platform`, ordered so prerequisites run first.
+    /// Validates the step graph before it is used.
     ///
-    /// Independent steps keep their registration order. Prerequisites that are
-    /// not registered or were filtered out for this platform are ignored.
+    /// Every prerequisite and conflict must name a registered step. Cycles are
+    /// checked per platform, because a prerequisite that does not support the
+    /// platform of a run does not constrain its dependants.
     ///
     /// # Errors
     ///
-    /// Returns [`RegistryError::DependencyCycle`] when prerequisites form a
-    /// cycle and no complete order exists.
+    /// Returns [`RegistryError::UnknownPrerequisite`] or
+    /// [`RegistryError::UnknownConflict`] when a step names an id that is not
+    /// registered, and [`RegistryError::DependencyCycle`] when prerequisites
+    /// form a cycle on a platform and no complete order exists.
+    pub fn validate(&self) -> Result<(), RegistryError> {
+        self.validate_references()?;
+        for platform in Platform::ALL {
+            self.order_for(platform)?;
+        }
+        Ok(())
+    }
+
+    fn validate_references(&self) -> Result<(), RegistryError> {
+        let known: HashSet<StepId> = self.steps.iter().map(|step| step.id()).collect();
+
+        for step in &self.steps {
+            let id = step.id();
+            for &prerequisite in step.prerequisites() {
+                if !known.contains(prerequisite) {
+                    return Err(RegistryError::UnknownPrerequisite {
+                        step: id,
+                        prerequisite,
+                    });
+                }
+            }
+            for &conflict in step.conflicts() {
+                if !known.contains(conflict) {
+                    return Err(RegistryError::UnknownConflict { step: id, conflict });
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Steps that support `platform`, ordered so prerequisites run first.
+    ///
+    /// Independent steps keep their registration order. Prerequisites that do
+    /// not support `platform` are ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryError::UnknownPrerequisite`] or
+    /// [`RegistryError::UnknownConflict`] when a step names an id that is not
+    /// registered, and [`RegistryError::DependencyCycle`] when prerequisites
+    /// form a cycle and no complete order exists.
     pub fn ordered_for(&self, platform: Platform) -> Result<Vec<&dyn Step>, RegistryError> {
+        self.validate_references()?;
+        self.order_for(platform)
+    }
+
+    fn order_for(&self, platform: Platform) -> Result<Vec<&dyn Step>, RegistryError> {
         let included: Vec<&dyn Step> = self
             .steps
             .iter()
@@ -140,8 +209,10 @@ impl Registry {
     ///
     /// # Errors
     ///
-    /// Returns [`RegistryError::DependencyCycle`] when prerequisites form a
-    /// cycle and no complete order exists.
+    /// Returns [`RegistryError::UnknownPrerequisite`] or
+    /// [`RegistryError::UnknownConflict`] when a step names an id that is not
+    /// registered, and [`RegistryError::DependencyCycle`] when prerequisites
+    /// form a cycle and no complete order exists.
     pub fn ordered_for_current(&self) -> Result<Vec<&dyn Step>, RegistryError> {
         match Platform::current() {
             Some(platform) => self.ordered_for(platform),
@@ -160,6 +231,7 @@ mod tests {
         id: StepId,
         platforms: &'static [Platform],
         prerequisites: &'static [StepId],
+        conflicts: &'static [StepId],
     }
 
     impl TestStep {
@@ -168,6 +240,7 @@ mod tests {
                 id,
                 platforms: &Platform::ALL,
                 prerequisites: &[],
+                conflicts: &[],
             }
         }
 
@@ -176,6 +249,7 @@ mod tests {
                 id,
                 platforms,
                 prerequisites: &[],
+                conflicts: &[],
             }
         }
 
@@ -184,6 +258,16 @@ mod tests {
                 id,
                 platforms: &Platform::ALL,
                 prerequisites,
+                conflicts: &[],
+            }
+        }
+
+        fn conflicting(id: StepId, conflicts: &'static [StepId]) -> Self {
+            Self {
+                id,
+                platforms: &Platform::ALL,
+                prerequisites: &[],
+                conflicts,
             }
         }
     }
@@ -211,6 +295,10 @@ mod tests {
 
         fn prerequisites(&self) -> &'static [StepId] {
             self.prerequisites
+        }
+
+        fn conflicts(&self) -> &'static [StepId] {
+            self.conflicts
         }
 
         fn platforms(&self) -> &'static [Platform] {
@@ -377,5 +465,110 @@ mod tests {
                 steps: vec!["first", "second"],
             })
         );
+    }
+
+    #[test]
+    fn rejects_unknown_prerequisites() {
+        let registry = Registry::new().with(TestStep::after("casks", &["brew"]));
+
+        let error = registry.ordered_for(Platform::Macos).err();
+
+        assert_eq!(
+            error,
+            Some(RegistryError::UnknownPrerequisite {
+                step: "casks",
+                prerequisite: "brew",
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_conflicts() {
+        let registry = Registry::new().with(TestStep::conflicting("mas", &["brew"]));
+
+        let error = registry.ordered_for(Platform::Macos).err();
+
+        assert_eq!(
+            error,
+            Some(RegistryError::UnknownConflict {
+                step: "mas",
+                conflict: "brew",
+            })
+        );
+    }
+
+    #[test]
+    fn error_messages_name_the_unknown_id_and_the_step_that_declared_it() {
+        let unknown_prerequisite = Registry::new()
+            .with(TestStep::after("casks", &["brew"]))
+            .ordered_for(Platform::Macos)
+            .err();
+        let unknown_conflict = Registry::new()
+            .with(TestStep::conflicting("mas", &["brew"]))
+            .ordered_for(Platform::Macos)
+            .err();
+
+        assert_eq!(
+            unknown_prerequisite.map(|error| error.to_string()),
+            Some("step `casks` declares unknown prerequisite `brew`".to_owned())
+        );
+        assert_eq!(
+            unknown_conflict.map(|error| error.to_string()),
+            Some("step `mas` declares unknown conflict `brew`".to_owned())
+        );
+    }
+
+    #[test]
+    fn validate_accepts_a_graph_with_known_references() {
+        let registry = Registry::new()
+            .with(TestStep::new("brew"))
+            .with(TestStep::after("casks", &["brew"]))
+            .with(TestStep::conflicting("mas", &["brew"]));
+
+        assert_eq!(registry.validate(), Ok(()));
+    }
+
+    #[test]
+    fn validate_rejects_unknown_references() {
+        let unknown_prerequisite = Registry::new().with(TestStep::after("casks", &["brew"]));
+        let unknown_conflict = Registry::new().with(TestStep::conflicting("mas", &["brew"]));
+
+        assert_eq!(
+            unknown_prerequisite.validate(),
+            Err(RegistryError::UnknownPrerequisite {
+                step: "casks",
+                prerequisite: "brew",
+            })
+        );
+        assert_eq!(
+            unknown_conflict.validate(),
+            Err(RegistryError::UnknownConflict {
+                step: "mas",
+                conflict: "brew",
+            })
+        );
+    }
+
+    #[test]
+    fn validate_rejects_dependency_cycles() {
+        let registry = Registry::new()
+            .with(TestStep::after("first", &["second"]))
+            .with(TestStep::after("second", &["first"]));
+
+        assert_eq!(
+            registry.validate(),
+            Err(RegistryError::DependencyCycle {
+                steps: vec!["first", "second"],
+            })
+        );
+    }
+
+    #[test]
+    fn validate_ignores_prerequisites_that_do_not_support_the_platform() {
+        let registry = Registry::new()
+            .with(TestStep::on("brew", &[Platform::Macos]))
+            .with(TestStep::after("mise", &["brew"]));
+
+        assert_eq!(registry.validate(), Ok(()));
     }
 }
