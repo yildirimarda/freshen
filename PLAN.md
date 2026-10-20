@@ -63,7 +63,7 @@ Goal: one tool for macOS, Linux and Windows, written in Rust and shipped as a si
 - [x] Detect duplicate step ids in the registry and fail with a clear message instead of letting one shadow the other during dependency resolution, covered by tests
 - [x] Detect WSL and container environments in the OS abstraction layer (for example `/proc/version`, `/.dockerenv`, `WSL_DISTRO_NAME`) so Linux steps can adapt or skip, covered by tests with injected probe facts
 - [x] Fall back to walking the parent process chain when no environment marker identifies the terminal application, so the host terminal is still known on Linux and Windows; cover it with a fake process table
-- [ ] Extend the stub harness so each stub can return canned stdout, stderr and exit status per invocation, so ported steps can be tested against recorded command transcripts
+- [x] Extend the stub harness so each stub can return canned stdout, stderr and exit status per invocation, so ported steps can be tested against recorded command transcripts
 - [ ] Extend the stub harness with scripted stdin so the interactive quit prompt (yes / skip quitting / skip casks) is covered end to end
 - [ ] Remove the deprecated `update-all.sh` compatibility shim and replace the zsh syntax step in `.github/workflows/ci.yml` with a check for the shim (requires a human to apply the workflow change, since agents cannot edit `.github/workflows/`)
 - [ ] Make the Rust test targets compile on the MSRV and extend the MSRV CI job to `cargo check --workspace --all-targets`; the runner tests currently compare `ExitCode` values, which only implements `PartialEq` after 1.81
