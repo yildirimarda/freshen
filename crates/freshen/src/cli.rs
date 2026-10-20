@@ -16,6 +16,10 @@ pub struct Cli {
     #[arg(long)]
     pub dry_run: bool,
 
+    /// List every known step, whether it was detected and why it would be skipped.
+    #[arg(long)]
+    pub list_steps: bool,
+
     /// Only run the named steps (comma-separated, repeatable).
     #[arg(long, value_name = "STEP", value_delimiter = ',', action = ArgAction::Append)]
     pub only: Vec<String>,
@@ -67,6 +71,7 @@ mod tests {
         let cli = parse(&["freshen"]);
         let options = cli.run_options();
 
+        assert!(!cli.list_steps);
         assert!(!options.is_dry_run());
         assert!(!options.assume_yes());
         assert!(!options.force_kill());
@@ -78,6 +83,7 @@ mod tests {
         let cli = parse(&[
             "freshen",
             "--dry-run",
+            "--list-steps",
             "--only",
             "brew",
             "--skip",
@@ -87,6 +93,7 @@ mod tests {
         ]);
         let options = cli.run_options();
 
+        assert!(cli.list_steps);
         assert!(options.is_dry_run());
         assert!(options.assume_yes());
         assert!(options.force_kill());
@@ -134,7 +141,14 @@ mod tests {
             .map(|error| error.to_string())
             .unwrap_or_default();
 
-        for flag in ["--dry-run", "--only", "--skip", "--yes", "--force-kill"] {
+        for flag in [
+            "--dry-run",
+            "--list-steps",
+            "--only",
+            "--skip",
+            "--yes",
+            "--force-kill",
+        ] {
             assert!(help.contains(flag), "help does not mention {flag}: {help}");
         }
     }
