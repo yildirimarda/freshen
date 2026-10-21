@@ -16,6 +16,7 @@ use std::path::Path;
 use crate::cleanup;
 use crate::homebrew::BREW;
 use crate::options::RunOptions;
+use crate::output::human;
 use crate::platform::Platform;
 use crate::process::{CommandSpec, NETWORK_RETRIES};
 use crate::registry::Registry;
@@ -62,7 +63,7 @@ impl Step for UvStep {
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
         let mut failures = Vec::new();
 
-        println!("uv: tool upgrade --all");
+        human!("uv: tool upgrade --all");
         if let Err(error) = CommandSpec::new("uv")
             .args(["tool", "upgrade", "--all"])
             .retry_transient_network(NETWORK_RETRIES)
@@ -126,17 +127,17 @@ impl Step for MiseStep {
         let mut failures = Vec::new();
 
         if !mise_installed_with_brew() {
-            println!("mise: self-update");
+            human!("mise: self-update");
             if let Err(error) = CommandSpec::new("mise")
                 .args(["self-update", "-y"])
                 .retry_transient_network(NETWORK_RETRIES)
                 .run()
             {
-                println!("warning: mise self-update skipped/failed: {error}");
+                human!("warning: mise self-update skipped/failed: {error}");
             }
         }
 
-        println!("mise: upgrade (node and other tools)");
+        human!("mise: upgrade (node and other tools)");
         if let Err(error) = CommandSpec::new("mise")
             .arg("upgrade")
             .retry_transient_network(NETWORK_RETRIES)

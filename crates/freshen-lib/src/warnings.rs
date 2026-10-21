@@ -20,6 +20,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
+use crate::output::human;
 use crate::process::CommandSpec;
 
 /// Warning shown before zellij is upgraded from inside a zellij session.
@@ -84,7 +85,7 @@ impl StaleToolProcess {
 /// Warns when zellij is about to be upgraded from inside a zellij session.
 pub fn warn_if_zellij_upgrade(outdated_formulae: &str) {
     if zellij_warning_applies(outdated_formulae, inside_zellij_session()) {
-        println!("warning: {ZELLIJ_WARNING}");
+        human!("warning: {ZELLIJ_WARNING}");
     }
 }
 
@@ -132,13 +133,13 @@ pub fn warn_about_breakable_sessions(outdated_formulae: &str) {
     };
 
     if zellij_warning_applies(outdated_formulae, inside_zellij) {
-        println!("warning: {ZELLIJ_WARNING}");
+        human!("warning: {ZELLIJ_WARNING}");
     } else if zellij_outdated
         && processes
             .iter()
             .any(|process| is_zellij_process(&process.command))
     {
-        println!("warning: {ZELLIJ_SERVER_WARNING}");
+        human!("warning: {ZELLIJ_SERVER_WARNING}");
     }
 
     if tmux_outdated
@@ -147,7 +148,7 @@ pub fn warn_about_breakable_sessions(outdated_formulae: &str) {
                 .iter()
                 .any(|process| is_tmux_process(&process.command)))
     {
-        println!("warning: {TMUX_WARNING}");
+        human!("warning: {TMUX_WARNING}");
     }
 
     if ssh_outdated
@@ -156,7 +157,7 @@ pub fn warn_about_breakable_sessions(outdated_formulae: &str) {
                 .iter()
                 .any(|process| is_ssh_process(&process.command)))
     {
-        println!("warning: {SSH_WARNING}");
+        human!("warning: {SSH_WARNING}");
     }
 }
 
@@ -174,9 +175,9 @@ pub fn warn_about_running_docker_builds() {
         return;
     }
 
-    println!("warning: {DOCKER_BUILD_WARNING}");
+    human!("warning: {DOCKER_BUILD_WARNING}");
     for process in builds {
-        println!(
+        human!(
             "   - pid {}: {}",
             process.pid,
             truncate_chars(&process.command, 80)
@@ -420,14 +421,14 @@ fn warn_about_stale_tool_processes_with(probe: &dyn ProcessProbe, prunable: &[Pr
             continue;
         }
 
-        println!("warning: {}", stale_tool_warning(tool));
+        human!("warning: {}", stale_tool_warning(tool));
         for entry in entries {
             let process = StaleToolProcess {
                 pid: entry.pid,
                 parent: probe.parent_name(entry.ppid, &processes),
                 command: entry.command,
             };
-            println!("{}", process.display_line());
+            human!("{}", process.display_line());
         }
     }
 }
