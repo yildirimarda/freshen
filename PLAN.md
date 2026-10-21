@@ -109,7 +109,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Extend terminal emulator detection with iTerm2, Apple Terminal, Rio, Termius, Zed, Cursor, Windsurf and JetBrains IDE terminals (bundle ids and `TERM_PROGRAM` values) so freshen never quits the terminal that runs it, covered by tests
 - [x] Generalise the README wording: replace the zellij-only bullet and the Ghostty/iTerm2 examples with the list of supported terminals and session managers, generated from the same tables where possible
 - [x] Implement read-only `check()` for the uv and mise steps (`uv tool list --outdated`, `mise outdated`) so `--check` reports pending tool updates instead of always reporting them up to date, covered by recorded transcripts
-- [ ] Run independent read-only `check()` queries concurrently with bounded concurrency (`--jobs N`, default 4) while keeping the printed order and the summary deterministic, covered by tests with slow stubs
+- [x] Run independent read-only `check()` queries concurrently with bounded concurrency (`--jobs N`, default 4) while keeping the printed order and the summary deterministic, covered by tests with slow stubs
 - [ ] Fall back to the detected terminal app's bundle id when `__CFBundleIdentifier` is absent, so the cask quit protection also covers hosts identified only through `TERM_PROGRAM` or environment markers, covered by tests
 
 ## Milestone 4: CI, Configuration and macOS Depth
