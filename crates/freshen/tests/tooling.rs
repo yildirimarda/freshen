@@ -44,6 +44,9 @@ fn install_mise(tools: &StubTools) {
   "upgrade")
     exit "${FRESHEN_MISE_UPGRADE_STATUS:-0}"
     ;;
+  "ls --prunable --json")
+    printf '{}'
+    ;;
   "prune -y")
     exit "${FRESHEN_MISE_PRUNE_STATUS:-0}"
     ;;
@@ -123,11 +126,8 @@ fn mise_self_updates_upgrades_and_prunes_when_not_installed_with_brew() {
             "brew list --formula mise",
             "mise self-update -y",
             "mise upgrade",
+            "mise ls --prunable --json",
             "mise prune -y",
-            "mise where node",
-            "mise where python",
-            "mise where java",
-            "mise where go",
         ]
     );
 }
@@ -151,11 +151,8 @@ fn mise_installed_with_brew_is_not_self_updated() {
         [
             "brew list --formula mise",
             "mise upgrade",
+            "mise ls --prunable --json",
             "mise prune -y",
-            "mise where node",
-            "mise where python",
-            "mise where java",
-            "mise where go",
         ]
     );
 }
@@ -173,11 +170,8 @@ fn mise_self_updates_when_brew_is_not_installed() {
         [
             "mise self-update -y",
             "mise upgrade",
-            "mise prune -y",
-            "mise where node",
-            "mise where python",
-            "mise where java",
-            "mise where go"
+            "mise ls --prunable --json",
+            "mise prune -y"
         ]
     );
 }
@@ -200,11 +194,8 @@ fn a_failing_mise_self_update_is_only_a_warning() {
         [
             "mise self-update -y",
             "mise upgrade",
-            "mise prune -y",
-            "mise where node",
-            "mise where python",
-            "mise where java",
-            "mise where go"
+            "mise ls --prunable --json",
+            "mise prune -y"
         ]
     );
     assert!(
@@ -232,11 +223,8 @@ fn a_failing_mise_upgrade_still_prunes_and_fails_the_step() {
         [
             "mise self-update -y",
             "mise upgrade",
-            "mise prune -y",
-            "mise where node",
-            "mise where python",
-            "mise where java",
-            "mise where go"
+            "mise ls --prunable --json",
+            "mise prune -y"
         ]
     );
     assert!(
@@ -265,8 +253,8 @@ fn install_stale_node(tools: &StubTools) {
     tools.set_script(
         "mise",
         r#"case "$*" in
-  "where node")
-    printf '/home/user/.local/share/mise/installs/node/22.1.0\n'
+  "ls --prunable --json")
+    printf '%s' '{"node":[{"version":"20.0.0","install_path":"/home/user/.local/share/mise/installs/node/20.0.0"}]}'
     ;;
 esac"#,
     );
@@ -277,7 +265,8 @@ esac"#,
     printf '%s\n' \
       '  100     1 /home/user/.local/share/mise/installs/node/20.0.0/bin/node /path/old server.js' \
       '  101     1 /home/user/.local/share/mise/installs/node/22.1.0/bin/node /path/current.js' \
-      '  102     1 /usr/bin/node /path/system.js'
+      '  102     1 /usr/bin/node /path/system.js' \
+      '  103     1 /home/user/.local/share/mise/installs/node/24.0.0/bin/node /path/newer.js'
     ;;
   "-o comm= -p 1")
     printf '/Applications/LM Studio.app/Contents/MacOS/LM Studio\n'
@@ -311,16 +300,17 @@ fn warns_about_processes_still_running_an_old_node_version() {
         !text.contains("pid 101"),
         "the active node version must not be reported: {text}"
     );
+    assert!(
+        !text.contains("pid 103"),
+        "a newer non-active version that mise keeps must not be reported as old: {text}"
+    );
     assert_eq!(
         tools.step_calls(),
         [
             "mise self-update -y",
             "mise upgrade",
+            "mise ls --prunable --json",
             "mise prune -y",
-            "mise where node",
-            "mise where python",
-            "mise where java",
-            "mise where go",
             "ps -axo pid=,ppid=,command=",
             "ps -o comm= -p 1",
         ]
@@ -333,17 +323,8 @@ fn warns_about_old_node_python_java_and_go_processes_with_their_parent_apps() {
     tools.set_script(
         "mise",
         r#"case "$*" in
-  "where node")
-    printf '/home/user/.local/share/mise/installs/node/22.1.0\n'
-    ;;
-  "where python")
-    printf '/home/user/.local/share/mise/installs/python/3.12.0\n'
-    ;;
-  "where java")
-    printf '/home/user/.local/share/mise/installs/java/21.0.0\n'
-    ;;
-  "where go")
-    printf '/home/user/.local/share/mise/installs/go/1.22.0\n'
+  "ls --prunable --json")
+    printf '%s' '{"node":[{"version":"20.0.0","install_path":"/home/user/.local/share/mise/installs/node/20.0.0"}],"python":[{"version":"3.10.0","install_path":"/home/user/.local/share/mise/installs/python/3.10.0"}],"java":[{"version":"17.0.0","install_path":"/home/user/.local/share/mise/installs/java/17.0.0"}],"go":[{"version":"1.21.0","install_path":"/home/user/.local/share/mise/installs/go/1.21.0"}]}'
     ;;
 esac"#,
     );
@@ -431,8 +412,8 @@ fn no_stale_node_warning_when_every_process_uses_the_active_version() {
     tools.set_script(
         "mise",
         r#"case "$*" in
-  "where node")
-    printf '/home/user/.local/share/mise/installs/node/22.1.0\n'
+  "ls --prunable --json")
+    printf '%s' '{"node":[{"version":"20.0.0","install_path":"/home/user/.local/share/mise/installs/node/20.0.0"}]}'
     ;;
 esac"#,
     );

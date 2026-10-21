@@ -13,7 +13,9 @@
 //! * Stopping Colima while a Docker build is running interrupts the build.
 //! * `mise prune` cannot remove an old toolchain version while a process
 //!   started by another application (an MCP server, for example) still runs
-//!   from it. Node, Python, Java and Go are checked.
+//!   from it. Only versions that `mise ls --prunable` lists are reported, so a
+//!   version kept by a config is not mistaken for an old one. Node, Python,
+//!   Java and Go are checked.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -329,25 +331,91 @@ fn program_name(command: &str) -> &str {
     name.strip_suffix(".exe").unwrap_or(name)
 }
 
-/// Warns about processes still running from an old toolchain install under mise.
-///
-/// The probe is best effort: a missing `mise`, a failed process-table query or
-/// an empty result prints nothing and never fails the step. Only toolchains
-/// that mise reports an active version for are checked. Windows reads the table
-/// through CIM; Unix uses `ps`.
-pub fn warn_about_stale_tool_processes() {
-    warn_about_stale_tool_processes_with(&HostProcessProbe);
+/// An installed tool version that `mise prune` will remove.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrunableTool {
+    /// Tool name, for example `node`.
+    pub tool: String,
+    /// Directory the version is installed in.
+    pub path: PathBuf,
 }
 
-fn warn_about_stale_tool_processes_with(probe: &dyn ProcessProbe) {
-    let active_toolchains = active_toolchain_paths();
-    if active_toolchains.is_empty() {
+/// Lists the tool versions `mise prune` would remove.
+///
+/// `mise ls --prunable --json` is the same determination `mise prune` uses, so
+/// a version that a config still needs is not listed even when it is not the
+/// active version. Best effort: a missing `mise` or unexpected output yields
+/// an empty list and never fails the step.
+pub fn prunable_tool_versions() -> Vec<PrunableTool> {
+    let Ok(output) = CommandSpec::new("mise")
+        .args(["ls", "--prunable", "--json"])
+        .run()
+    else {
+        return Vec::new();
+    };
+
+    parse_prunable_tool_versions(output.stdout())
+}
+
+fn parse_prunable_tool_versions(json: &str) -> Vec<PrunableTool> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let Some(tools) = value.as_object() else {
+        return Vec::new();
+    };
+
+    let mut prunable = Vec::new();
+    for (tool, versions) in tools {
+        if !TOOLCHAINS.contains(&tool.as_str()) {
+            continue;
+        }
+        let Some(versions) = versions.as_array() else {
+            continue;
+        };
+        for version in versions {
+            let Some(path) = version.get("install_path").and_then(|path| path.as_str()) else {
+                continue;
+            };
+            if path.is_empty() {
+                continue;
+            }
+            prunable.push(PrunableTool {
+                tool: tool.clone(),
+                path: PathBuf::from(path),
+            });
+        }
+    }
+    prunable
+}
+
+/// Warns about processes still running from a toolchain version mise will prune.
+///
+/// The caller passes the versions from [`prunable_tool_versions`] because the
+/// listing has to be taken before `mise prune` removes them. The probe is best
+/// effort: a failed process-table query or an empty result prints nothing and
+/// never fails the step. Windows reads the table through CIM; Unix uses `ps`.
+pub fn warn_about_stale_tool_processes(prunable: &[PrunableTool]) {
+    warn_about_stale_tool_processes_with(&HostProcessProbe, prunable);
+}
+
+fn warn_about_stale_tool_processes_with(probe: &dyn ProcessProbe, prunable: &[PrunableTool]) {
+    if prunable.is_empty() {
         return;
     }
     let processes = probe.processes();
 
-    for (tool, active_path) in active_toolchains {
-        let entries = stale_tool_entries(&processes, &active_path);
+    for tool in TOOLCHAINS {
+        let paths: Vec<&Path> = prunable
+            .iter()
+            .filter(|version| version.tool == tool)
+            .map(|version| version.path.as_path())
+            .collect();
+        if paths.is_empty() {
+            continue;
+        }
+
+        let entries = stale_tool_entries(&processes, &paths);
         if entries.is_empty() {
             continue;
         }
@@ -364,23 +432,6 @@ fn warn_about_stale_tool_processes_with(probe: &dyn ProcessProbe) {
     }
 }
 
-fn active_toolchain_paths() -> Vec<(&'static str, PathBuf)> {
-    TOOLCHAINS
-        .iter()
-        .filter_map(|&tool| active_tool_path(tool).map(|path| (tool, path)))
-        .collect()
-}
-
-fn active_tool_path(tool: &str) -> Option<PathBuf> {
-    let output = CommandSpec::new("mise").args(["where", tool]).run().ok()?;
-    let path = output.stdout().trim();
-    if path.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(path))
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ProcessEntry {
     pid: u32,
@@ -388,32 +439,23 @@ struct ProcessEntry {
     command: String,
 }
 
-fn stale_tool_entries(processes: &[ProcessEntry], active_tool: &Path) -> Vec<ProcessEntry> {
-    let Some(install_dir) = parent_directory(active_tool) else {
+fn stale_tool_entries(processes: &[ProcessEntry], prunable_paths: &[&Path]) -> Vec<ProcessEntry> {
+    let prefixes: Vec<String> = prunable_paths
+        .iter()
+        .map(|path| format!("{}/", normalized_path(path)))
+        .collect();
+    if prefixes.is_empty() {
         return Vec::new();
-    };
-    let install_prefix = format!("{install_dir}/");
-    let active_prefix = format!("{}/", normalized_path(active_tool));
+    }
 
     processes
         .iter()
         .filter(|process| {
             let command = normalize_path(&process.command);
-            command.contains(&install_prefix) && !command.contains(&active_prefix)
+            prefixes.iter().any(|prefix| command.contains(prefix))
         })
         .cloned()
         .collect()
-}
-
-/// Parent directory of `path`, using both `/` and `\` as separators.
-///
-/// Process command lines on Windows use backslashes, while `Path` on the test
-/// host may use different semantics. Normalising first keeps the check
-/// portable and testable on every platform.
-fn parent_directory(path: &Path) -> Option<String> {
-    let path = normalized_path(path);
-    let (parent, _) = path.rsplit_once('/')?;
-    Some(parent.to_owned())
 }
 
 fn normalized_path(path: &Path) -> String {
@@ -474,12 +516,13 @@ fn truncate_chars(text: &str, limit: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use super::{
         basename, is_docker_build, is_outdated, is_ssh_process, is_tmux_process, is_zellij_process,
-        parse_process_table, parse_windows_process_table, program_name, stale_tool_entries,
-        stale_tool_warning, zellij_warning_applies, ProcessEntry, ProcessProbe, StaleToolProcess,
+        parse_process_table, parse_prunable_tool_versions, parse_windows_process_table,
+        program_name, stale_tool_entries, stale_tool_warning, zellij_warning_applies, ProcessEntry,
+        ProcessProbe, PrunableTool, StaleToolProcess,
     };
 
     const ACTIVE_NODE: &str = "/home/user/.local/share/mise/installs/node/22.1.0";
@@ -595,16 +638,17 @@ not a process
     #[test]
     fn windows_install_paths_are_matched_with_either_separator() {
         let separator = '\u{1f}';
-        let active = r"C:\Users\me\AppData\Local\mise\installs\node\22.1.0";
+        let prunable = r"C:\Users\me\AppData\Local\mise\installs\node\20.0.0";
         let table = format!(
-            "100{separator}1{separator}{active}\\node.exe C:\\current\\server.js\r\n\
+            "100{separator}1{separator}C:\\Users\\me\\AppData\\Local\\mise\\installs\\node\\22.1.0\\node.exe C:\\current\\server.js\r\n\
              101{separator}1{separator}C:\\Users\\me\\AppData\\Local\\mise\\installs\\node\\20.0.0\\node.exe C:\\old\\server.js\r\n\
              102{separator}1{separator}C:\\Program Files\\nodejs\\node.exe C:\\system\\server.js\r\n\
-             103{separator}1{separator}C:/Users/me/AppData/Local/mise/installs/node/20.0.0/node.exe C:/old/forward.js\r\n"
+             103{separator}1{separator}C:/Users/me/AppData/Local/mise/installs/node/20.0.0/node.exe C:/old/forward.js\r\n\
+             104{separator}1{separator}C:\\Users\\me\\AppData\\Local\\mise\\installs\\node\\24.0.0\\node.exe C:\\newer\\server.js\r\n"
         );
         let processes = parse_windows_process_table(&table);
 
-        let stale = stale_tool_entries(&processes, Path::new(active));
+        let stale = stale_tool_entries(&processes, &[Path::new(prunable)]);
 
         assert_eq!(stale.len(), 2);
         assert_eq!(stale[0].pid, 101);
@@ -654,29 +698,77 @@ not a process
     }
 
     #[test]
-    fn only_processes_from_an_older_install_of_the_same_toolchain_are_stale() {
+    fn only_processes_from_versions_mise_will_prune_are_stale() {
         let table = format!(
             "\
   100 1 {ACTIVE_NODE}/bin/node /current.js
   101 1 /home/user/.local/share/mise/installs/node/20.0.0/bin/node /old.js
   102 1 /usr/bin/node /system.js
   103 1 /home/user/.local/share/mise/installs/node/20.0.0/bin/node-foo /old.js
+  104 1 /home/user/.local/share/mise/installs/node/24.0.0/bin/node /newer.js
   200 1 {ACTIVE_PYTHON}/bin/python3 /current.py
   201 1 /home/user/.local/share/mise/installs/python/3.10.0/bin/python3 /old.py
-"
+ "
         );
         let processes = parse_process_table(&table);
 
-        let stale = stale_tool_entries(&processes, Path::new(ACTIVE_NODE));
+        let prunable_node = [Path::new(
+            "/home/user/.local/share/mise/installs/node/20.0.0",
+        )];
+        let stale = stale_tool_entries(&processes, &prunable_node);
 
         assert_eq!(stale.len(), 2);
         assert_eq!(stale[0].pid, 101);
         assert_eq!(stale[1].pid, 103);
 
-        let stale = stale_tool_entries(&processes, Path::new(ACTIVE_PYTHON));
+        let prunable_python = [Path::new(
+            "/home/user/.local/share/mise/installs/python/3.10.0",
+        )];
+        let stale = stale_tool_entries(&processes, &prunable_python);
 
         assert_eq!(stale.len(), 1);
         assert_eq!(stale[0].pid, 201);
+    }
+
+    #[test]
+    fn prunable_versions_are_read_from_the_install_listing() {
+        let json = r#"{
+            "node": [
+                {"version": "20.0.0", "install_path": "/home/user/.local/share/mise/installs/node/20.0.0"},
+                {"version": "18.0.0", "install_path": "/home/user/.local/share/mise/installs/node/18.0.0"}
+            ],
+            "ruby": [
+                {"version": "3.3.0", "install_path": "/home/user/.local/share/mise/installs/ruby/3.3.0"}
+            ],
+            "python": [
+                {"version": "3.10.0"},
+                {"version": "", "install_path": ""}
+            ]
+        }"#;
+
+        let prunable = parse_prunable_tool_versions(json);
+
+        assert_eq!(
+            prunable,
+            [
+                PrunableTool {
+                    tool: "node".to_owned(),
+                    path: PathBuf::from("/home/user/.local/share/mise/installs/node/20.0.0"),
+                },
+                PrunableTool {
+                    tool: "node".to_owned(),
+                    path: PathBuf::from("/home/user/.local/share/mise/installs/node/18.0.0"),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn unreadable_prunable_listings_are_ignored() {
+        assert!(parse_prunable_tool_versions("").is_empty());
+        assert!(parse_prunable_tool_versions("not json").is_empty());
+        assert!(parse_prunable_tool_versions("[]").is_empty());
+        assert!(parse_prunable_tool_versions(r#"{"node": "20.0.0"}"#).is_empty());
     }
 
     #[test]
