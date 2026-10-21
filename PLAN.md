@@ -308,5 +308,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Probe both IPv4 and IPv6 (and allow overriding the endpoint) in the network preflight check so IPv6-only or filtered networks are not reported as unreachable, covered by tests with injected endpoints
 - [ ] Detect user-marked metered networks on macOS instead of only hotspot SSIDs, so the metered preflight check matches the system setting, covered by tests with injected command output
 - [ ] Make `StubTools` append each invocation to the stub log atomically, so integration tests can assert the calls of concurrently executed `--check` steps without interleaved lines, covered by a test that runs two stubs at once
+- [ ] Run every Windows command that needs a shell through `cmd.exe /C` with `cmd`-compatible quoting: the C runtime escapes a quote inside an argument with a backslash, which `cmd.exe` does not understand, so a quoted path arrives mangled
+- [ ] Verify the stub-based integration tests on `windows-latest`: while the Windows unit tests failed, the job stopped before that step, so the `.cmd` stubs have never been exercised in CI
 
 <!-- The agent appends newly found work here. -->

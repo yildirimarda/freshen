@@ -681,32 +681,37 @@ mod tests {
         assert_eq!(pids, [100, 102]);
     }
 
+    /// The arguments of a command in the form the zsh script writes them.
+    ///
+    /// A path argument is joined with the separator of the platform, so it is
+    /// normalized to the POSIX form before it is compared with the transcript.
+    fn transcript(spec: &super::CommandSpec) -> Vec<String> {
+        spec.arguments()
+            .iter()
+            .map(|argument| {
+                argument
+                    .to_string_lossy()
+                    .replace(std::path::MAIN_SEPARATOR, "/")
+            })
+            .collect()
+    }
+
     #[test]
     fn command_transcripts_match_the_zsh_script() {
         let app = std::path::Path::new("/Applications/Firefox.app");
 
         assert_eq!(
-            bundle_id_command(app).arguments(),
+            transcript(&bundle_id_command(app)),
             [
                 "read",
                 "/Applications/Firefox.app/Contents/Info",
                 "CFBundleIdentifier"
             ]
-            .map(std::ffi::OsString::from)
-            .to_vec()
         );
+        assert_eq!(transcript(&process_list_command()), ["-axo", "command="]);
+        assert_eq!(transcript(&pid_list_command()), ["-axo", "pid=,command="]);
         assert_eq!(
-            process_list_command().arguments(),
-            ["-axo", "command="].map(std::ffi::OsString::from).to_vec()
-        );
-        assert_eq!(
-            pid_list_command().arguments(),
-            ["-axo", "pid=,command="]
-                .map(std::ffi::OsString::from)
-                .to_vec()
-        );
-        assert_eq!(
-            quit_command("com.example.firefox").arguments(),
+            transcript(&quit_command("com.example.firefox")),
             [
                 "-e",
                 "with timeout of 3 seconds",
@@ -715,18 +720,11 @@ mod tests {
                 "-e",
                 "end timeout",
             ]
-            .map(std::ffi::OsString::from)
-            .to_vec()
         );
+        assert_eq!(transcript(&kill_command(&[10, 11])), ["-9", "10", "11"]);
         assert_eq!(
-            kill_command(&[10, 11]).arguments(),
-            ["-9", "10", "11"].map(std::ffi::OsString::from).to_vec()
-        );
-        assert_eq!(
-            open_command("com.example.firefox").arguments(),
+            transcript(&open_command("com.example.firefox")),
             ["-g", "-b", "com.example.firefox"]
-                .map(std::ffi::OsString::from)
-                .to_vec()
         );
     }
 }

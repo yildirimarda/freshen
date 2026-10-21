@@ -1511,17 +1511,24 @@ mod tests {
     fn a_windows_child_joins_its_job_before_it_can_start_a_grandchild() {
         use super::{win32, ProcessTree};
 
-        let marker =
-            std::env::temp_dir().join(format!("freshen-windows-job-{}.txt", std::process::id()));
+        let directory = std::env::temp_dir();
+        let marker_name = format!("freshen-windows-job-{}.txt", std::process::id());
+        let marker = directory.join(&marker_name);
         let _ = std::fs::remove_file(&marker);
+
+        // The script is handed to `cmd.exe` without a single quote character:
+        // the C runtime escapes a quote inside an argument with a backslash,
+        // which `cmd.exe` does not understand, so the redirection would write
+        // to a file with a mangled name. The marker is therefore written
+        // relative to the working directory of the child.
         let script = format!(
-            "echo started>\"{}\" & start \"\" /B ping -n 30 127.0.0.1 >nul & ping -n 30 127.0.0.1 >nul",
-            marker.display()
+            "echo started>{marker_name} & start /B ping -n 30 127.0.0.1 >nul & ping -n 30 127.0.0.1 >nul"
         );
 
         let mut command = std::process::Command::new("cmd");
         command
             .args(["/C", &script])
+            .current_dir(&directory)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
@@ -1541,6 +1548,10 @@ mod tests {
 
         let mut tree = ProcessTree::new(&child)
             .unwrap_or_else(|error| panic!("failed to assign and resume the child: {error}"));
+        assert!(
+            tree.job.is_some(),
+            "the child was not assigned to a job object"
+        );
 
         let deadline = Instant::now() + Duration::from_secs(10);
         while !marker.exists() {

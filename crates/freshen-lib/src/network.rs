@@ -903,12 +903,22 @@ pT8yRnSiD29WLvz412hxX/k=
         (address, handle)
     }
 
-    fn ca_bundle() -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "freshen-test-ca-{}-{}.pem",
+    /// A path to a file in the temporary directory that is unique per test.
+    ///
+    /// The name of a test thread contains `::`, which is not a valid file name
+    /// on Windows, so the name is built from a counter instead.
+    fn temp_path(name: &str, extension: &str) -> std::path::PathBuf {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+        std::env::temp_dir().join(format!(
+            "freshen-test-{name}-{}-{}.{extension}",
             std::process::id(),
-            std::thread::current().name().unwrap_or("test")
-        ));
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ))
+    }
+
+    fn ca_bundle() -> std::path::PathBuf {
+        let path = temp_path("ca", "pem");
         std::fs::write(&path, CA_CERTIFICATE)
             .unwrap_or_else(|error| panic!("failed to write test CA bundle: {error}"));
         path
@@ -1125,11 +1135,7 @@ pT8yRnSiD29WLvz412hxX/k=
     #[test]
     fn a_malformed_ca_bundle_fails_the_network_check() {
         let (address, server) = tls_server();
-        let path = std::env::temp_dir().join(format!(
-            "freshen-test-bad-ca-{}-{}.pem",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("test")
-        ));
+        let path = temp_path("bad-ca", "pem");
         std::fs::write(&path, "this is not a certificate")
             .unwrap_or_else(|error| panic!("failed to write test CA bundle: {error}"));
         let environment = environment(&[(
@@ -1160,8 +1166,15 @@ pT8yRnSiD29WLvz412hxX/k=
     #[test]
     fn an_unreadable_ca_bundle_fails_the_network_check() {
         let (address, server) = tls_server();
-        let environment =
-            environment(&[("SSL_CERT_FILE", "/freshen/definitely/not/a/certificate.pem")]);
+        // A path that does not exist, so the bundle cannot be read on any
+        // platform.
+        let path = temp_path("missing-ca", "pem");
+        let _ = std::fs::remove_file(&path);
+        let environment = environment(&[(
+            "SSL_CERT_FILE",
+            path.to_str()
+                .unwrap_or_else(|| panic!("test CA path is not UTF-8")),
+        )]);
 
         let error = check_failure(
             &environment,

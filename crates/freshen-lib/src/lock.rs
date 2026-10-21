@@ -14,7 +14,7 @@
 
 use std::env;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::thread;
@@ -201,6 +201,19 @@ impl RunLock {
     pub fn pid_path(&self) -> &Path {
         &self.pid_path
     }
+
+    /// The PID recorded in the lock file, read through the locked handle.
+    ///
+    /// Windows locks the byte range the run holds, so a second handle cannot
+    /// read the file at all; the handle that took the lock can.
+    #[must_use]
+    pub fn recorded_pid(&self) -> Option<u32> {
+        let mut file = &self.file;
+        file.seek(SeekFrom::Start(0)).ok()?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).ok()?;
+        contents.trim().parse().ok()
+    }
 }
 
 impl Drop for RunLock {
@@ -337,9 +350,13 @@ mod tests {
         let lock = RunLock::acquire_in(&directory)
             .unwrap_or_else(|error| panic!("stale lock must not block a run: {error}"));
         assert_eq!(lock.path(), path);
-        let recorded = fs::read_to_string(&path)
-            .unwrap_or_else(|error| panic!("failed to read lock file: {error}"));
-        assert_eq!(recorded.trim(), std::process::id().to_string());
+        // The lock file is locked for the whole run, so it is read through the
+        // handle that holds the lock instead of through a second one.
+        assert_eq!(
+            lock.recorded_pid(),
+            Some(std::process::id()),
+            "the lock file must record the PID of the run that holds it"
+        );
         let recorded = fs::read_to_string(lock.pid_path())
             .unwrap_or_else(|error| panic!("failed to read PID sidecar: {error}"));
         assert_eq!(recorded.trim(), std::process::id().to_string());
