@@ -271,10 +271,79 @@ pub fn network_failure(text: &str) -> Option<NetworkFailure> {
 }
 
 fn captured_network_failure(stdout: &[u8], stderr: &[u8]) -> Option<NetworkFailure> {
-    let mut text = String::from_utf8_lossy(stdout).into_owned();
+    let mut text = sanitize_output(&String::from_utf8_lossy(stdout));
     text.push('\n');
-    text.push_str(&String::from_utf8_lossy(stderr));
+    text.push_str(&sanitize_output(&String::from_utf8_lossy(stderr)));
     network_failure(&text)
+}
+
+/// Turns captured bytes into the text the parsers read.
+fn captured_text(bytes: &[u8]) -> String {
+    sanitize_output(&String::from_utf8_lossy(bytes))
+}
+
+/// Removes the escape sequences and the progress redraws a tool wrote.
+///
+/// A tool that draws a progress bar rewrites the same line over and over and
+/// ends it with a carriage return, and it colours its output with escape
+/// sequences. The parsers read the captured text, so both would end up
+/// inside the values they extract. The live output keeps the original bytes,
+/// so the user still sees the progress.
+#[must_use]
+pub fn sanitize_output(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut line_start = 0;
+
+    for (index, character) in text.char_indices() {
+        match character {
+            '\n' => {
+                result.push_str(&strip_escape_sequences(&text[line_start..index]));
+                result.push('\n');
+                line_start = index + 1;
+            }
+            '\r' => {
+                // A carriage return rewrites the line: what came before it is
+                // replaced by what follows.
+                line_start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    result.push_str(&strip_escape_sequences(&text[line_start..]));
+
+    result
+}
+
+/// Removes the ANSI escape sequences from `text`.
+fn strip_escape_sequences(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut characters = text.chars().peekable();
+
+    while let Some(character) = characters.next() {
+        if character != '\u{1b}' {
+            result.push(character);
+            continue;
+        }
+
+        match characters.peek() {
+            // A control sequence: `ESC [`, its parameters and a final byte.
+            Some(&'[') => {
+                characters.next();
+                for character in characters.by_ref() {
+                    if matches!(character, '\u{40}'..='\u{7e}') {
+                        break;
+                    }
+                }
+            }
+            // Any other escape sequence: `ESC` and one more byte.
+            Some(_) => {
+                characters.next();
+            }
+            None => {}
+        }
+    }
+
+    result
 }
 
 /// Description of one external command.
@@ -304,6 +373,7 @@ pub struct CommandSpec {
     retries: u32,
     retry_transient_network_only: bool,
     backoff: Backoff,
+    neutral_locale: bool,
 }
 
 impl CommandSpec {
@@ -320,6 +390,7 @@ impl CommandSpec {
             retries: 0,
             retry_transient_network_only: false,
             backoff: Backoff::default(),
+            neutral_locale: false,
         }
     }
 
@@ -422,6 +493,27 @@ impl CommandSpec {
         self
     }
 
+    /// Runs the command in a neutral locale, so its output can be parsed.
+    ///
+    /// Package managers and system tools translate their messages and the
+    /// labels of their tables, which would break every parser that reads
+    /// them. The command therefore runs with `LC_ALL=C` and `LANG=C`, and on
+    /// Windows with a UTF-8 console and without interactivity.
+    ///
+    /// The variables are applied last, so they win over the ones the user
+    /// set in the environment freshen was started from.
+    #[must_use]
+    pub fn neutral_locale(mut self) -> Self {
+        self.neutral_locale = true;
+        self
+    }
+
+    /// Whether the command runs in a neutral locale.
+    #[must_use]
+    pub fn uses_neutral_locale(&self) -> bool {
+        self.neutral_locale
+    }
+
     /// Program name or path, as given to [`CommandSpec::new`].
     #[must_use]
     pub fn program(&self) -> &OsStr {
@@ -496,8 +588,8 @@ impl CommandSpec {
                     program,
                     timeout,
                     output: Box::new(ProcessOutput {
-                        stdout: String::from_utf8_lossy(&stdout).into_owned(),
-                        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+                        stdout: captured_text(&stdout),
+                        stderr: captured_text(&stderr),
                         status: None,
                         attempts: attempt.saturating_sub(1),
                         duration: started.elapsed(),
@@ -530,8 +622,8 @@ impl CommandSpec {
             if let AttemptOutcome::Exited(status) = outcome {
                 if status.success() {
                     return Ok(ProcessOutput {
-                        stdout: String::from_utf8_lossy(&stdout).into_owned(),
-                        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+                        stdout: captured_text(&stdout),
+                        stderr: captured_text(&stderr),
                         status: Some(status),
                         attempts: attempt,
                         duration: started.elapsed(),
@@ -542,8 +634,8 @@ impl CommandSpec {
 
             if attempt >= max_attempts || !retryable {
                 let output = Box::new(ProcessOutput {
-                    stdout: String::from_utf8_lossy(&stdout).into_owned(),
-                    stderr: String::from_utf8_lossy(&stderr).into_owned(),
+                    stdout: captured_text(&stdout),
+                    stderr: captured_text(&stderr),
                     status: match outcome {
                         AttemptOutcome::Exited(status) => Some(status),
                         AttemptOutcome::TimedOut | AttemptOutcome::Interrupted => None,
@@ -604,6 +696,13 @@ impl CommandSpec {
         };
         #[cfg(not(windows))]
         let mut command = Command::new(&self.program);
+        if self.neutral_locale {
+            // The flag comes before the subcommand, because a tool that
+            // knows it expects it as a global option.
+            if let Some(flag) = crate::locale::non_interactive_flag(&self.program) {
+                command.arg(flag);
+            }
+        }
         command
             .args(&self.args)
             .stdin(Stdio::null())
@@ -634,6 +733,9 @@ impl CommandSpec {
         }
         for key in &self.env_remove {
             command.env_remove(key);
+        }
+        if self.neutral_locale {
+            crate::locale::with_neutral_locale(&mut command);
         }
 
         let mut child = command.spawn().map_err(|source| ProcessError::Spawn {
@@ -1367,6 +1469,54 @@ mod tests {
         );
         assert_eq!(spec.timeout_limit(), Some(Duration::from_secs(60)));
         assert_eq!(spec.retry_count(), 3);
+    }
+
+    #[test]
+    fn a_command_is_neutral_locale_only_when_it_is_asked_for() {
+        assert!(!CommandSpec::new("brew").uses_neutral_locale());
+        assert!(CommandSpec::new("brew")
+            .neutral_locale()
+            .uses_neutral_locale());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_neutral_locale_command_runs_with_the_c_locale() {
+        let spec = shell("printf '%s|%s|%s' \"$LC_ALL\" \"$LANG\" \"$LANGUAGE\"").neutral_locale();
+
+        let output = run_or_panic(&spec);
+
+        assert_eq!(output.stdout(), "C|C|C");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_neutral_locale_overrides_the_one_of_the_shell() {
+        let spec = shell("printf '%s' \"$LC_ALL\"")
+            .env("LC_ALL", "tr_TR.UTF-8")
+            .neutral_locale();
+
+        let output = run_or_panic(&spec);
+
+        assert_eq!(output.stdout(), "C");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_captured_output_has_no_escape_sequences() {
+        let spec = shell(r"printf '\033[32mgreen\033[0m\n'");
+
+        let output = run_or_panic(&spec);
+
+        assert_eq!(output.stdout(), "green\n");
+    }
+
+    #[test]
+    fn removes_escape_sequences_and_progress_redraws() {
+        assert_eq!(super::sanitize_output("\u{1b}[32mgreen\u{1b}[0m"), "green");
+        assert_eq!(super::sanitize_output("50%\r75%\r100%"), "100%");
+        assert_eq!(super::sanitize_output("first\nsecond\n"), "first\nsecond\n");
+        assert_eq!(super::sanitize_output("plain"), "plain");
     }
 
     #[cfg(unix)]

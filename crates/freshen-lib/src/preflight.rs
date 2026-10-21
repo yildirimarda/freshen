@@ -477,7 +477,10 @@ fn parse_pmset_battery(output: &str) -> Option<BatteryStatus> {
 
 #[cfg(target_os = "macos")]
 fn macos_battery() -> Option<BatteryStatus> {
-    let output = Command::new("pmset").args(["-g", "batt"]).output().ok()?;
+    let mut command = Command::new("pmset");
+    command.args(["-g", "batt"]);
+    crate::locale::with_neutral_locale(&mut command);
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -504,14 +507,14 @@ fn parse_windows_battery(output: &str) -> Option<BatteryStatus> {
 
 #[cfg(windows)]
 fn windows_battery() -> Option<BatteryStatus> {
-    let output = Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-Command",
-            "Get-CimInstance Win32_Battery | ForEach-Object { \"$($_.EstimatedChargeRemaining);$($_.BatteryStatus)\" }",
-        ])
-        .output()
-        .ok()?;
+    let mut command = Command::new("powershell");
+    command.args([
+        "-NoProfile",
+        "-Command",
+        "Get-CimInstance Win32_Battery | ForEach-Object { \"$($_.EstimatedChargeRemaining);$($_.BatteryStatus)\" }",
+    ]);
+    crate::locale::with_neutral_locale(&mut command);
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -541,10 +544,10 @@ fn parse_nmcli_metered(output: &str) -> Option<bool> {
 
 #[cfg(target_os = "linux")]
 fn linux_metered() -> Option<bool> {
-    let output = Command::new("nmcli")
-        .args(["-t", "-f", "GENERAL.METERED", "device", "show"])
-        .output()
-        .ok()?;
+    let mut command = Command::new("nmcli");
+    command.args(["-t", "-f", "GENERAL.METERED", "device", "show"]);
+    crate::locale::with_neutral_locale(&mut command);
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -561,10 +564,10 @@ fn is_hotspot_ssid(ssid: &str) -> bool {
 
 #[cfg(target_os = "macos")]
 fn macos_metered() -> Option<bool> {
-    let route = Command::new("route")
-        .args(["-n", "get", "default"])
-        .output()
-        .ok()?;
+    let mut command = Command::new("route");
+    command.args(["-n", "get", "default"]);
+    crate::locale::with_neutral_locale(&mut command);
+    let route = command.output().ok()?;
     if !route.status.success() {
         return None;
     }
@@ -577,10 +580,10 @@ fn macos_metered() -> Option<bool> {
         return Some(true);
     }
 
-    let wifi = Command::new("networksetup")
-        .args(["-getairportnetwork", interface])
-        .output()
-        .ok()?;
+    let mut command = Command::new("networksetup");
+    command.args(["-getairportnetwork", interface]);
+    crate::locale::with_neutral_locale(&mut command);
+    let wifi = command.output().ok()?;
     if !wifi.status.success() {
         return None;
     }
@@ -610,14 +613,14 @@ fn parse_windows_network_cost(output: &str) -> Option<bool> {
 
 #[cfg(windows)]
 fn windows_metered() -> Option<bool> {
-    let output = Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-Command",
-            "Get-NetConnectionProfile | ForEach-Object { $_.NetworkCostType }",
-        ])
-        .output()
-        .ok()?;
+    let mut command = Command::new("powershell");
+    command.args([
+        "-NoProfile",
+        "-Command",
+        "Get-NetConnectionProfile | ForEach-Object { $_.NetworkCostType }",
+    ]);
+    crate::locale::with_neutral_locale(&mut command);
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }

@@ -202,6 +202,7 @@ fn outdated(step: StepId, args: &[&str]) -> Result<CheckReport, StepError> {
     let output = CommandSpec::new("brew")
         .args(["outdated"])
         .args(args)
+        .neutral_locale()
         .retry_transient_network(NETWORK_RETRIES)
         .run()
         .map_err(|error| StepError::check_from_process(step, &error))?;
@@ -332,6 +333,7 @@ impl Step for FormulaeStep {
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
         let outdated = match CommandSpec::new("brew")
             .args(["outdated", "--formula", "--quiet"])
+            .neutral_locale()
             .retry_transient_network(NETWORK_RETRIES)
             .run()
         {
@@ -547,7 +549,9 @@ impl Step for CasksStep {
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
         let outdated = run_brew(
             CASKS,
-            CommandSpec::new("brew").args(["outdated", "--cask", "--greedy", "--quiet"]),
+            CommandSpec::new("brew")
+                .args(["outdated", "--cask", "--greedy", "--quiet"])
+                .neutral_locale(),
         )?;
         let filter = options.filters().casks();
         let casks: Vec<String> = lines(outdated.stdout())
@@ -564,6 +568,7 @@ impl Step for CasksStep {
 
         let mut info = CommandSpec::new("brew")
             .args(["info", "--cask", "--json=v2"])
+            .neutral_locale()
             .retry_transient_network(NETWORK_RETRIES);
         for cask in &casks {
             info = info.arg(cask);
@@ -645,7 +650,9 @@ impl Step for AutoremoveStep {
         cleanup::run_guarded(
             AUTOREMOVE,
             "Homebrew autoremove",
-            CommandSpec::new("brew").args(["autoremove", "--dry-run"]),
+            CommandSpec::new("brew")
+                .args(["autoremove", "--dry-run"])
+                .neutral_locale(),
             CommandSpec::new("brew")
                 .arg("autoremove")
                 .retry_transient_network(NETWORK_RETRIES),
@@ -694,7 +701,9 @@ impl Step for CleanupStep {
         cleanup::run_guarded(
             CLEANUP,
             "Homebrew cleanup",
-            CommandSpec::new("brew").args(["cleanup", "--dry-run", "--prune=all"]),
+            CommandSpec::new("brew")
+                .args(["cleanup", "--dry-run", "--prune=all"])
+                .neutral_locale(),
             CommandSpec::new("brew")
                 .args(["cleanup", "--prune=all"])
                 .retry_transient_network(NETWORK_RETRIES),

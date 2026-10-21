@@ -93,6 +93,7 @@ impl SnapshotCommand {
         let Some(flag) = &self.file_flag else {
             return match CommandSpec::new(&self.program)
                 .args(self.args.iter().map(String::as_str))
+                .neutral_locale()
                 .run()
             {
                 Ok(output) => SnapshotEntry::new(label, output.stdout().trim_end()),
@@ -105,6 +106,7 @@ impl SnapshotCommand {
         let result = CommandSpec::new(&self.program)
             .args(self.args.iter().map(String::as_str))
             .arg(file_argument)
+            .neutral_locale()
             .run();
         let output = match result {
             Ok(_) => fs::read_to_string(&path).unwrap_or_default(),
