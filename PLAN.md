@@ -91,7 +91,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Kill the whole process tree on timeout or interrupt (process group on Unix, job object on Windows) so grandchildren that keep output pipes open cannot outlive the step, covered by a test using a shell that spawns a child
 - [x] Prune old pre-upgrade snapshots with a configurable retention count (default keeps a small recent window) so automatic snapshots do not grow without bound, covered by tests
 - [x] Record cask versions in the pre-upgrade snapshot (`brew list --cask --versions`) so rollback hints can cover upgraded casks, covered by tests
-- [ ] Guard `brew autoremove` and `brew cleanup` with their dry-run listings so a run with nothing to remove does not invoke the mutating command, covered by tests
+- [x] Guard `brew autoremove` and `brew cleanup` with their dry-run listings so a run with nothing to remove does not invoke the mutating command, covered by tests
 - [ ] Extend the idempotency test to the uv, mise, Docker and Colima steps with stateful stubs, so every mutating step proves a second run changes nothing
 - [ ] Apply per-step and global timeouts to `--check` mode, with a "timed out" check status distinct from "failed", so a hung read-only query cannot hang the report
 - [ ] Make retry backoff sleeps respect the step and global deadlines and SIGINT, so a long retry wait cannot overshoot a timeout or delay interrupt handling, covered by tests
