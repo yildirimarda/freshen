@@ -667,7 +667,7 @@ fn bundle_id_for_program(program: &str) -> Option<&'static str> {
     terminal_for_program(program).and_then(|terminal| terminal.bundle_ids.first().copied())
 }
 
-fn detect_terminal_app(get: impl Fn(&str) -> Option<String>) -> Option<TerminalApp> {
+pub(crate) fn detect_terminal_app(get: impl Fn(&str) -> Option<String>) -> Option<TerminalApp> {
     let bundle_id = get("__CFBundleIdentifier").filter(|value| !value.is_empty());
     let term_program = get("TERM_PROGRAM").filter(|value| !value.is_empty());
 

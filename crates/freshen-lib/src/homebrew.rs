@@ -28,6 +28,7 @@ use crate::process::{CommandSpec, ProcessOutput, NETWORK_RETRIES};
 use crate::registry::Registry;
 use crate::snapshot::{self, SnapshotSection};
 use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
+use crate::system::detect_terminal_app;
 use crate::warnings::warn_about_breakable_sessions;
 
 pub(crate) const BREW: StepId = "brew";
@@ -371,6 +372,18 @@ struct CasksStep {
     system: Arc<dyn AppSystem>,
 }
 
+/// The bundle id of the terminal running freshen, used to protect it from being
+/// quit.
+///
+/// `__CFBundleIdentifier` is authoritative when set. Otherwise the detected
+/// terminal app supplies its bundle id, which covers hosts identified only
+/// through `TERM_PROGRAM` or an environment marker.
+fn own_bundle_id(get: impl Fn(&str) -> Option<String>) -> Option<String> {
+    get("__CFBundleIdentifier")
+        .filter(|bundle_id| !bundle_id.is_empty())
+        .or_else(|| detect_terminal_app(&get).and_then(|app| app.bundle_id().map(str::to_string)))
+}
+
 impl CasksStep {
     fn new(reopen: ReopenQueue) -> Self {
         Self {
@@ -390,9 +403,7 @@ impl CasksStep {
             roots.push(PathBuf::from(home).join("Applications"));
         }
         let installed = installed_app_paths(apps, &roots);
-        let self_bundle_id = env::var("__CFBundleIdentifier")
-            .ok()
-            .filter(|bundle_id| !bundle_id.is_empty());
+        let self_bundle_id = own_bundle_id(|key| env::var(key).ok());
         let system = self.system.as_ref();
         let scan = find_running_apps(system, &installed, self_bundle_id.as_deref());
 
@@ -695,8 +706,8 @@ impl Step for ReopenStep {
 #[cfg(test)]
 mod tests {
     use super::{
-        cask_app_artifacts, installed_app_paths, parse_outdated, register, CaskError, CasksStep,
-        ReopenQueue, ReopenStep, CASKS, FORMULAE, REOPEN,
+        cask_app_artifacts, installed_app_paths, own_bundle_id, parse_outdated, register,
+        CaskError, CasksStep, ReopenQueue, ReopenStep, CASKS, FORMULAE, REOPEN,
     };
     use crate::apps::AppSystem;
     use crate::platform::Platform;
@@ -930,5 +941,46 @@ mod tests {
 
         assert_eq!(paths, [root.join("Applications/Firefox.app")]);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn bundle_id_from(vars: &[(&str, &str)]) -> Option<String> {
+        own_bundle_id(|key| {
+            vars.iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| (*value).to_string())
+        })
+    }
+
+    #[test]
+    fn cf_bundle_identifier_takes_precedence_over_term_program() {
+        let bundle_id = bundle_id_from(&[
+            ("__CFBundleIdentifier", "com.example.host"),
+            ("TERM_PROGRAM", "Apple_Terminal"),
+        ]);
+
+        assert_eq!(bundle_id.as_deref(), Some("com.example.host"));
+    }
+
+    #[test]
+    fn an_empty_cf_bundle_identifier_falls_back_to_term_program() {
+        let bundle_id =
+            bundle_id_from(&[("__CFBundleIdentifier", ""), ("TERM_PROGRAM", "iTerm.app")]);
+
+        assert_eq!(bundle_id.as_deref(), Some("com.googlecode.iterm2"));
+    }
+
+    #[test]
+    fn a_terminal_identified_by_an_environment_marker_supplies_its_bundle_id() {
+        let bundle_id = bundle_id_from(&[("KITTY_WINDOW_ID", "1")]);
+
+        assert_eq!(bundle_id.as_deref(), Some("net.kovidgoyal.kitty"));
+    }
+
+    #[test]
+    fn an_unknown_terminal_without_a_bundle_id_protects_nothing() {
+        assert_eq!(
+            bundle_id_from(&[("TERM_PROGRAM", "unknown-terminal")]),
+            None
+        );
     }
 }
