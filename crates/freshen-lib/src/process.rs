@@ -1278,6 +1278,7 @@ mod tests {
         Backoff::new(Duration::from_millis(10), Duration::from_millis(100))
     }
 
+    #[cfg(unix)]
     fn run_or_panic(spec: &CommandSpec) -> super::ProcessOutput {
         match spec.run() {
             Ok(output) => output,

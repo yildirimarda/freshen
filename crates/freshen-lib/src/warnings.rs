@@ -600,10 +600,12 @@ fn basename(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
+#[cfg(any(unix, test))]
 fn parse_process_table(table: &str) -> Vec<ProcessEntry> {
     table.lines().filter_map(parse_process_line).collect()
 }
 
+#[cfg(any(unix, test))]
 fn parse_process_line(line: &str) -> Option<ProcessEntry> {
     let rest = line.trim_start();
     let pid_end = rest.find(char::is_whitespace)?;
