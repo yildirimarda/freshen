@@ -23,11 +23,10 @@ A failing step never aborts the run. Failures are collected and listed at the en
 
 - **Formulae are upgraded before apps are closed**, so apps stay open during the slow part.
 - **Apps are only quit when a cask upgrade will replace them.** Quit is graceful (AppleScript, 3 s timeout so a "Save changes?" dialog cannot hang the run). Apps that do not quit within `QUIT_TIMEOUT` are left alone unless `--force-kill` is given.
-- **The terminal running freshen is never quit.** Detected via `__CFBundleIdentifier` (works with Terminal, iTerm2, Ghostty, ...).
+- **The terminal running freshen is never quit.** Detection uses `__CFBundleIdentifier`, `TERM_PROGRAM`, environment markers and, on Linux and Windows, the parent process chain. See [supported terminals](#supported-terminals-and-session-managers).
 - **Reopening uses `open -g`**, so apps do not steal focus.
 - **`mise upgrade` is used without `--bump`** on purpose: with `node@lts` in your config, `--bump` would pin `lts` to a fixed version.
-- **Zellij**: if zellij is outdated and you run freshen inside a session, you get a warning (server/client versions must match). The same warning appears when a zellij server is running outside the current session.
-- **Long-running sessions are never broken silently.** If tmux is outdated while its server is running, OpenSSH is outdated while SSH sessions are active, or a container step would stop Colima while Docker builds are running, freshen prints a warning naming what will be interrupted.
+- **Long-running sessions are never broken silently.** If an upgrade would break a session or interrupt a running Docker build, freshen prints a warning naming what will be interrupted. See [supported session managers](#supported-terminals-and-session-managers).
 - **Every run starts with preflight checks**: the network must be reachable, at least 1 GiB must be free, the battery must be at or above 20% while discharging, and the connection must not be metered or a hotspot. A failed check stops before any step runs (exit code 3) and lists every problem. Each check can be disabled with `--skip-network-check`, `--skip-disk-check`, `--skip-battery-check` or `--skip-metered-check`; `--min-free-disk-gib` and `--battery-threshold` change the thresholds. `--dry-run` and `--check` skip preflight because they change nothing.
 - **Another package manager must not be running.** Before changing anything, freshen checks for Homebrew, apt/dpkg (including a held dpkg or apt lock) and winget. It waits up to 30 seconds for the other process to finish, then stops with exit code 3 and names the process and its PID. Use `--package-manager-wait <SECONDS>` to change the wait (0 aborts immediately) or `--skip-package-manager-check` to bypass the check. `--dry-run` and `--check` skip it because they change nothing.
 - **Every run records a pre-upgrade snapshot** of installed versions (`brew list --versions`, `brew list --cask --versions`, `brew bundle dump`, `uv tool list`, `mise ls`, Docker images) in a timestamped file under the platform state directory (`~/.local/state/freshen/snapshots` on Linux, `~/Library/Application Support/freshen/snapshots` on macOS, `%LOCALAPPDATA%\freshen\snapshots` on Windows). Set `FRESHEN_SNAPSHOT_DIR` to override the location. The summary prints the commands that reinstall the recorded versions. Only the most recent snapshots are kept; `--snapshot-retention` changes the window (the default is 10, and `0` keeps every snapshot).
@@ -35,6 +34,12 @@ A failing step never aborts the run. Failures are collected and listed at the en
 - **A hung step cannot hang the whole run.** `--step-timeout <SECONDS>` bounds each step (detection, check, upgrade and cleanup) and `--timeout <SECONDS>` bounds the whole run. A step that runs out of time is stopped, reported as `timed out` rather than `failed`, and anything it stopped is restored; `0` disables a timeout.
 - **Transient download errors are retried with exponential backoff.** A connection reset, timeout or temporary HTTP 5xx/429 response is retried up to twice before the step gives up. If the package registry is permanently unreachable (DNS failure, refused connection or no route), the step is reported as `skipped` with the reason `registry unreachable` instead of failing the run.
 - **Only one update runs at a time.** A second run stops with an error naming the PID that holds the lock. The lock lives under the platform state directory (`FRESHEN_LOCK_DIR` overrides it), and `--dry-run`/`--check` do not take it.
+
+### Supported terminals and session managers
+
+Supported terminal emulators: Apple Terminal, iTerm2, Ghostty, kitty, WezTerm, Alacritty, Hyper, Warp, Tabby, Rio, Termius, Visual Studio Code, Zed, Zed Preview, Cursor, Windsurf, JetBrains, IntelliJ IDEA, IntelliJ IDEA CE, PyCharm, PyCharm CE, WebStorm, CLion, GoLand, RubyMine, PhpStorm, DataGrip, Rider, AppCode, RustRover, Fleet, Android Studio, GNOME Terminal, Konsole, Windows Terminal, Windows Console, xterm, Xfce Terminal, LXTerminal, MATE Terminal, Terminator, Tilix, urxvt, foot, GNOME Console, st.
+
+Session managers checked before an upgrade: zellij, tmux, OpenSSH, GNU screen, byobu, dtach, abduco, mosh.
 
 ## Requirements
 
