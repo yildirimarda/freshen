@@ -53,6 +53,27 @@ fn help_lists_every_flag() {
 }
 
 #[test]
+fn help_documents_the_stable_exit_codes() {
+    let output = run(&["--help"]);
+
+    assert!(output.status.success());
+    let text = stdout(&output);
+    assert!(text.contains("Exit codes:"), "help: {text}");
+    for line in [
+        "0    success",
+        "1    a step failed or timed out",
+        "2    updates are pending (--check)",
+        "3    a preflight or package-manager check failed",
+        "130  the run was interrupted",
+    ] {
+        assert!(
+            text.contains(line),
+            "help does not mention `{line}`: {text}"
+        );
+    }
+}
+
+#[test]
 fn list_steps_lists_every_builtin_step() {
     let output = run(&["--list-steps"]);
 
@@ -83,7 +104,7 @@ fn dry_run_with_every_builtin_step_excluded_plans_nothing() {
         "brew,brew-formulae,brew-casks,brew-autoremove,brew-cleanup,brew-reopen,colima-stop,colima-start,docker,uv,mise",
     ]);
 
-    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
     assert!(stdout(&output).contains("0 ok, 0 planned, 0 skipped, 0 failed"));
 }
 
@@ -110,7 +131,7 @@ fn yes_and_force_kill_are_accepted_with_dry_run() {
 fn unknown_only_step_fails_with_a_clear_message() {
     let output = run(&["--only", "nope"]);
 
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
     assert!(stderr(&output).contains("unknown step `nope` in --only"));
 }
 
@@ -118,6 +139,6 @@ fn unknown_only_step_fails_with_a_clear_message() {
 fn unknown_skip_step_fails_with_a_clear_message() {
     let output = run(&["--skip", "nope"]);
 
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
     assert!(stderr(&output).contains("unknown step `nope` in --skip"));
 }
