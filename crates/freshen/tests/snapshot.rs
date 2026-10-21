@@ -9,9 +9,10 @@
 mod support;
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Output;
 
+use freshen_lib::DEFAULT_SNAPSHOT_RETENTION;
 use support::StubTools;
 
 fn stdout(output: &Output) -> String {
@@ -56,6 +57,48 @@ fn run(tools: &StubTools, args: &[&str]) -> Output {
         .args(args)
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
+}
+
+fn write_old_snapshot(tools: &StubTools, name: &str) -> PathBuf {
+    let directory = snapshot_dir(tools);
+    fs::create_dir_all(&directory).unwrap_or_else(|error| {
+        panic!(
+            "failed to create snapshot directory {}: {error}",
+            directory.display()
+        )
+    });
+    let path = directory.join(name);
+    fs::write(&path, "# old snapshot\n")
+        .unwrap_or_else(|error| panic!("failed to write {}: {error}", path.display()));
+    path
+}
+
+fn script_uv(tools: &StubTools) {
+    tools.set_script(
+        "uv",
+        r#"case "$*" in
+  "tool list")
+    printf 'ruff v0.6.0\n'
+    ;;
+esac"#,
+    );
+}
+
+fn snapshot_names(files: &[PathBuf]) -> Vec<String> {
+    files
+        .iter()
+        .filter_map(|path| path.file_name().and_then(|name| name.to_str()))
+        .map(str::to_owned)
+        .collect()
+}
+
+fn assert_pruned(path: &Path, expected: bool) {
+    assert_eq!(
+        path.exists(),
+        expected,
+        "{} existence should be {expected}",
+        path.display()
+    );
 }
 
 #[test]
@@ -246,4 +289,63 @@ esac"#,
     assert!(text.contains("$ uv tool list"), "{text}");
     assert!(text.contains("# command failed"), "{text}");
     assert!(text.contains("no tools installed"), "{text}");
+}
+
+#[test]
+fn prunes_old_snapshots_to_the_configured_retention() {
+    let tools = StubTools::new(&["uv"]);
+    script_uv(&tools);
+    let oldest = write_old_snapshot(&tools, "snapshot-2020-01-01T00-00-00Z-1.txt");
+    let older = write_old_snapshot(&tools, "snapshot-2021-01-01T00-00-00Z-1.txt");
+    let recent = write_old_snapshot(&tools, "snapshot-2025-01-01T00-00-00Z-1.txt");
+
+    let output = run(&tools, &["--only", "uv", "--snapshot-retention", "2"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let files = snapshot_files(&tools);
+    assert_eq!(
+        files.len(),
+        2,
+        "expected two snapshots: {:?}",
+        snapshot_names(&files)
+    );
+    assert_pruned(&recent, true);
+    assert_pruned(&older, false);
+    assert_pruned(&oldest, false);
+    assert!(
+        files.iter().any(|path| path != &recent),
+        "the new snapshot should be kept alongside the most recent old one"
+    );
+}
+
+#[test]
+fn default_retention_keeps_a_small_recent_window() {
+    let tools = StubTools::new(&["uv"]);
+    script_uv(&tools);
+    let mut old = Vec::new();
+    for day in 1..=DEFAULT_SNAPSHOT_RETENTION + 2 {
+        old.push(write_old_snapshot(
+            &tools,
+            &format!("snapshot-2020-01-{day:02}T00-00-00Z-1.txt"),
+        ));
+    }
+
+    let output = run(&tools, &["--only", "uv"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let files = snapshot_files(&tools);
+    assert_eq!(
+        files.len(),
+        DEFAULT_SNAPSHOT_RETENTION,
+        "expected the default retention window: {:?}",
+        snapshot_names(&files)
+    );
+    assert_pruned(&old[0], false);
+    assert_pruned(&old[1], false);
+    assert_pruned(&old[2], false);
+    assert_pruned(
+        old.last()
+            .unwrap_or_else(|| panic!("old snapshots should not be empty")),
+        true,
+    );
 }

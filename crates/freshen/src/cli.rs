@@ -61,6 +61,14 @@ pub struct Cli {
     #[arg(long, alias = "allow-cleanup", alias = "destructive-cleanup")]
     pub cleanup: bool,
 
+    /// Keep this many pre-upgrade snapshot files (0 keeps every snapshot).
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value_t = freshen_lib::DEFAULT_SNAPSHOT_RETENTION
+    )]
+    pub snapshot_retention: usize,
+
     /// Stop a single step after this many seconds (0 disables the timeout).
     #[arg(long, value_name = "SECONDS", default_value_t = 0)]
     pub step_timeout: u64,
@@ -126,6 +134,7 @@ impl Cli {
             .with_cleanup(self.cleanup)
             .with_step_timeout(timeout(self.step_timeout))
             .with_global_timeout(timeout(self.timeout))
+            .with_snapshot_retention(self.snapshot_retention)
             .with_preflight(preflight)
             .with_package_manager(package_manager)
             .with_selection(
@@ -170,6 +179,10 @@ mod tests {
         assert!(!options.assume_yes());
         assert!(!options.force_kill());
         assert!(!options.cleanup_enabled());
+        assert_eq!(
+            options.snapshot_retention(),
+            freshen_lib::DEFAULT_SNAPSHOT_RETENTION
+        );
         assert_eq!(options.step_timeout(), None);
         assert_eq!(options.global_timeout(), None);
         assert!(options.selection().is_empty());
@@ -202,6 +215,8 @@ mod tests {
             "--yes",
             "--force-kill",
             "--cleanup",
+            "--snapshot-retention",
+            "3",
             "--step-timeout",
             "120",
             "--timeout",
@@ -226,6 +241,7 @@ mod tests {
         assert!(options.assume_yes());
         assert!(options.force_kill());
         assert!(options.cleanup_enabled());
+        assert_eq!(options.snapshot_retention(), 3);
         assert_eq!(
             options.step_timeout(),
             Some(std::time::Duration::from_secs(120))
@@ -315,6 +331,7 @@ mod tests {
             "--yes",
             "--force-kill",
             "--cleanup",
+            "--snapshot-retention",
             "--step-timeout",
             "--timeout",
             "--skip-network-check",

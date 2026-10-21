@@ -25,6 +25,9 @@ use crate::step::StepId;
 /// Environment variable that overrides the directory snapshots are written to.
 pub const SNAPSHOT_DIR_ENV: &str = "FRESHEN_SNAPSHOT_DIR";
 
+/// Number of snapshot files kept by default, including the current one.
+pub const DEFAULT_SNAPSHOT_RETENTION: usize = 10;
+
 static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
 
 /// One read-only command whose output records installed versions.
@@ -203,6 +206,7 @@ pub fn homebrew_section() -> SnapshotSection {
 #[derive(Debug)]
 pub struct SnapshotRecorder {
     directory: PathBuf,
+    retention: usize,
     path: Option<PathBuf>,
     file: Option<File>,
     captured: HashSet<StepId>,
@@ -233,11 +237,23 @@ impl SnapshotRecorder {
     pub fn with_directory(directory: impl Into<PathBuf>) -> Self {
         Self {
             directory: directory.into(),
+            retention: DEFAULT_SNAPSHOT_RETENTION,
             path: None,
             file: None,
             captured: HashSet::new(),
             sections: Vec::new(),
         }
+    }
+
+    /// Sets how many snapshot files to keep, including the one this recorder
+    /// writes.
+    ///
+    /// Older snapshots are pruned when a new file is created. A retention of
+    /// `0` keeps every snapshot.
+    #[must_use]
+    pub fn with_retention(mut self, retention: usize) -> Self {
+        self.retention = retention;
+        self
     }
 
     /// Path of the snapshot file, once the first section has been written.
@@ -318,7 +334,7 @@ impl SnapshotRecorder {
 
         fs::create_dir_all(&self.directory)?;
         let (path, file) = create_snapshot_file(&self.directory)?;
-        self.path = Some(path);
+        self.path = Some(path.clone());
         self.file = Some(file);
 
         let file = self
@@ -330,6 +346,10 @@ impl SnapshotRecorder {
         writeln!(file, "# freshen: {}", crate::version())?;
         writeln!(file)?;
         file.flush()?;
+
+        if let Err(error) = prune_old_snapshots(&self.directory, self.retention, &path) {
+            eprintln!("freshen: could not prune old pre-upgrade snapshots: {error}");
+        }
 
         Ok(())
     }
@@ -459,6 +479,48 @@ fn failure_text(error: &ProcessError) -> String {
 fn temp_file_path() -> PathBuf {
     let id = NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed);
     env::temp_dir().join(format!("freshen-snapshot-{}-{id}", process::id()))
+}
+
+fn is_snapshot_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("snapshot-") && name.ends_with(".txt"))
+}
+
+fn prune_old_snapshots(directory: &Path, keep: usize, current: &Path) -> io::Result<()> {
+    if keep == 0 {
+        return Ok(());
+    }
+
+    let mut snapshots = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let path = entry.path();
+        if path == current || is_snapshot_file(&path) {
+            snapshots.push(path);
+        }
+    }
+
+    snapshots.sort();
+    snapshots.reverse();
+
+    let mut kept = 0;
+    for path in snapshots {
+        if path == current || kept < keep {
+            kept += 1;
+            continue;
+        }
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+
+    Ok(())
 }
 
 fn create_snapshot_file(directory: &Path) -> io::Result<(PathBuf, File)> {
@@ -664,6 +726,67 @@ mod tests {
             .record(section("uv"))
             .unwrap_or_else(|error| panic!("failed to record section: {error}")));
         assert_ne!(first.path(), second.path());
+
+        fs::remove_dir_all(&directory)
+            .unwrap_or_else(|error| panic!("failed to remove test directory: {error}"));
+    }
+
+    fn write_file(directory: &std::path::Path, name: &str) -> PathBuf {
+        fs::create_dir_all(directory)
+            .unwrap_or_else(|error| panic!("failed to create test directory: {error}"));
+        let path = directory.join(name);
+        fs::write(&path, "old snapshot\n")
+            .unwrap_or_else(|error| panic!("failed to write {}: {error}", path.display()));
+        path
+    }
+
+    #[test]
+    fn prunes_snapshots_beyond_the_retention_count() {
+        let directory = temp_directory();
+        let oldest = write_file(&directory, "snapshot-2020-01-01T00-00-00Z-1.txt");
+        let older = write_file(&directory, "snapshot-2021-01-01T00-00-00Z-1.txt");
+        let recent = write_file(&directory, "snapshot-2025-01-01T00-00-00Z-1.txt");
+        let unrelated = write_file(&directory, "notes.txt");
+
+        let mut recorder = SnapshotRecorder::with_directory(&directory).with_retention(2);
+        assert!(recorder
+            .record(section("uv"))
+            .unwrap_or_else(|error| panic!("failed to record section: {error}")));
+        let current = recorder
+            .path()
+            .unwrap_or_else(|| panic!("recorder should have a path"));
+
+        assert!(current.exists(), "current snapshot was pruned");
+        assert!(recent.exists(), "the most recent old snapshot was pruned");
+        assert!(!older.exists(), "an old snapshot was not pruned");
+        assert!(!oldest.exists(), "the oldest snapshot was not pruned");
+        assert!(unrelated.exists(), "an unrelated file was pruned");
+
+        fs::remove_dir_all(&directory)
+            .unwrap_or_else(|error| panic!("failed to remove test directory: {error}"));
+    }
+
+    #[test]
+    fn zero_retention_keeps_every_snapshot() {
+        let directory = temp_directory();
+        let first = write_file(&directory, "snapshot-2020-01-01T00-00-00Z-1.txt");
+        let second = write_file(&directory, "snapshot-2021-01-01T00-00-00Z-1.txt");
+
+        let mut recorder = SnapshotRecorder::with_directory(&directory).with_retention(0);
+        assert!(recorder
+            .record(section("uv"))
+            .unwrap_or_else(|error| panic!("failed to record section: {error}")));
+
+        assert!(first.exists());
+        assert!(second.exists());
+        assert_eq!(
+            fs::read_dir(&directory)
+                .unwrap_or_else(|error| panic!("failed to read test directory: {error}"))
+                .filter_map(Result::ok)
+                .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "txt"))
+                .count(),
+            3
+        );
 
         fs::remove_dir_all(&directory)
             .unwrap_or_else(|error| panic!("failed to remove test directory: {error}"));

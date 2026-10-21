@@ -13,6 +13,7 @@ use crate::package_manager::PackageManagerConfig;
 use crate::platform::Platform;
 use crate::preflight::PreflightConfig;
 use crate::registry::{Registry, RegistryError};
+use crate::snapshot::DEFAULT_SNAPSHOT_RETENTION;
 use crate::step::{Step, StepId};
 
 /// The flag that named a step id.
@@ -191,6 +192,7 @@ pub struct RunOptions {
     package_manager: PackageManagerConfig,
     step_timeout: Option<Duration>,
     global_timeout: Option<Duration>,
+    snapshot_retention: Option<usize>,
 }
 
 impl RunOptions {
@@ -265,6 +267,15 @@ impl RunOptions {
         self
     }
 
+    /// Sets how many pre-upgrade snapshot files to keep.
+    ///
+    /// `0` keeps every snapshot.
+    #[must_use]
+    pub fn with_snapshot_retention(mut self, retention: usize) -> Self {
+        self.snapshot_retention = Some(retention);
+        self
+    }
+
     /// Returns `true` when `--dry-run` is set.
     #[must_use]
     pub fn is_dry_run(&self) -> bool {
@@ -317,6 +328,13 @@ impl RunOptions {
     #[must_use]
     pub fn global_timeout(&self) -> Option<Duration> {
         self.global_timeout
+    }
+
+    /// Number of pre-upgrade snapshot files to keep.
+    #[must_use]
+    pub fn snapshot_retention(&self) -> usize {
+        self.snapshot_retention
+            .unwrap_or(DEFAULT_SNAPSHOT_RETENTION)
     }
 
     /// Builds the ordered list of steps this run should execute on `platform`.
@@ -424,6 +442,10 @@ mod tests {
         assert!(options.selection().is_empty());
         assert_eq!(options.step_timeout(), None);
         assert_eq!(options.global_timeout(), None);
+        assert_eq!(
+            options.snapshot_retention(),
+            crate::snapshot::DEFAULT_SNAPSHOT_RETENTION
+        );
     }
 
     #[test]
@@ -434,12 +456,14 @@ mod tests {
             .with_force_kill(true)
             .with_cleanup(true)
             .with_step_timeout(Some(std::time::Duration::from_secs(60)))
-            .with_global_timeout(Some(std::time::Duration::from_secs(600)));
+            .with_global_timeout(Some(std::time::Duration::from_secs(600)))
+            .with_snapshot_retention(4);
 
         assert!(options.is_dry_run());
         assert!(options.assume_yes());
         assert!(options.force_kill());
         assert!(options.cleanup_enabled());
+        assert_eq!(options.snapshot_retention(), 4);
         assert_eq!(
             options.step_timeout(),
             Some(std::time::Duration::from_secs(60))
