@@ -21,8 +21,13 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
-fn homebrew_responses(attempt: StubOutput) -> [StubOutput; 3] {
-    [StubOutput::new(), StubOutput::new(), attempt]
+fn homebrew_responses(attempt: StubOutput) -> [StubOutput; 4] {
+    [
+        StubOutput::new(),
+        StubOutput::new(),
+        StubOutput::new(),
+        attempt,
+    ]
 }
 
 fn run_update(tools: &StubTools) -> Output {

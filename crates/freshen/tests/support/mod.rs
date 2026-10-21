@@ -407,6 +407,7 @@ fn shell_quote(text: &str) -> String {
 
 fn is_snapshot_capture(call: &str) -> bool {
     call == "brew list --versions"
+        || call == "brew list --cask --versions"
         || call.starts_with("brew bundle dump ")
         || call == "uv tool list"
         || call == "mise ls"
