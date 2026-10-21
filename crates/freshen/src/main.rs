@@ -24,6 +24,9 @@ fn main() -> ExitCode {
     }
 
     let cli = Cli::parse();
+    if cli.json || cli.markdown {
+        freshen_lib::route_to_stderr();
+    }
     let options = cli.run_options();
     let registry = build_registry();
 

@@ -12,6 +12,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::output::human;
 use crate::process::CommandSpec;
 
 /// Seconds `osascript` waits for an app before the quit command gives up.
@@ -253,7 +254,7 @@ pub fn quit_apps<S: AppSystem + ?Sized>(
     let mut reopen = Vec::with_capacity(apps.len());
 
     for app in apps {
-        println!("Quitting: {}", app.name);
+        human!("Quitting: {}", app.name);
         reopen.push(app.bundle_id.clone());
         quit_one(system, app, policy);
     }
@@ -264,7 +265,7 @@ pub fn quit_apps<S: AppSystem + ?Sized>(
 /// Reopens the apps with the given bundle ids, warning about failures.
 pub fn reopen_apps<S: AppSystem + ?Sized>(system: &S, bundle_ids: &[String]) {
     for bundle_id in bundle_ids {
-        println!("Opening: {bundle_id}");
+        human!("Opening: {bundle_id}");
         if !system.open(bundle_id) {
             warn(&format!("Could not open: {bundle_id}"));
         }
@@ -304,7 +305,7 @@ fn quit_one<S: AppSystem + ?Sized>(system: &S, app: &RunningApp, policy: &QuitPo
 }
 
 fn warn(message: &str) {
-    println!("warning: {message}");
+    human!("warning: {message}");
 }
 
 fn executable_prefix(app: &Path) -> String {

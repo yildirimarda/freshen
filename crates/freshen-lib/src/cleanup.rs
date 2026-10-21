@@ -8,6 +8,7 @@
 use std::cell::RefCell;
 
 use crate::options::RunOptions;
+use crate::output::human;
 use crate::process::CommandSpec;
 use crate::step::{StepError, StepId};
 
@@ -125,7 +126,7 @@ pub fn run_guarded(
         .run()
         .map_err(|error| StepError::run_from_process(step, &error))?;
     if !listing_reports_removals(listing.stdout()) {
-        println!("{label}: nothing to remove");
+        human!("{label}: nothing to remove");
         return Ok(None);
     }
 
@@ -133,7 +134,7 @@ pub fn run_guarded(
 }
 
 fn skipped(label: &str) -> Result<Option<CleanupReport>, StepError> {
-    println!("{label}: skipped destructive cleanup (pass {ENABLE_FLAG} to enable)");
+    human!("{label}: skipped destructive cleanup (pass {ENABLE_FLAG} to enable)");
     Ok(None)
 }
 
@@ -142,12 +143,12 @@ fn run_enabled(
     label: &str,
     spec: CommandSpec,
 ) -> Result<Option<CleanupReport>, StepError> {
-    println!("{label}:");
+    human!("{label}:");
     let mut removed = Vec::new();
     let output = spec
         .run_streaming(|_, line| {
             if !line.is_empty() {
-                println!("  {line}");
+                human!("  {line}");
                 removed.push(line.to_owned());
             }
         })
@@ -160,8 +161,8 @@ fn run_enabled(
 
     let reclaimed = parse_reclaimed_space(&text);
     match &reclaimed {
-        Some(space) => println!("{label}: reclaimed space: {space}"),
-        None => println!("{label}: reclaimed space: not reported by the tool"),
+        Some(space) => human!("{label}: reclaimed space: {space}"),
+        None => human!("{label}: reclaimed space: not reported by the tool"),
     }
 
     let report = CleanupReport { removed, reclaimed };

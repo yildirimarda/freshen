@@ -22,6 +22,7 @@ use serde_json::Value;
 use crate::cleanup;
 use crate::homebrew::{BREW, FORMULAE, REOPEN};
 use crate::options::RunOptions;
+use crate::output::human;
 use crate::platform::Platform;
 use crate::process::{CommandSpec, NETWORK_RETRIES};
 use crate::registry::Registry;
@@ -240,7 +241,7 @@ impl Step for ColimaStopStep {
             return Ok(());
         }
 
-        println!("colima/lima is outdated and colima is running: stopping containers and colima");
+        human!("colima/lima is outdated and colima is running: stopping containers and colima");
 
         let mut snapshot = Snapshot::default();
         let mut failures = Vec::new();
@@ -255,13 +256,13 @@ impl Step for ColimaStopStep {
         self.snapshot.store(snapshot.clone());
 
         for project in &snapshot.compose {
-            println!("docker compose down: {}", project.name());
+            human!("docker compose down: {}", project.name());
             if let Err(error) = compose_command(project, &["down"]).run() {
                 failures.push(StepError::run_from_process(COLIMA_STOP, &error));
             }
         }
         for container in &snapshot.standalone {
-            println!("docker stop: {}", container.name());
+            human!("docker stop: {}", container.name());
             if let Err(error) = docker_command(&["stop"], container.id()).run() {
                 failures.push(StepError::run_from_process(COLIMA_STOP, &error));
             }
@@ -305,22 +306,22 @@ impl ColimaStartStep {
             return Ok(());
         };
 
-        println!("{message}");
+        human!("{message}");
         let mut failures = Vec::new();
 
         if let Err(error) = CommandSpec::new("colima").arg("start").run() {
-            println!("warning: colima did not start; containers were NOT restarted");
+            human!("warning: colima did not start; containers were NOT restarted");
             return Err(StepError::run_from_process(COLIMA_START, &error));
         }
 
         for container in &snapshot.standalone {
-            println!("docker start: {}", container.name());
+            human!("docker start: {}", container.name());
             if let Err(error) = docker_command(&["start"], container.id()).run() {
                 failures.push(StepError::run_from_process(COLIMA_START, &error));
             }
         }
         for project in &snapshot.compose {
-            println!("docker compose up -d: {}", project.name());
+            human!("docker compose up -d: {}", project.name());
             if let Err(error) = compose_command(project, &["up", "-d"]).run() {
                 failures.push(StepError::run_from_process(COLIMA_START, &error));
             }
@@ -339,22 +340,22 @@ fn restore_colima(snapshot: &ContainerSnapshot, step: StepId) -> Result<(), Step
         return Ok(());
     };
 
-    println!("Restoring colima and containers");
+    human!("Restoring colima and containers");
     let mut failures = Vec::new();
 
     if let Err(error) = CommandSpec::new("colima").arg("start").run() {
-        println!("warning: colima did not start; containers were NOT restarted");
+        human!("warning: colima did not start; containers were NOT restarted");
         return Err(StepError::run_from_process(step, &error));
     }
 
     for container in &stopped.standalone {
-        println!("docker start: {}", container.name());
+        human!("docker start: {}", container.name());
         if let Err(error) = docker_command(&["start"], container.id()).run() {
             failures.push(StepError::run_from_process(step, &error));
         }
     }
     for project in &stopped.compose {
-        println!("docker compose up -d: {}", project.name());
+        human!("docker compose up -d: {}", project.name());
         if let Err(error) = compose_command(project, &["up", "-d"]).run() {
             failures.push(StepError::run_from_process(step, &error));
         }
@@ -435,19 +436,19 @@ impl Step for DockerStep {
 
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
         if !colima_is_running() {
-            println!("warning: colima is not running, skipping Docker image updates.");
+            human!("warning: colima is not running, skipping Docker image updates.");
             return Ok(());
         }
 
-        println!("Docker: pull newer images for running compose projects");
+        human!("Docker: pull newer images for running compose projects");
         let projects = list_compose_projects();
         let mut failures = Vec::new();
 
         if projects.is_empty() {
-            println!("No running compose projects.");
+            human!("No running compose projects.");
         } else {
             for project in &projects {
-                println!("docker compose pull + up -d: {}", project.name());
+                human!("docker compose pull + up -d: {}", project.name());
                 if let Err(error) = compose_command(project, &["pull", "--quiet"]).run() {
                     failures.push(StepError::run_from_process(DOCKER, &error));
                 }

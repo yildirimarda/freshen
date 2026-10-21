@@ -151,12 +151,7 @@ fn json_report_contains_cleanup_removals_and_reclaimed_space() {
         stderr(&output)
     );
     let text = stdout(&output);
-    let json = text
-        .lines()
-        .skip_while(|line| *line != "{")
-        .collect::<Vec<_>>()
-        .join("\n");
-    let report: serde_json::Value = match serde_json::from_str(&json) {
+    let report: serde_json::Value = match serde_json::from_str(&text) {
         Ok(report) => report,
         Err(error) => panic!("invalid JSON report: {error}: {text}"),
     };
@@ -167,6 +162,17 @@ fn json_report_contains_cleanup_removals_and_reclaimed_space() {
         "Removing: /tmp/foo (2.5MB)"
     );
     assert_eq!(report["steps"][0]["cleanup"][0]["reclaimed"], "2.5MB");
+
+    let log = stderr(&output);
+    assert!(log.contains("Homebrew cleanup:\n"), "stderr: {log}");
+    assert!(
+        log.contains("  Removing: /tmp/foo (2.5MB)\n"),
+        "stderr: {log}"
+    );
+    assert!(
+        log.contains("Homebrew cleanup: reclaimed space: 2.5MB\n"),
+        "stderr: {log}"
+    );
 }
 
 #[test]
@@ -196,6 +202,43 @@ fn markdown_report_contains_cleanup_removals_and_reclaimed_space() {
     assert!(
         text.contains("- Removing: /tmp/foo (2.5MB)"),
         "report: {text}"
+    );
+
+    let log = stderr(&output);
+    assert!(log.contains("Homebrew cleanup:\n"), "stderr: {log}");
+    assert!(
+        log.contains("Homebrew cleanup: reclaimed space: 2.5MB\n"),
+        "stderr: {log}"
+    );
+}
+
+#[test]
+fn plain_runs_keep_the_cleanup_log_on_stdout() {
+    let tools = StubTools::new(&["brew"]);
+    install_brew_cleanup(&tools);
+
+    let output = run(&tools, &["--only", "brew-cleanup", "--cleanup"]);
+
+    assert!(
+        output.status.success(),
+        "stdout: {} stderr: {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    let text = stdout(&output);
+    assert!(text.contains("Homebrew cleanup:\n"), "stdout: {text}");
+    assert!(
+        text.contains("  Removing: /tmp/foo (2.5MB)\n"),
+        "stdout: {text}"
+    );
+    assert!(
+        text.contains("Homebrew cleanup: reclaimed space: 2.5MB\n"),
+        "stdout: {text}"
+    );
+    assert!(
+        !stderr(&output).contains("Homebrew cleanup"),
+        "stderr: {}",
+        stderr(&output)
     );
 }
 

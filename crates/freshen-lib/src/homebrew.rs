@@ -11,7 +11,7 @@
 
 use std::cell::RefCell;
 use std::env;
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -23,6 +23,7 @@ use crate::apps::{
 };
 use crate::cleanup;
 use crate::options::RunOptions;
+use crate::output::{flush, human, human_print};
 use crate::platform::Platform;
 use crate::process::{CommandSpec, ProcessOutput, NETWORK_RETRIES};
 use crate::registry::Registry;
@@ -63,7 +64,7 @@ fn reopen_queued(queue: &ReopenQueue, system: &dyn AppSystem, message: &str, int
         return;
     }
 
-    println!("{message}");
+    human!("{message}");
     reopen_apps(system, &bundle_ids);
     if !interrupted {
         queue.clear();
@@ -255,7 +256,7 @@ fn report_cask_apps(apps: &[String]) {
         return;
     }
 
-    println!("Cask apps: {}", apps.join(", "));
+    human!("Cask apps: {}", apps.join(", "));
 
     let mut roots = vec![PathBuf::from("/Applications")];
     if let Some(home) = env::var_os("HOME") {
@@ -263,7 +264,7 @@ fn report_cask_apps(apps: &[String]) {
     }
     let installed = installed_app_paths(apps, &roots);
     for path in installed {
-        println!("Installed cask app: {}", path.display());
+        human!("Installed cask app: {}", path.display());
     }
 }
 
@@ -335,7 +336,7 @@ impl Step for FormulaeStep {
         };
 
         if outdated.is_some_and(|formulae| formulae.is_empty()) {
-            println!("No outdated formulae.");
+            human!("No outdated formulae.");
             return Ok(());
         }
 
@@ -390,7 +391,7 @@ impl CasksStep {
         let scan = find_running_apps(system, &installed, self_bundle_id.as_deref());
 
         for name in scan.protected() {
-            println!(
+            human!(
                 "warning: {name} is the terminal running this script, not quitting it (restart it manually after the upgrade)."
             );
         }
@@ -399,9 +400,9 @@ impl CasksStep {
             return QuitChoice::Quit;
         }
 
-        println!("Running apps that will be quit and reopened:");
+        human!("Running apps that will be quit and reopened:");
         for app in scan.running() {
-            println!("   - {}", app.name());
+            human!("   - {}", app.name());
         }
 
         let choice = if options.assume_yes() {
@@ -422,8 +423,8 @@ impl CasksStep {
 }
 
 fn ask_quit_choice() -> QuitChoice {
-    print!("Quit these apps and upgrade casks? [Y]es / [s]kip quitting / [n]o: ");
-    let _ = io::stdout().flush();
+    human_print!("Quit these apps and upgrade casks? [Y]es / [s]kip quitting / [n]o: ");
+    flush();
 
     let mut answer = String::new();
     let _ = io::stdin().read_line(&mut answer);
@@ -459,11 +460,11 @@ impl Step for CasksStep {
         let casks = lines(outdated.stdout());
 
         if casks.is_empty() {
-            println!("No outdated casks.");
+            human!("No outdated casks.");
             return Ok(());
         }
 
-        println!("Casks to upgrade: {}", casks.join(" "));
+        human!("Casks to upgrade: {}", casks.join(" "));
 
         let mut info = CommandSpec::new("brew")
             .args(["info", "--cask", "--json=v2"])
@@ -484,7 +485,7 @@ impl Step for CasksStep {
         }
 
         if choice == QuitChoice::SkipCasks {
-            println!("warning: Cask upgrade skipped by user.");
+            human!("warning: Cask upgrade skipped by user.");
             return Ok(());
         }
 
