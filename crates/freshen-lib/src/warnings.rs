@@ -82,28 +82,93 @@ impl StaleToolProcess {
     }
 }
 
-/// Warns when zellij is about to be upgraded from inside a zellij session.
-pub fn warn_if_zellij_upgrade(outdated_formulae: &str) {
-    if zellij_warning_applies(outdated_formulae, inside_zellij_session()) {
-        human!("warning: {ZELLIJ_WARNING}");
+/// A tool whose upgrade can break a running interactive session.
+///
+/// Adding a session-aware tool is one row in [`SESSION_GUARDS`]: the package
+/// names that trigger the warning, the environment variables that identify a
+/// session of that tool, and how to recognise its server process.
+#[derive(Debug, Clone, Copy)]
+struct SessionGuard {
+    /// Outdated package names that make this warning relevant.
+    packages: &'static [&'static str],
+    /// Environment variables that are set inside a session of this tool.
+    environment: &'static [&'static str],
+    /// Whether a process command line belongs to this tool's server.
+    is_server: fn(&str) -> bool,
+    /// Warning shown when the upgrade happens inside a session.
+    inside_warning: &'static str,
+    /// Warning shown when a server runs outside the current session.
+    server_warning: &'static str,
+}
+
+impl SessionGuard {
+    fn is_outdated(self, outdated_formulae: &str) -> bool {
+        is_outdated(outdated_formulae, self.packages)
+    }
+
+    fn inside_session(self) -> bool {
+        self.environment
+            .iter()
+            .any(|name| environment_variable_set(name))
+    }
+
+    fn is_server_process(self, command: &str) -> bool {
+        (self.is_server)(command)
     }
 }
 
-/// Whether the zellij warning applies to an outdated-formula listing.
-#[must_use]
-pub fn zellij_warning_applies(outdated_formulae: &str, inside_zellij_session: bool) -> bool {
-    inside_zellij_session
-        && outdated_formulae
-            .lines()
-            .any(|line| line.trim() == "zellij")
+/// The tools checked before an upgrade for sessions it would break.
+const SESSION_GUARDS: &[SessionGuard] = &[
+    SessionGuard {
+        packages: &["zellij"],
+        environment: &["ZELLIJ"],
+        is_server: is_zellij_process,
+        inside_warning: ZELLIJ_WARNING,
+        server_warning: ZELLIJ_SERVER_WARNING,
+    },
+    SessionGuard {
+        packages: &["tmux"],
+        environment: &["TMUX"],
+        is_server: is_tmux_process,
+        inside_warning: TMUX_WARNING,
+        server_warning: TMUX_WARNING,
+    },
+    SessionGuard {
+        packages: &["openssh", "openssh-server", "dropbear"],
+        environment: &["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"],
+        is_server: is_ssh_process,
+        inside_warning: SSH_WARNING,
+        server_warning: SSH_WARNING,
+    },
+];
+
+/// Warnings that apply to an outdated-formula listing, a per-guard
+/// in-session flag and a snapshot of the process table.
+fn session_warnings(
+    outdated_formulae: &str,
+    inside_sessions: &[bool],
+    processes: &[ProcessEntry],
+) -> Vec<&'static str> {
+    SESSION_GUARDS
+        .iter()
+        .zip(inside_sessions)
+        .filter_map(|(guard, inside_session)| {
+            if !guard.is_outdated(outdated_formulae) {
+                return None;
+            }
+            if *inside_session {
+                return Some(guard.inside_warning);
+            }
+            processes
+                .iter()
+                .any(|process| guard.is_server_process(&process.command))
+                .then_some(guard.server_warning)
+        })
+        .collect()
 }
 
-fn inside_zellij_session() -> bool {
-    env::var_os("ZELLIJ").is_some_and(|value| !value.is_empty())
-}
-
-fn inside_tmux_session() -> bool {
-    env::var_os("TMUX").is_some_and(|value| !value.is_empty())
+fn environment_variable_set(name: &str) -> bool {
+    env::var_os(name).is_some_and(|value| !value.is_empty())
 }
 
 /// Warns when an upgrade of zellij, tmux or OpenSSH would break a running
@@ -114,50 +179,22 @@ fn inside_tmux_session() -> bool {
 /// step. Only sessions that belong to a package in `outdated_formulae` are
 /// reported, so a run that upgrades something unrelated stays quiet.
 pub fn warn_about_breakable_sessions(outdated_formulae: &str) {
-    let inside_zellij = inside_zellij_session();
-    let inside_tmux = inside_tmux_session();
-    let over_ssh = ssh_environment_session();
-    let zellij_outdated = is_outdated(outdated_formulae, &["zellij"]);
-    let tmux_outdated = is_outdated(outdated_formulae, &["tmux"]);
-    let ssh_outdated = is_outdated(
-        outdated_formulae,
-        &["openssh", "openssh-server", "dropbear"],
-    );
-    let needs_processes = (!inside_zellij && zellij_outdated)
-        || (tmux_outdated && !inside_tmux)
-        || (ssh_outdated && !over_ssh);
+    let inside_sessions: Vec<bool> = SESSION_GUARDS
+        .iter()
+        .map(|guard| guard.inside_session())
+        .collect();
+    let needs_processes = SESSION_GUARDS
+        .iter()
+        .zip(&inside_sessions)
+        .any(|(guard, inside_session)| guard.is_outdated(outdated_formulae) && !inside_session);
     let processes = if needs_processes {
         running_processes()
     } else {
         Vec::new()
     };
 
-    if zellij_warning_applies(outdated_formulae, inside_zellij) {
-        human!("warning: {ZELLIJ_WARNING}");
-    } else if zellij_outdated
-        && processes
-            .iter()
-            .any(|process| is_zellij_process(&process.command))
-    {
-        human!("warning: {ZELLIJ_SERVER_WARNING}");
-    }
-
-    if tmux_outdated
-        && (inside_tmux
-            || processes
-                .iter()
-                .any(|process| is_tmux_process(&process.command)))
-    {
-        human!("warning: {TMUX_WARNING}");
-    }
-
-    if ssh_outdated
-        && (over_ssh
-            || processes
-                .iter()
-                .any(|process| is_ssh_process(&process.command)))
-    {
-        human!("warning: {SSH_WARNING}");
+    for warning in session_warnings(outdated_formulae, &inside_sessions, &processes) {
+        human!("warning: {warning}");
     }
 }
 
@@ -189,12 +226,6 @@ fn is_outdated(outdated_formulae: &str, names: &[&str]) -> bool {
     outdated_formulae
         .lines()
         .any(|line| names.contains(&line.trim()))
-}
-
-fn ssh_environment_session() -> bool {
-    ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"]
-        .iter()
-        .any(|name| env::var_os(name).is_some_and(|value| !value.is_empty()))
 }
 
 fn running_processes() -> Vec<ProcessEntry> {
@@ -522,20 +553,65 @@ mod tests {
     use super::{
         basename, is_docker_build, is_outdated, is_ssh_process, is_tmux_process, is_zellij_process,
         parse_process_table, parse_prunable_tool_versions, parse_windows_process_table,
-        program_name, stale_tool_entries, stale_tool_warning, zellij_warning_applies, ProcessEntry,
-        ProcessProbe, PrunableTool, StaleToolProcess,
+        program_name, session_warnings, stale_tool_entries, stale_tool_warning, ProcessEntry,
+        ProcessProbe, PrunableTool, StaleToolProcess, SESSION_GUARDS, SSH_WARNING, TMUX_WARNING,
+        ZELLIJ_SERVER_WARNING, ZELLIJ_WARNING,
     };
 
     const ACTIVE_NODE: &str = "/home/user/.local/share/mise/installs/node/22.1.0";
     const ACTIVE_PYTHON: &str = "/home/user/.local/share/mise/installs/python/3.12.0";
 
+    fn process(pid: u32, command: &str) -> ProcessEntry {
+        ProcessEntry {
+            pid,
+            ppid: 1,
+            command: command.to_owned(),
+        }
+    }
+
     #[test]
-    fn zellij_warning_needs_an_outdated_zellij_and_a_session() {
-        assert!(zellij_warning_applies("zellij\nnode\n", true));
-        assert!(zellij_warning_applies("  zellij  \n", true));
-        assert!(!zellij_warning_applies("zellij\n", false));
-        assert!(!zellij_warning_applies("zellij-utils\nnode\n", true));
-        assert!(!zellij_warning_applies("", true));
+    fn every_session_guard_warns_inside_its_own_session() {
+        let inside = [true; SESSION_GUARDS.len()];
+
+        assert_eq!(
+            session_warnings("zellij\ntmux\nopenssh\n", &inside, &[]),
+            [ZELLIJ_WARNING, TMUX_WARNING, SSH_WARNING]
+        );
+    }
+
+    #[test]
+    fn every_session_guard_warns_about_a_running_server() {
+        let processes = [
+            process(1, "zellij --server /tmp/zellij-1000"),
+            process(2, "/opt/homebrew/bin/tmux new-session -d -s work"),
+            process(3, "sshd: user@pts/0"),
+        ];
+        let outside = [false; SESSION_GUARDS.len()];
+
+        assert_eq!(
+            session_warnings("zellij\ntmux\nopenssh\n", &outside, &processes),
+            [ZELLIJ_SERVER_WARNING, TMUX_WARNING, SSH_WARNING]
+        );
+    }
+
+    #[test]
+    fn session_warnings_only_apply_to_outdated_packages() {
+        let processes = [process(1, "zellij --server /tmp/zellij-1000")];
+
+        let inside = [true; SESSION_GUARDS.len()];
+
+        assert!(session_warnings("node\n", &inside, &processes).is_empty());
+        assert!(session_warnings("zellij-utils\n", &inside, &processes).is_empty());
+        assert!(session_warnings("", &inside, &processes).is_empty());
+    }
+
+    #[test]
+    fn the_session_guard_table_has_an_entry_per_tool() {
+        assert_eq!(SESSION_GUARDS.len(), 3);
+        for guard in SESSION_GUARDS {
+            assert!(!guard.packages.is_empty());
+            assert!(!guard.environment.is_empty());
+        }
     }
 
     #[test]
