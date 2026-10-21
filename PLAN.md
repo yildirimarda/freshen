@@ -101,7 +101,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Assign a Windows child to its job object before it starts running (spawn suspended, then resume after assignment) so a grandchild spawned immediately cannot escape the process tree on timeout, covered by a Windows test
 - [x] Make the package-manager wait loop check for SIGINT instead of polling until the wait expires, so an interrupt during the pre-run wait is honored promptly, covered by a test
 - [x] Send human progress and cleanup log lines to stderr when `--json` or `--markdown` is selected, so the structured report is the only thing on stdout and can be parsed directly, covered by tests
-- [ ] Honour `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` and custom CA bundles in the network preflight check and document how every step inherits them, covered by tests with injected environment
+- [x] Honour `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` and custom CA bundles in the network preflight check and document how every step inherits them, covered by tests with injected environment
 
 ## Milestone 4: macOS Depth
 
