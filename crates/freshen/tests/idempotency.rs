@@ -33,7 +33,7 @@ fn run(tools: &StubTools) -> Output {
     tools
         .command()
         .env_remove("ZELLIJ")
-        .args(["--only", STEPS, "--yes"])
+        .args(["--only", STEPS, "--yes", "--cleanup"])
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
 }

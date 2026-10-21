@@ -86,7 +86,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Network failure handling: retry transient download errors with exponential backoff, skip the step if the registry is unreachable
 - [x] Detect processes running from a tool version that is about to be removed (old Node, Python, Java, Go toolchains) and report them with the parent application that started them
 - [x] Detect long-running interactive sessions that an upgrade would break (zellij, tmux server, SSH sessions, running docker builds) and warn or defer
-- [ ] Never run destructive cleanup (volume prune, cache wipe) unless explicitly enabled; log everything a cleanup removed and the space reclaimed
+- [x] Never run destructive cleanup (volume prune, cache wipe) unless explicitly enabled; log everything a cleanup removed and the space reclaimed
 - [ ] Exit codes documented and stable: 0 ok, 1 step failure, 2 updates pending (check mode), 3 preflight failed, 130 interrupted
 - [ ] Kill the whole process tree on timeout or interrupt (process group on Unix, job object on Windows) so grandchildren that keep output pipes open cannot outlive the step, covered by a test using a shell that spawns a child
 - [ ] Prune old pre-upgrade snapshots with a configurable retention count (default keeps a small recent window) so automatic snapshots do not grow without bound, covered by tests
@@ -97,6 +97,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Make retry backoff sleeps respect the step and global deadlines and SIGINT, so a long retry wait cannot overshoot a timeout or delay interrupt handling, covered by tests
 - [ ] Probe the process table for stale toolchain processes on Windows (parent PID and command line) instead of silently skipping when `ps` is unavailable, covered by tests with injected process facts
 - [ ] Warn only about toolchain versions `mise prune` will actually remove, using a dry-run or install listing so a process on a newer non-active version is not reported as old, covered by tests
+- [ ] Include destructive cleanup results (removed items and reclaimed space) in the `--json` and `--markdown` reports, covered by tests
 
 ## Milestone 4: macOS Depth
 

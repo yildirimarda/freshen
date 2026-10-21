@@ -29,6 +29,7 @@ fn run(tools: &StubTools, args: &[&str]) -> Output {
         .command()
         .env("FRESHEN_BREW_INFO_JSON", CASK_INFO)
         .env_remove("ZELLIJ")
+        .arg("--cleanup")
         .args(args)
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
@@ -282,7 +283,7 @@ fn run_apps(
         .env("FRESHEN_BREW_INFO_JSON", CASK_INFO)
         .env("FRESHEN_PS_STATE", state)
         .envs(extra_env.iter().copied())
-        .args(["--only", HOMEBREW_STEPS, "--yes"])
+        .args(["--only", HOMEBREW_STEPS, "--yes", "--cleanup"])
         .args(extra_args);
     command
         .output()
@@ -295,7 +296,7 @@ fn run_apps_with_stdin(tools: &StubTools, state: &std::path::Path, stdin: &str) 
         .env("FRESHEN_BREW_INFO_JSON", CASK_INFO)
         .env("FRESHEN_PS_STATE", state)
         .env_remove("ZELLIJ")
-        .args(["--only", HOMEBREW_STEPS]);
+        .args(["--only", HOMEBREW_STEPS, "--cleanup"]);
     tools.run_with_stdin(command, stdin)
 }
 

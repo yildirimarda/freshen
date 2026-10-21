@@ -164,7 +164,7 @@ fn captures_versions_before_the_upgrade_changes_them() {
 esac"#,
     );
 
-    let output = run(&tools, &["--only", "uv"]);
+    let output = run(&tools, &["--only", "uv", "--cleanup"]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = only_snapshot(&tools);

@@ -65,7 +65,7 @@ esac"#,
 fn run(tools: &StubTools, steps: &str) -> Output {
     tools
         .command()
-        .args(["--only", steps])
+        .args(["--only", steps, "--cleanup"])
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
 }
@@ -92,7 +92,7 @@ fn a_failing_uv_upgrade_still_prunes_the_cache_and_fails_the_step() {
     let output = tools
         .command()
         .env("FRESHEN_UV_UPGRADE_STATUS", "1")
-        .args(["--only", "uv"])
+        .args(["--only", "uv", "--cleanup"])
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
 
@@ -141,7 +141,7 @@ fn mise_installed_with_brew_is_not_self_updated() {
     let output = tools
         .command()
         .env("FRESHEN_MISE_IN_BREW", "0")
-        .args(["--only", "mise"])
+        .args(["--only", "mise", "--cleanup"])
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
 
@@ -190,7 +190,7 @@ fn a_failing_mise_self_update_is_only_a_warning() {
     let output = tools
         .command()
         .env("FRESHEN_MISE_SELF_UPDATE_STATUS", "1")
-        .args(["--only", "mise"])
+        .args(["--only", "mise", "--cleanup"])
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
 
@@ -222,7 +222,7 @@ fn a_failing_mise_upgrade_still_prunes_and_fails_the_step() {
     let output = tools
         .command()
         .env("FRESHEN_MISE_UPGRADE_STATUS", "1")
-        .args(["--only", "mise"])
+        .args(["--only", "mise", "--cleanup"])
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
 

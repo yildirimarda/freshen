@@ -6,6 +6,7 @@
 
 pub mod apps;
 pub mod check;
+pub mod cleanup;
 pub mod containers;
 pub(crate) mod deadline;
 pub mod homebrew;
@@ -31,6 +32,7 @@ pub use apps::{
     QuitChoice, QuitPolicy, RunningApp,
 };
 pub use check::{CheckResult, CheckStatus, CheckSummary};
+pub use cleanup::{CleanupReport, ENABLE_FLAG as CLEANUP_FLAG};
 pub use containers::{
     parse_compose_projects, parse_standalone_containers, ComposeProject, StandaloneContainer,
 };

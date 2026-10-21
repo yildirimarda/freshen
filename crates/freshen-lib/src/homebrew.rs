@@ -21,6 +21,7 @@ use crate::apps::{
     find_running_apps, quit_apps, quit_choice, reopen_apps, AppSystem, MacAppSystem, QuitChoice,
     QuitPolicy,
 };
+use crate::cleanup;
 use crate::options::RunOptions;
 use crate::platform::Platform;
 use crate::process::{CommandSpec, ProcessOutput, NETWORK_RETRIES};
@@ -537,7 +538,19 @@ impl Step for AutoremoveStep {
     }
 
     fn run(&self) -> Result<(), StepError> {
-        run_brew(AUTOREMOVE, CommandSpec::new("brew").arg("autoremove")).map(|_| ())
+        self.run_with_options(&RunOptions::new())
+    }
+
+    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
+        cleanup::run(
+            AUTOREMOVE,
+            "Homebrew autoremove",
+            CommandSpec::new("brew")
+                .arg("autoremove")
+                .retry_transient_network(NETWORK_RETRIES),
+            options,
+        )
+        .map(|_| ())
     }
 
     fn snapshot(&self) -> Option<SnapshotSection> {
@@ -573,9 +586,17 @@ impl Step for CleanupStep {
     }
 
     fn run(&self) -> Result<(), StepError> {
-        run_brew(
+        self.run_with_options(&RunOptions::new())
+    }
+
+    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
+        cleanup::run(
             CLEANUP,
-            CommandSpec::new("brew").args(["cleanup", "--prune=all"]),
+            "Homebrew cleanup",
+            CommandSpec::new("brew")
+                .args(["cleanup", "--prune=all"])
+                .retry_transient_network(NETWORK_RETRIES),
+            options,
         )
         .map(|_| ())
     }
