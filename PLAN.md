@@ -98,6 +98,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Probe the process table for stale toolchain processes on Windows (parent PID and command line) instead of silently skipping when `ps` is unavailable, covered by tests with injected process facts
 - [ ] Warn only about toolchain versions `mise prune` will actually remove, using a dry-run or install listing so a process on a newer non-active version is not reported as old, covered by tests
 - [ ] Include destructive cleanup results (removed items and reclaimed space) in the `--json` and `--markdown` reports, covered by tests
+- [ ] Assign a Windows child to its job object before it starts running (spawn suspended, then resume after assignment) so a grandchild spawned immediately cannot escape the process tree on timeout, covered by a Windows test
 
 ## Milestone 4: macOS Depth
 

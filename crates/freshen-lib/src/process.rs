@@ -11,6 +11,9 @@
 //! * a per-command timeout kills a hung child instead of hanging the whole run;
 //! * the runner's per-step and global deadlines stop the same child even when
 //!   the command itself has no timeout;
+//! * a timeout or interrupt stops the whole process tree (a process group on
+//!   Unix, a job object on Windows), so a grandchild cannot keep the output
+//!   pipes open after the step is gone;
 //! * the environment is inherited by default and can be extended, reduced or
 //!   cleared;
 //! * a command can be retried with exponential backoff.
@@ -20,7 +23,7 @@
 
 use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, BufReader, Read};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -559,6 +562,15 @@ impl CommandSpec {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+
+            // Put the child in its own process group so a timeout or interrupt
+            // can stop its descendants as well, without touching freshen.
+            command.process_group(0);
+        }
+
         if self.env_clear {
             command.env_clear();
         }
@@ -573,6 +585,7 @@ impl CommandSpec {
             program: program.clone(),
             source,
         })?;
+        let mut tree = ProcessTree::new(&child);
 
         let (sender, receiver) = mpsc::channel();
         let mut readers = Vec::with_capacity(2);
@@ -608,8 +621,7 @@ impl CommandSpec {
                 }
                 Ok(None) => {}
                 Err(source) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    tree.terminate(&mut child);
                     let _ = join_readers(readers, &program);
                     return Err(ProcessError::Wait { program, source });
                 }
@@ -620,21 +632,20 @@ impl CommandSpec {
                 .is_some_and(|limit| attempt_started.elapsed() >= limit)
                 || deadline::expired();
             if timed_out {
-                let _ = child.kill();
-                let _ = child.wait();
+                tree.terminate(&mut child);
                 outcome = AttemptOutcome::TimedOut;
                 break;
             }
 
             if signals::requested() {
-                let _ = child.kill();
-                let _ = child.wait();
+                tree.terminate(&mut child);
                 outcome = AttemptOutcome::Interrupted;
                 break;
             }
 
             thread::sleep(POLL_INTERVAL);
         }
+        tree.release();
 
         let deadline = Instant::now() + READER_GRACE;
         while pending > 0 {
@@ -711,6 +722,99 @@ enum AttemptOutcome {
 struct AttemptResult {
     outcome: AttemptOutcome,
     captured: Captured,
+}
+
+/// Controls the lifetime of a child and every process it starts.
+///
+/// Killing only the direct child is not enough: a shell can leave a grandchild
+/// running with the output pipes still open, which keeps the reader threads
+/// alive and outlives the step. A timeout or interrupt therefore stops the
+/// whole tree, using a process group on Unix and a job object on Windows.
+struct ProcessTree {
+    #[cfg(unix)]
+    pgid: i32,
+    #[cfg(windows)]
+    job: Option<win32job::Job>,
+}
+
+impl ProcessTree {
+    #[cfg(unix)]
+    fn new(child: &Child) -> Self {
+        Self {
+            pgid: i32::try_from(child.id()).unwrap_or(i32::MAX),
+        }
+    }
+
+    #[cfg(windows)]
+    fn new(child: &Child) -> Self {
+        use std::os::windows::io::AsRawHandle;
+
+        let mut limits = win32job::ExtendedLimitInfo::new();
+        limits.limit_kill_on_job_close();
+        let job = win32job::Job::create_with_limit_info(&limits)
+            .ok()
+            .and_then(|job| {
+                job.assign_process(child.as_raw_handle() as isize).ok()?;
+                Some(job)
+            });
+        Self { job }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    fn new(_child: &Child) -> Self {
+        Self {}
+    }
+
+    /// Kills the child and all of its descendants, then reaps the child.
+    fn terminate(&mut self, child: &mut Child) {
+        #[cfg(unix)]
+        {
+            use nix::sys::signal::{killpg, Signal};
+            use nix::unistd::Pid;
+
+            let _ = killpg(Pid::from_raw(self.pgid), Signal::SIGKILL);
+        }
+
+        #[cfg(windows)]
+        {
+            if let Some(job) = self.job.take() {
+                // The job was created with kill-on-close, so dropping the last
+                // handle terminates every process that belongs to it.
+                drop(job);
+            } else {
+                let _ = Command::new("taskkill")
+                    .args(["/T", "/F", "/PID", &child.id().to_string()])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+            }
+        }
+
+        let _ = child.wait();
+    }
+
+    /// Releases the tree after the child exited on its own.
+    ///
+    /// On Windows this clears kill-on-close first, so a process the command
+    /// deliberately left running is not terminated after a successful step.
+    fn release(&mut self) {
+        #[cfg(unix)]
+        {
+            let _ = self.pgid;
+        }
+
+        #[cfg(windows)]
+        {
+            if let Some(job) = self.job.take() {
+                if let Ok(mut limits) = job.query_extended_limit_info() {
+                    limits.clear_limits();
+                    let _ = job.set_extended_limit_info(&limits);
+                }
+                drop(job);
+            }
+        }
+    }
 }
 
 /// Reads `pipe` line by line and forwards each chunk to the parent.
@@ -1052,6 +1156,44 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn process_is_alive(pid: i32) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+                Ok(stat) => stat
+                    .rsplit_once(')')
+                    .and_then(|(_, rest)| rest.split_whitespace().next())
+                    .is_some_and(|state| state != "Z"),
+                Err(_) => false,
+            }
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            use nix::errno::Errno;
+            use nix::sys::signal::{kill, Signal};
+            use nix::unistd::Pid;
+
+            match kill(Pid::from_raw(pid), None::<Signal>) {
+                Ok(()) | Err(Errno::EPERM) => true,
+                Err(_) => false,
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn wait_until_gone(pid: i32, limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        while Instant::now() < deadline {
+            if !process_is_alive(pid) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        !process_is_alive(pid)
+    }
+
+    #[cfg(unix)]
     #[test]
     fn captures_stdout_and_stderr() {
         let output = run_or_panic(&shell("printf 'hello\\n'; printf 'oops\\n' >&2"));
@@ -1105,6 +1247,42 @@ mod tests {
                 assert!(!output.success());
                 assert_eq!(output.status(), None);
             }
+            other => panic!("expected a timeout, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_timeout_kills_grandchildren_that_keep_the_output_pipes_open() {
+        let marker =
+            std::env::temp_dir().join(format!("freshen-process-grandchild-{}", std::process::id()));
+        let _ = std::fs::remove_file(&marker);
+        let script = format!(
+            "sleep 30 & child=$!; printf '%s\\n' \"$child\" > '{marker}'; wait",
+            marker = marker.display()
+        );
+        let started = Instant::now();
+
+        let result = shell(&script).timeout(Duration::from_millis(500)).run();
+        let elapsed = started.elapsed();
+
+        let pid = std::fs::read_to_string(&marker)
+            .unwrap_or_else(|error| panic!("grandchild did not record its pid: {error}"))
+            .trim()
+            .parse::<i32>()
+            .unwrap_or_else(|error| panic!("invalid grandchild pid: {error}"));
+        let _ = std::fs::remove_file(&marker);
+
+        assert!(
+            wait_until_gone(pid, Duration::from_secs(2)),
+            "grandchild {pid} outlived the timed-out step"
+        );
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "the timed-out command took {elapsed:?}"
+        );
+        match result {
+            Err(ProcessError::TimedOut { .. }) => {}
             other => panic!("expected a timeout, got {other:?}"),
         }
     }
