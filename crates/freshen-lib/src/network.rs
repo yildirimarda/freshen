@@ -9,6 +9,7 @@
 //! Everything here is deliberately environment-driven: the same variables are
 //! inherited by the commands every update step runs.
 
+use std::fmt;
 use std::fs;
 use std::io::{self, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
@@ -96,6 +97,37 @@ impl Environment {
         let address = endpoint.address.ip().to_string();
         no_proxy_matches(no_proxy, endpoint.host, endpoint.port)
             || no_proxy_matches(no_proxy, &address, endpoint.port)
+    }
+}
+
+/// Why the network preflight check failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NetworkCheckError {
+    /// A proxy variable could not be parsed.
+    InvalidProxy(String),
+    /// The system trust store or a custom CA bundle could not be loaded.
+    TrustStore(String),
+    /// The TLS handshake with the endpoint failed.
+    TlsHandshake { host: String, error: String },
+    /// The proxy refused to open a tunnel to the endpoint.
+    ProxyTunnel { endpoint: String, detail: String },
+    /// No endpoint could be reached at all.
+    Unreachable,
+}
+
+impl fmt::Display for NetworkCheckError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidProxy(detail) => write!(f, "invalid proxy URL: {detail}"),
+            Self::TrustStore(detail) => f.write_str(detail),
+            Self::TlsHandshake { host, error } => {
+                write!(f, "TLS handshake with {host} failed: {error}")
+            }
+            Self::ProxyTunnel { endpoint, detail } => {
+                write!(f, "proxy could not open a tunnel to {endpoint}: {detail}")
+            }
+            Self::Unreachable => f.write_str("network is unreachable"),
+        }
     }
 }
 
@@ -271,24 +303,45 @@ fn split_no_proxy_port(entry: &str) -> (&str, Option<u16>) {
 }
 
 /// Checks whether any of the default endpoints is reachable.
-pub(crate) fn reachable() -> bool {
+pub(crate) fn check() -> Result<(), NetworkCheckError> {
     let environment = Environment::from_process();
-    reachable_with(&environment, &default_endpoints(), Duration::from_secs(2))
+    check_with(&environment, &default_endpoints(), Duration::from_secs(2))
 }
 
-fn reachable_with(environment: &Environment, endpoints: &[Endpoint], timeout: Duration) -> bool {
-    let Ok(roots) = root_store(environment) else {
-        return false;
-    };
+fn check_with(
+    environment: &Environment,
+    endpoints: &[Endpoint],
+    timeout: Duration,
+) -> Result<(), NetworkCheckError> {
+    for endpoint in endpoints {
+        if let Err(error) = environment.proxy_for(endpoint) {
+            return Err(NetworkCheckError::InvalidProxy(error));
+        }
+    }
+
+    let roots = root_store(environment).map_err(NetworkCheckError::TrustStore)?;
     let config = Arc::new(
         ClientConfig::builder()
             .with_root_certificates(roots)
             .with_no_client_auth(),
     );
 
-    endpoints
-        .iter()
-        .any(|endpoint| endpoint_reachable(environment, endpoint, timeout, &config))
+    let mut failure = None;
+    for endpoint in endpoints {
+        match endpoint_reachable(environment, endpoint, timeout, &config) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                let replace = matches!(
+                    failure.as_ref(),
+                    None | Some(NetworkCheckError::Unreachable)
+                );
+                if replace {
+                    failure = Some(error);
+                }
+            }
+        }
+    }
+    Err(failure.unwrap_or(NetworkCheckError::Unreachable))
 }
 
 fn root_store(environment: &Environment) -> Result<RootCertStore, String> {
@@ -385,14 +438,15 @@ fn endpoint_reachable(
     endpoint: &Endpoint,
     timeout: Duration,
     config: &Arc<ClientConfig>,
-) -> bool {
+) -> Result<(), NetworkCheckError> {
     match environment.proxy_for(endpoint) {
         Ok(Some(proxy)) => proxy_reachable(&proxy, endpoint, timeout, config),
-        Ok(None) => match connect(endpoint.address, timeout) {
-            Some(mut stream) => tls_handshake(&mut stream, endpoint.host, config),
-            None => false,
-        },
-        Err(_) => false,
+        Ok(None) => {
+            let mut stream =
+                connect(endpoint.address, timeout).ok_or(NetworkCheckError::Unreachable)?;
+            tls_handshake(&mut stream, endpoint.host, config)
+        }
+        Err(error) => Err(NetworkCheckError::InvalidProxy(error)),
     }
 }
 
@@ -401,33 +455,48 @@ fn proxy_reachable(
     endpoint: &Endpoint,
     timeout: Duration,
     config: &Arc<ClientConfig>,
-) -> bool {
+) -> Result<(), NetworkCheckError> {
     let Ok(addresses) = (proxy.host.as_str(), proxy.port).to_socket_addrs() else {
-        return false;
+        return Err(NetworkCheckError::Unreachable);
     };
 
+    let mut failure = None;
     for address in addresses {
         let Some(mut stream) = connect(address, timeout) else {
+            if failure.is_none() {
+                failure = Some(NetworkCheckError::Unreachable);
+            }
             continue;
         };
 
-        if proxy.secure {
-            let Some(mut tunnel) = tls_stream(stream, &proxy.host, config) else {
-                continue;
-            };
-            if connect_tunnel(&mut tunnel, endpoint, proxy.authorization.as_deref())
-                && tls_handshake(&mut tunnel, endpoint.host, config)
-            {
-                return true;
+        let result = if proxy.secure {
+            match tls_stream(stream, &proxy.host, config) {
+                Ok(mut tunnel) => {
+                    connect_tunnel(&mut tunnel, endpoint, proxy.authorization.as_deref())
+                        .and_then(|()| tls_handshake(&mut tunnel, endpoint.host, config))
+                }
+                Err(error) => Err(error),
             }
-        } else if connect_tunnel(&mut stream, endpoint, proxy.authorization.as_deref())
-            && tls_handshake(&mut stream, endpoint.host, config)
-        {
-            return true;
+        } else {
+            connect_tunnel(&mut stream, endpoint, proxy.authorization.as_deref())
+                .and_then(|()| tls_handshake(&mut stream, endpoint.host, config))
+        };
+
+        match result {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                let replace = matches!(
+                    failure.as_ref(),
+                    None | Some(NetworkCheckError::Unreachable)
+                );
+                if replace {
+                    failure = Some(error);
+                }
+            }
         }
     }
 
-    false
+    Err(failure.unwrap_or(NetworkCheckError::Unreachable))
 }
 
 fn connect(address: SocketAddr, timeout: Duration) -> Option<TcpStream> {
@@ -441,27 +510,60 @@ fn tls_stream(
     mut stream: TcpStream,
     host: &str,
     config: &Arc<ClientConfig>,
-) -> Option<StreamOwned<ClientConnection, TcpStream>> {
-    let name = ServerName::try_from(host.to_owned()).ok()?;
-    let mut connection = ClientConnection::new(config.clone(), name).ok()?;
-    connection.complete_io(&mut stream).ok()?;
-    Some(StreamOwned::new(connection, stream))
+) -> Result<StreamOwned<ClientConnection, TcpStream>, NetworkCheckError> {
+    let name =
+        ServerName::try_from(host.to_owned()).map_err(|error| NetworkCheckError::TlsHandshake {
+            host: host.to_owned(),
+            error: error.to_string(),
+        })?;
+    let mut connection = ClientConnection::new(config.clone(), name).map_err(|error| {
+        NetworkCheckError::TlsHandshake {
+            host: host.to_owned(),
+            error: error.to_string(),
+        }
+    })?;
+    connection
+        .complete_io(&mut stream)
+        .map_err(|error| NetworkCheckError::TlsHandshake {
+            host: host.to_owned(),
+            error: error.to_string(),
+        })?;
+    Ok(StreamOwned::new(connection, stream))
 }
 
-fn tls_handshake<S>(stream: &mut S, host: &str, config: &Arc<ClientConfig>) -> bool
+fn tls_handshake<S>(
+    stream: &mut S,
+    host: &str,
+    config: &Arc<ClientConfig>,
+) -> Result<(), NetworkCheckError>
 where
     S: Read + Write,
 {
-    let Ok(name) = ServerName::try_from(host.to_owned()) else {
-        return false;
-    };
-    let Ok(mut connection) = ClientConnection::new(config.clone(), name) else {
-        return false;
-    };
-    connection.complete_io(stream).is_ok()
+    let name =
+        ServerName::try_from(host.to_owned()).map_err(|error| NetworkCheckError::TlsHandshake {
+            host: host.to_owned(),
+            error: error.to_string(),
+        })?;
+    let mut connection = ClientConnection::new(config.clone(), name).map_err(|error| {
+        NetworkCheckError::TlsHandshake {
+            host: host.to_owned(),
+            error: error.to_string(),
+        }
+    })?;
+    connection
+        .complete_io(stream)
+        .map_err(|error| NetworkCheckError::TlsHandshake {
+            host: host.to_owned(),
+            error: error.to_string(),
+        })
+        .map(|_| ())
 }
 
-fn connect_tunnel<S>(stream: &mut S, endpoint: &Endpoint, authorization: Option<&str>) -> bool
+fn connect_tunnel<S>(
+    stream: &mut S,
+    endpoint: &Endpoint,
+    authorization: Option<&str>,
+) -> Result<(), NetworkCheckError>
 where
     S: Read + Write,
 {
@@ -478,13 +580,19 @@ where
     request.push_str("\r\n");
 
     if stream.write_all(request.as_bytes()).is_err() || stream.flush().is_err() {
-        return false;
+        return Err(NetworkCheckError::ProxyTunnel {
+            endpoint: authority,
+            detail: "cannot send the CONNECT request".to_owned(),
+        });
     }
 
-    read_connect_response(stream)
+    read_connect_response(stream).map_err(|detail| NetworkCheckError::ProxyTunnel {
+        endpoint: authority,
+        detail,
+    })
 }
 
-fn read_connect_response<S>(stream: &mut S) -> bool
+fn read_connect_response<S>(stream: &mut S) -> Result<(), String>
 where
     S: Read,
 {
@@ -496,35 +604,41 @@ where
             break;
         }
         if response.len() >= MAX_PROXY_HEADER_BYTES {
-            return false;
+            return Err("the CONNECT response head is too large".to_owned());
         }
         match stream.read(&mut chunk) {
-            Ok(0) => return false,
+            Ok(0) => return Err("the proxy closed the connection before replying".to_owned()),
             Ok(read) => response.extend_from_slice(&chunk[..read]),
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(_) => return false,
+            Err(_) => return Err("cannot read the CONNECT response".to_owned()),
         }
     }
 
     let Some(line_end) = response.windows(2).position(|window| window == b"\r\n") else {
-        return false;
+        return Err("the CONNECT response has no status line".to_owned());
     };
     let Ok(status_line) = std::str::from_utf8(&response[..line_end]) else {
-        return false;
+        return Err("the CONNECT status line is not UTF-8".to_owned());
     };
     let mut parts = status_line.split_whitespace();
     let Some(_version) = parts.next() else {
-        return false;
+        return Err("the CONNECT response has no status line".to_owned());
     };
     let Some(code) = parts.next().and_then(|code| code.parse::<u16>().ok()) else {
-        return false;
+        return Err("the CONNECT response has no status code".to_owned());
     };
-    (200..300).contains(&code)
+    if (200..300).contains(&code) {
+        Ok(())
+    } else {
+        Err(format!("the proxy replied with HTTP status {code}"))
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{no_proxy_matches, parse_proxy, reachable_with, Endpoint, Environment};
+    use super::{
+        check_with, no_proxy_matches, parse_proxy, Endpoint, Environment, NetworkCheckError,
+    };
     use rustls::{ServerConfig, ServerConnection, StreamOwned};
     use std::io::{self, Read, Write};
     use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -619,6 +733,17 @@ pT8yRnSiD29WLvz412hxX/k=
             host,
             port: address.port(),
             address,
+        }
+    }
+
+    fn check_failure(
+        environment: &Environment,
+        endpoints: &[Endpoint],
+        timeout: Duration,
+    ) -> NetworkCheckError {
+        match check_with(environment, endpoints, timeout) {
+            Ok(()) => panic!("the network check should have failed"),
+            Err(error) => error,
         }
     }
 
@@ -837,11 +962,12 @@ pT8yRnSiD29WLvz412hxX/k=
                 .unwrap_or_else(|| panic!("test CA path is not UTF-8")),
         )]);
 
-        assert!(reachable_with(
+        assert!(check_with(
             &environment,
             &[endpoint("localhost", address)],
             Duration::from_secs(2)
-        ));
+        )
+        .is_ok());
         server
             .join()
             .unwrap_or_else(|_| panic!("TLS test server panicked"));
@@ -849,17 +975,51 @@ pT8yRnSiD29WLvz412hxX/k=
     }
 
     #[test]
-    fn the_network_check_fails_without_the_custom_ca() {
+    fn a_tls_handshake_failure_is_reported() {
         let (address, server) = tls_server();
 
-        assert!(!reachable_with(
+        let error = check_failure(
             &environment(&[]),
             &[endpoint("localhost", address)],
-            Duration::from_secs(2)
-        ));
+            Duration::from_secs(2),
+        );
+
+        assert!(matches!(error, NetworkCheckError::TlsHandshake { .. }));
+        assert!(
+            error
+                .to_string()
+                .contains("TLS handshake with localhost failed"),
+            "{error}"
+        );
         server
             .join()
             .unwrap_or_else(|_| panic!("TLS test server panicked"));
+    }
+
+    #[test]
+    fn an_unreachable_endpoint_is_reported() {
+        let endpoint = endpoint("localhost", SocketAddr::from(([127, 0, 0, 1], 1)));
+
+        let error = check_failure(&environment(&[]), &[endpoint], Duration::from_millis(500));
+
+        assert_eq!(error, NetworkCheckError::Unreachable);
+        assert_eq!(error.to_string(), "network is unreachable");
+    }
+
+    #[test]
+    fn an_invalid_proxy_url_is_reported() {
+        let environment = environment(&[("HTTPS_PROXY", "socks5://proxy.example:1080")]);
+        let endpoint = endpoint("example.com", SocketAddr::from(([127, 0, 0, 1], 443)));
+
+        let error = check_failure(&environment, &[endpoint], Duration::from_millis(500));
+
+        assert!(matches!(error, NetworkCheckError::InvalidProxy(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("invalid proxy URL: unsupported proxy scheme 'socks5'"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -878,11 +1038,19 @@ pT8yRnSiD29WLvz412hxX/k=
                 .unwrap_or_else(|| panic!("test CA path is not UTF-8")),
         )]);
 
-        assert!(!reachable_with(
+        let error = check_failure(
             &environment,
             &[endpoint("localhost", address)],
-            Duration::from_secs(2)
-        ));
+            Duration::from_secs(2),
+        );
+
+        assert!(matches!(error, NetworkCheckError::TrustStore(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("cannot parse certificate in CA bundle"),
+            "{error}"
+        );
         server
             .join()
             .unwrap_or_else(|_| panic!("TLS test server panicked"));
@@ -895,11 +1063,17 @@ pT8yRnSiD29WLvz412hxX/k=
         let environment =
             environment(&[("SSL_CERT_FILE", "/freshen/definitely/not/a/certificate.pem")]);
 
-        assert!(!reachable_with(
+        let error = check_failure(
             &environment,
             &[endpoint("localhost", address)],
-            Duration::from_secs(2)
-        ));
+            Duration::from_secs(2),
+        );
+
+        assert!(matches!(error, NetworkCheckError::TrustStore(_)));
+        assert!(
+            error.to_string().contains("cannot read CA bundle"),
+            "{error}"
+        );
         server
             .join()
             .unwrap_or_else(|_| panic!("TLS test server panicked"));
@@ -924,11 +1098,7 @@ pT8yRnSiD29WLvz412hxX/k=
             ..direct
         };
 
-        assert!(reachable_with(
-            &proxied,
-            &[unreachable],
-            Duration::from_secs(2)
-        ));
+        assert!(check_with(&proxied, &[unreachable], Duration::from_secs(2)).is_ok());
         server
             .join()
             .unwrap_or_else(|_| panic!("TLS test server panicked"));
@@ -943,11 +1113,12 @@ pT8yRnSiD29WLvz412hxX/k=
             ("SSL_CERT_FILE", ca),
         ]);
 
-        assert!(reachable_with(
+        assert!(check_with(
             &bypassed,
             &[endpoint("localhost", address)],
             Duration::from_secs(2)
-        ));
+        )
+        .is_ok());
         server
             .join()
             .unwrap_or_else(|_| panic!("TLS test server panicked"));
