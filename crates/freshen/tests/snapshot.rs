@@ -110,6 +110,9 @@ fn records_installed_versions_for_each_step_in_a_timestamped_file() {
   "list --versions")
     printf 'jq 1.7.1\n'
     ;;
+  "list --cask --versions")
+    printf 'firefox 121.0\nvisual-studio-code 1.85.1\n'
+    ;;
   "bundle dump --force --file="*)
     for arg in "$@"; do
       case "$arg" in
@@ -154,6 +157,9 @@ esac"#,
     assert!(text.contains("## brew"), "{text}");
     assert!(text.contains("$ brew list --versions"), "{text}");
     assert!(text.contains("jq 1.7.1"), "{text}");
+    assert!(text.contains("$ brew list --cask --versions"), "{text}");
+    assert!(text.contains("firefox 121.0"), "{text}");
+    assert!(text.contains("visual-studio-code 1.85.1"), "{text}");
     assert!(text.contains("$ brew bundle dump"), "{text}");
     assert!(text.contains("brew \"jq\""), "{text}");
     assert!(text.contains("## uv"), "{text}");
@@ -176,6 +182,14 @@ esac"#,
     );
     assert!(
         summary.contains("brew install jq@1.7.1"),
+        "summary: {summary}"
+    );
+    assert!(
+        summary.contains("brew install --cask firefox@121.0"),
+        "summary: {summary}"
+    );
+    assert!(
+        summary.contains("brew install --cask visual-studio-code@1.85.1"),
         "summary: {summary}"
     );
     assert!(

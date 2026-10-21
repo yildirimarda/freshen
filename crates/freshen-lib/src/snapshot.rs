@@ -192,6 +192,7 @@ pub fn homebrew_section() -> SnapshotSection {
         "brew",
         vec![
             SnapshotCommand::new("brew", ["list", "--versions"]),
+            SnapshotCommand::new("brew", ["list", "--cask", "--versions"]),
             SnapshotCommand::new("brew", ["bundle", "dump", "--force"]).writing_to_file("--file="),
         ],
     )
@@ -363,6 +364,9 @@ impl CapturedSection {
                 "brew" if entry.command == "brew list --versions" => {
                     commands.extend(brew_rollback_commands(entry));
                 }
+                "brew" if entry.command == "brew list --cask --versions" => {
+                    commands.extend(brew_cask_rollback_commands(entry));
+                }
                 "uv" if entry.command == "uv tool list" => {
                     commands.extend(uv_rollback_commands(entry));
                 }
@@ -402,6 +406,26 @@ fn brew_rollback_commands(entry: &SnapshotEntry) -> Vec<RollbackCommand> {
                 format!("brew install {name}")
             } else {
                 format!("brew install {name}@{version}")
+            };
+            Some(RollbackCommand::new("brew", command))
+        })
+        .collect()
+}
+
+fn brew_cask_rollback_commands(entry: &SnapshotEntry) -> Vec<RollbackCommand> {
+    recorded_lines(entry)
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let name = fields.next()?;
+            let version = fields.next_back()?;
+            if name == version {
+                return None;
+            }
+
+            let command = if name.contains('@') {
+                format!("brew install --cask {name}")
+            } else {
+                format!("brew install --cask {name}@{version}")
             };
             Some(RollbackCommand::new("brew", command))
         })
@@ -840,6 +864,24 @@ mod tests {
                 )],
             }),
             ["docker pull alpine@sha256:abc"]
+        );
+    }
+
+    #[test]
+    fn cask_rollback_commands_use_the_recorded_cask_versions() {
+        assert_eq!(
+            commands(CapturedSection {
+                group: "brew",
+                entries: vec![SnapshotEntry::new(
+                    "brew list --cask --versions",
+                    "firefox 121.0\nvisual-studio-code 1.85.1\nfirefox@115 115.0\n",
+                )],
+            }),
+            [
+                "brew install --cask firefox@121.0",
+                "brew install --cask visual-studio-code@1.85.1",
+                "brew install --cask firefox@115",
+            ]
         );
     }
 
