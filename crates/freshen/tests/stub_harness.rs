@@ -98,6 +98,7 @@ fn a_ported_step_replays_a_recorded_command_transcript() {
             "--only",
             "brew,brew-formulae,brew-casks,brew-autoremove,brew-cleanup",
             "--yes",
+            "--cleanup",
         ])
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));

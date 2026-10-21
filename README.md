@@ -12,10 +12,10 @@ The implementation is the Rust workspace under `crates/`: `freshen-lib` holds al
 
 | Step | Commands |
 |---|---|
-| Homebrew | `brew update` → `brew upgrade --formula` → quit running apps → `brew upgrade --cask --greedy` → `brew autoremove` → `brew cleanup --prune=all` → reopen the apps it quit |
-| Colima / Docker | If `colima`/`lima` itself is about to be upgraded: bring compose projects down, stop standalone containers, stop Colima, upgrade, start Colima, bring everything back up. Afterwards: `docker compose pull` + `up -d` for running compose projects (only changed containers are recreated) and `docker image prune -f` |
-| uv | `uv tool upgrade --all` → `uv cache prune` |
-| mise | `mise self-update` (only if mise was not installed via brew) → `mise upgrade` → `mise prune -y`, plus a warning for processes still running on an old Node, Python, Java or Go version, naming the app that started them |
+| Homebrew | `brew update` → `brew upgrade --formula` → quit running apps → `brew upgrade --cask --greedy` → reopen the apps it quit. With `--cleanup`: `brew autoremove` → `brew cleanup --prune=all` before reopening |
+| Colima / Docker | If `colima`/`lima` itself is about to be upgraded: bring compose projects down, stop standalone containers, stop Colima, upgrade, start Colima, bring everything back up. Afterwards: `docker compose pull` + `up -d` for running compose projects (only changed containers are recreated). With `--cleanup`: `docker image prune -f` |
+| uv | `uv tool upgrade --all`. With `--cleanup`: `uv cache prune` |
+| mise | `mise self-update` (only if mise was not installed via brew) → `mise upgrade`, plus a warning for processes still running on an old Node, Python, Java or Go version, naming the app that started them. With `--cleanup`: `mise prune -y` |
 
 A failing step never aborts the run. Failures are collected and listed at the end (exit code 1).
 
@@ -31,6 +31,7 @@ A failing step never aborts the run. Failures are collected and listed at the en
 - **Every run starts with preflight checks**: the network must be reachable, at least 1 GiB must be free, the battery must be at or above 20% while discharging, and the connection must not be metered or a hotspot. A failed check stops before any step runs (exit code 3) and lists every problem. Each check can be disabled with `--skip-network-check`, `--skip-disk-check`, `--skip-battery-check` or `--skip-metered-check`; `--min-free-disk-gib` and `--battery-threshold` change the thresholds. `--dry-run` and `--check` skip preflight because they change nothing.
 - **Another package manager must not be running.** Before changing anything, freshen checks for Homebrew, apt/dpkg (including a held dpkg or apt lock) and winget. It waits up to 30 seconds for the other process to finish, then stops with exit code 3 and names the process and its PID. Use `--package-manager-wait <SECONDS>` to change the wait (0 aborts immediately) or `--skip-package-manager-check` to bypass the check. `--dry-run` and `--check` skip it because they change nothing.
 - **Every run records a pre-upgrade snapshot** of installed versions (`brew list --versions`, `brew bundle dump`, `uv tool list`, `mise ls`, Docker images) in a timestamped file under the platform state directory (`~/.local/state/freshen/snapshots` on Linux, `~/Library/Application Support/freshen/snapshots` on macOS, `%LOCALAPPDATA%\freshen\snapshots` on Windows). Set `FRESHEN_SNAPSHOT_DIR` to override the location. The summary prints the commands that reinstall the recorded versions.
+- **Destructive cleanup is opt-in.** Cache pruning, old-version pruning, `brew autoremove`, `brew cleanup --prune=all` and `docker image prune` only run with `--cleanup`. Without it freshen prints why each one was skipped. When enabled, every item a cleanup removes is echoed and the reclaimed space is reported when the tool provides it.
 - **A hung step cannot hang the whole run.** `--step-timeout <SECONDS>` bounds each step (detection, check, upgrade and cleanup) and `--timeout <SECONDS>` bounds the whole run. A step that runs out of time is stopped, reported as `timed out` rather than `failed`, and anything it stopped is restored; `0` disables a timeout.
 - **Transient download errors are retried with exponential backoff.** A connection reset, timeout or temporary HTTP 5xx/429 response is retried up to twice before the step gives up. If the package registry is permanently unreachable (DNS failure, refused connection or no route), the step is reported as `skipped` with the reason `registry unreachable` instead of failing the run.
 - **Only one update runs at a time.** A second run stops with an error naming the PID that holds the lock. The lock lives under the platform state directory (`FRESHEN_LOCK_DIR` overrides it), and `--dry-run`/`--check` do not take it.
@@ -47,6 +48,7 @@ A failing step never aborts the run. Failures are collected and listed at the en
 freshen                       # interactive: asks before quitting apps
 freshen --yes                 # no prompt
 freshen --force-kill          # kill apps that refuse to quit (unsaved data may be lost)
+freshen --cleanup             # also prune caches, old versions and dangling images
 QUIT_TIMEOUT=40 freshen       # wait longer for apps to quit
 freshen --dry-run             # detect and plan, change nothing
 freshen --check               # report outdated items, change nothing (exit 2 if updates are pending)
@@ -107,6 +109,7 @@ cargo run -p freshen -- --markdown                   # Markdown report with vers
 cargo run -p freshen -- --list-steps                 # detect every step and explain skips
 cargo run -p freshen -- --only brew,uv --skip casks  # select steps
 cargo run -p freshen -- --yes --force-kill           # no prompts, kill stubborn apps
+cargo run -p freshen -- --cleanup                    # opt in to destructive cleanup
 cargo run -p freshen -- --step-timeout 600 --timeout 3600  # bound each step and the whole run
 cargo run -p freshen -- --skip-network-check         # bypass one preflight check
 cargo run -p freshen -- --package-manager-wait 0     # do not wait for another package manager

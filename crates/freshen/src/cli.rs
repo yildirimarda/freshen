@@ -52,6 +52,10 @@ pub struct Cli {
     #[arg(long)]
     pub force_kill: bool,
 
+    /// Run destructive cleanup (cache, old-version and image pruning).
+    #[arg(long, alias = "allow-cleanup", alias = "destructive-cleanup")]
+    pub cleanup: bool,
+
     /// Stop a single step after this many seconds (0 disables the timeout).
     #[arg(long, value_name = "SECONDS", default_value_t = 0)]
     pub step_timeout: u64,
@@ -114,6 +118,7 @@ impl Cli {
             .with_dry_run(self.dry_run)
             .with_assume_yes(self.yes)
             .with_force_kill(self.force_kill)
+            .with_cleanup(self.cleanup)
             .with_step_timeout(timeout(self.step_timeout))
             .with_global_timeout(timeout(self.timeout))
             .with_preflight(preflight)
@@ -159,6 +164,7 @@ mod tests {
         assert!(!options.is_dry_run());
         assert!(!options.assume_yes());
         assert!(!options.force_kill());
+        assert!(!options.cleanup_enabled());
         assert_eq!(options.step_timeout(), None);
         assert_eq!(options.global_timeout(), None);
         assert!(options.selection().is_empty());
@@ -190,6 +196,7 @@ mod tests {
             "casks",
             "--yes",
             "--force-kill",
+            "--cleanup",
             "--step-timeout",
             "120",
             "--timeout",
@@ -213,6 +220,7 @@ mod tests {
         assert!(options.is_dry_run());
         assert!(options.assume_yes());
         assert!(options.force_kill());
+        assert!(options.cleanup_enabled());
         assert_eq!(
             options.step_timeout(),
             Some(std::time::Duration::from_secs(120))
@@ -301,6 +309,7 @@ mod tests {
             "--skip",
             "--yes",
             "--force-kill",
+            "--cleanup",
             "--step-timeout",
             "--timeout",
             "--skip-network-check",

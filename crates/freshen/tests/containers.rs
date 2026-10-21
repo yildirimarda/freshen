@@ -134,7 +134,7 @@ fn run(tools: &StubTools, scenario: &Scenario<'_>) -> Output {
         .env("FRESHEN_COLIMA_START_STATUS", scenario.colima_start_status)
         .env("FRESHEN_COMPOSE_JSON", scenario.compose_json)
         .env("FRESHEN_PS_OUTPUT", scenario.ps_output)
-        .args(["--only", ALL_STEPS])
+        .args(["--only", ALL_STEPS, "--cleanup"])
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
 }

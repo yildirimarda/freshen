@@ -19,7 +19,9 @@ use std::rc::Rc;
 
 use serde_json::Value;
 
+use crate::cleanup;
 use crate::homebrew::{BREW, FORMULAE, REOPEN};
+use crate::options::RunOptions;
 use crate::platform::Platform;
 use crate::process::{CommandSpec, NETWORK_RETRIES};
 use crate::registry::Registry;
@@ -428,6 +430,10 @@ impl Step for DockerStep {
     }
 
     fn run(&self) -> Result<(), StepError> {
+        self.run_with_options(&RunOptions::new())
+    }
+
+    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
         if !colima_is_running() {
             println!("warning: colima is not running, skipping Docker image updates.");
             return Ok(());
@@ -451,12 +457,13 @@ impl Step for DockerStep {
             }
         }
 
-        println!("Docker: prune dangling images");
-        if let Err(error) = CommandSpec::new("docker")
-            .args(["image", "prune", "-f"])
-            .run()
-        {
-            failures.push(StepError::run_from_process(DOCKER, &error));
+        if let Err(error) = cleanup::run(
+            DOCKER,
+            "Docker: prune dangling images",
+            CommandSpec::new("docker").args(["image", "prune", "-f"]),
+            options,
+        ) {
+            failures.push(error);
         }
 
         finish(failures)

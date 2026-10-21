@@ -13,7 +13,9 @@
 use std::env;
 use std::path::Path;
 
+use crate::cleanup;
 use crate::homebrew::BREW;
+use crate::options::RunOptions;
 use crate::platform::Platform;
 use crate::process::{CommandSpec, NETWORK_RETRIES};
 use crate::registry::Registry;
@@ -54,6 +56,10 @@ impl Step for UvStep {
     }
 
     fn run(&self) -> Result<(), StepError> {
+        self.run_with_options(&RunOptions::new())
+    }
+
+    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
         let mut failures = Vec::new();
 
         println!("uv: tool upgrade --all");
@@ -65,9 +71,13 @@ impl Step for UvStep {
             failures.push(StepError::run_from_process(UV, &error));
         }
 
-        println!("uv: cache prune");
-        if let Err(error) = CommandSpec::new("uv").args(["cache", "prune"]).run() {
-            failures.push(StepError::run_from_process(UV, &error));
+        if let Err(error) = cleanup::run(
+            UV,
+            "uv: cache prune",
+            CommandSpec::new("uv").args(["cache", "prune"]),
+            options,
+        ) {
+            failures.push(error);
         }
 
         finish(failures)
@@ -109,6 +119,10 @@ impl Step for MiseStep {
     }
 
     fn run(&self) -> Result<(), StepError> {
+        self.run_with_options(&RunOptions::new())
+    }
+
+    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
         let mut failures = Vec::new();
 
         if !mise_installed_with_brew() {
@@ -131,9 +145,13 @@ impl Step for MiseStep {
             failures.push(StepError::run_from_process(MISE, &error));
         }
 
-        println!("mise: prune (remove unused old versions)");
-        if let Err(error) = CommandSpec::new("mise").args(["prune", "-y"]).run() {
-            failures.push(StepError::run_from_process(MISE, &error));
+        if let Err(error) = cleanup::run(
+            MISE,
+            "mise: prune (remove unused old versions)",
+            CommandSpec::new("mise").args(["prune", "-y"]),
+            options,
+        ) {
+            failures.push(error);
         }
 
         warn_about_stale_tool_processes();

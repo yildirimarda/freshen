@@ -185,6 +185,7 @@ pub struct RunOptions {
     dry_run: bool,
     assume_yes: bool,
     force_kill: bool,
+    cleanup: bool,
     selection: StepSelection,
     preflight: PreflightConfig,
     package_manager: PackageManagerConfig,
@@ -218,6 +219,13 @@ impl RunOptions {
     #[must_use]
     pub fn with_force_kill(mut self, force_kill: bool) -> Self {
         self.force_kill = force_kill;
+        self
+    }
+
+    /// Sets `--cleanup`: allow destructive cache, version and image pruning.
+    #[must_use]
+    pub fn with_cleanup(mut self, cleanup: bool) -> Self {
+        self.cleanup = cleanup;
         self
     }
 
@@ -273,6 +281,12 @@ impl RunOptions {
     #[must_use]
     pub fn force_kill(&self) -> bool {
         self.force_kill
+    }
+
+    /// Returns `true` when `--cleanup` explicitly enables destructive cleanup.
+    #[must_use]
+    pub fn cleanup_enabled(&self) -> bool {
+        self.cleanup
     }
 
     /// The `--only`/`--skip` selection.
@@ -406,6 +420,7 @@ mod tests {
         assert!(!options.is_dry_run());
         assert!(!options.assume_yes());
         assert!(!options.force_kill());
+        assert!(!options.cleanup_enabled());
         assert!(options.selection().is_empty());
         assert_eq!(options.step_timeout(), None);
         assert_eq!(options.global_timeout(), None);
@@ -417,12 +432,14 @@ mod tests {
             .with_dry_run(true)
             .with_assume_yes(true)
             .with_force_kill(true)
+            .with_cleanup(true)
             .with_step_timeout(Some(std::time::Duration::from_secs(60)))
             .with_global_timeout(Some(std::time::Duration::from_secs(600)));
 
         assert!(options.is_dry_run());
         assert!(options.assume_yes());
         assert!(options.force_kill());
+        assert!(options.cleanup_enabled());
         assert_eq!(
             options.step_timeout(),
             Some(std::time::Duration::from_secs(60))
