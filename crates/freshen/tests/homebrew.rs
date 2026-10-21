@@ -50,6 +50,12 @@ fn command_transcript_matches_the_zsh_homebrew_block() {
   "info --cask --json=v2 firefox google-chrome")
     printf '%s\n' "$FRESHEN_BREW_INFO_JSON"
     ;;
+  "autoremove --dry-run")
+    printf '==> Would autoremove 1 unneeded formula:\nold-dependency\n'
+    ;;
+  "cleanup --dry-run --prune=all")
+    printf 'Would remove: /tmp/old (1.2MB)\n'
+    ;;
 esac"#,
     );
     std::fs::create_dir_all(tools.home().join("Applications/Firefox.app"))
@@ -69,7 +75,9 @@ esac"#,
             "brew outdated --cask --greedy --quiet",
             "brew info --cask --json=v2 firefox google-chrome",
             "brew upgrade --cask --greedy",
+            "brew autoremove --dry-run",
             "brew autoremove",
+            "brew cleanup --dry-run --prune=all",
             "brew cleanup --prune=all",
         ]
     );
@@ -107,8 +115,8 @@ fn no_outdated_casks_skips_the_cask_upgrade() {
             "brew outdated --formula --quiet",
             "brew outdated --cask --greedy",
             "brew outdated --cask --greedy --quiet",
-            "brew autoremove",
-            "brew cleanup --prune=all",
+            "brew autoremove --dry-run",
+            "brew cleanup --dry-run --prune=all",
         ]
     );
     assert!(
@@ -153,6 +161,12 @@ fn invalid_cask_metadata_does_not_stop_the_cask_upgrade() {
   "info --cask --json=v2 firefox")
     printf 'not json\n'
     ;;
+  "autoremove --dry-run")
+    printf '==> Would autoremove 1 unneeded formula:\nold-dependency\n'
+    ;;
+  "cleanup --dry-run --prune=all")
+    printf 'Would remove: /tmp/old (1.2MB)\n'
+    ;;
 esac"#,
     );
 
@@ -170,7 +184,9 @@ esac"#,
             "brew outdated --cask --greedy --quiet",
             "brew info --cask --json=v2 firefox",
             "brew upgrade --cask --greedy",
+            "brew autoremove --dry-run",
             "brew autoremove",
+            "brew cleanup --dry-run --prune=all",
             "brew cleanup --prune=all",
         ]
     );
@@ -199,6 +215,12 @@ fn a_failing_formula_upgrade_does_not_stop_the_cask_steps() {
   "info --cask --json=v2 firefox")
     printf '%s\n' "$FRESHEN_BREW_INFO_JSON"
     ;;
+  "autoremove --dry-run")
+    printf '==> Would autoremove 1 unneeded formula:\nold-dependency\n'
+    ;;
+  "cleanup --dry-run --prune=all")
+    printf 'Would remove: /tmp/old (1.2MB)\n'
+    ;;
 esac"#,
     );
 
@@ -216,7 +238,9 @@ esac"#,
             "brew outdated --cask --greedy --quiet",
             "brew info --cask --json=v2 firefox",
             "brew upgrade --cask --greedy",
+            "brew autoremove --dry-run",
             "brew autoremove",
+            "brew cleanup --dry-run --prune=all",
             "brew cleanup --prune=all",
         ]
     );
@@ -241,6 +265,12 @@ fn app_tools(osascript_quits: bool) -> (StubTools, std::path::PathBuf, std::path
     ;;
   "info --cask --json=v2 firefox")
     printf '%s\n' "$FRESHEN_BREW_INFO_JSON"
+    ;;
+  "autoremove --dry-run")
+    printf '==> Would autoremove 1 unneeded formula:\nold-dependency\n'
+    ;;
+  "cleanup --dry-run --prune=all")
+    printf 'Would remove: /tmp/old (1.2MB)\n'
     ;;
 esac"#,
     );
@@ -323,7 +353,9 @@ fn quits_running_cask_apps_before_the_upgrade_and_reopens_after_cleanup() {
             "osascript -e with timeout of 3 seconds -e tell application id \"com.example.firefox\" to quit -e end timeout".to_owned(),
             "ps -axo command=".to_owned(),
             "brew upgrade --cask --greedy".to_owned(),
+            "brew autoremove --dry-run".to_owned(),
             "brew autoremove".to_owned(),
+            "brew cleanup --dry-run --prune=all".to_owned(),
             "brew cleanup --prune=all".to_owned(),
             "open -g -b com.example.firefox".to_owned(),
         ]
@@ -369,7 +401,9 @@ fn yes_at_the_prompt_quits_apps_and_upgrades_casks() {
             "osascript -e with timeout of 3 seconds -e tell application id \"com.example.firefox\" to quit -e end timeout".to_owned(),
             "ps -axo command=".to_owned(),
             "brew upgrade --cask --greedy".to_owned(),
+            "brew autoremove --dry-run".to_owned(),
             "brew autoremove".to_owned(),
+            "brew cleanup --dry-run --prune=all".to_owned(),
             "brew cleanup --prune=all".to_owned(),
             "open -g -b com.example.firefox".to_owned(),
         ]
@@ -412,7 +446,9 @@ fn skip_quitting_at_the_prompt_upgrades_casks_without_quitting_apps() {
             format!("defaults read {} CFBundleIdentifier", info.display()),
             "ps -axo command=".to_owned(),
             "brew upgrade --cask --greedy".to_owned(),
+            "brew autoremove --dry-run".to_owned(),
             "brew autoremove".to_owned(),
+            "brew cleanup --dry-run --prune=all".to_owned(),
             "brew cleanup --prune=all".to_owned(),
         ]
     );
@@ -450,7 +486,9 @@ fn skip_casks_at_the_prompt_skips_the_cask_upgrade() {
             "brew info --cask --json=v2 firefox".to_owned(),
             format!("defaults read {} CFBundleIdentifier", info.display()),
             "ps -axo command=".to_owned(),
+            "brew autoremove --dry-run".to_owned(),
             "brew autoremove".to_owned(),
+            "brew cleanup --dry-run --prune=all".to_owned(),
             "brew cleanup --prune=all".to_owned(),
         ]
     );
@@ -501,7 +539,9 @@ fn never_quits_the_terminal_running_the_script() {
                     .display()
             ),
             "brew upgrade --cask --greedy".to_owned(),
+            "brew autoremove --dry-run".to_owned(),
             "brew autoremove".to_owned(),
+            "brew cleanup --dry-run --prune=all".to_owned(),
             "brew cleanup --prune=all".to_owned(),
         ]
     );

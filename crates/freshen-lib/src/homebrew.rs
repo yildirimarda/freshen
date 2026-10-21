@@ -542,9 +542,10 @@ impl Step for AutoremoveStep {
     }
 
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
-        cleanup::run(
+        cleanup::run_guarded(
             AUTOREMOVE,
             "Homebrew autoremove",
+            CommandSpec::new("brew").args(["autoremove", "--dry-run"]),
             CommandSpec::new("brew")
                 .arg("autoremove")
                 .retry_transient_network(NETWORK_RETRIES),
@@ -590,9 +591,10 @@ impl Step for CleanupStep {
     }
 
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
-        cleanup::run(
+        cleanup::run_guarded(
             CLEANUP,
             "Homebrew cleanup",
+            CommandSpec::new("brew").args(["cleanup", "--dry-run", "--prune=all"]),
             CommandSpec::new("brew")
                 .args(["cleanup", "--prune=all"])
                 .retry_transient_network(NETWORK_RETRIES),

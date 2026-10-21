@@ -35,6 +35,12 @@ fn install_brew(tools: &StubTools) {
     tools.set_script(
         "brew",
         r#"case "$*" in
+  "autoremove --dry-run")
+    printf '==> Would autoremove 1 unneeded formula:\nfoo\n'
+    ;;
+  "cleanup --dry-run --prune=all")
+    printf 'Would remove: /tmp/foo (2.5MB)\n'
+    ;;
   "autoremove")
     printf 'Uninstalling foo (1.2MB)\n'
     printf '==> This operation has freed approximately 1.2MB of disk space.\n'
@@ -184,4 +190,53 @@ fn cleanup_logs_every_removed_item_and_the_reclaimed_space() {
     ] {
         assert!(text.contains(expected), "missing {expected:?}: {text}");
     }
+}
+
+#[test]
+fn empty_dry_run_listings_skip_the_mutating_commands() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_script(
+        "brew",
+        r#"case "$*" in
+  "autoremove --dry-run"|"cleanup --dry-run --prune=all")
+    ;;
+  "autoremove"|"cleanup --prune=all")
+    printf 'MUTATION RAN\n'
+    ;;
+esac"#,
+    );
+
+    let output = run(&tools, &["--cleanup"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(
+        calls.iter().any(|call| call == "brew autoremove --dry-run"),
+        "autoremove was not guarded by a dry run: {calls:?}"
+    );
+    assert!(
+        calls
+            .iter()
+            .any(|call| call == "brew cleanup --dry-run --prune=all"),
+        "cleanup was not guarded by a dry run: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call == "brew autoremove"),
+        "autoremove ran with nothing to remove: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call == "brew cleanup --prune=all"),
+        "cleanup ran with nothing to remove: {calls:?}"
+    );
+
+    let text = stdout(&output);
+    assert!(
+        text.contains("Homebrew autoremove: nothing to remove"),
+        "output: {text}"
+    );
+    assert!(
+        text.contains("Homebrew cleanup: nothing to remove"),
+        "output: {text}"
+    );
+    assert!(!text.contains("MUTATION RAN"), "output: {text}");
 }

@@ -68,6 +68,12 @@ fn install_brew(tools: &StubTools) {
   "upgrade --formula")
     exit "${FRESHEN_BREW_UPGRADE_STATUS:-0}"
     ;;
+  "autoremove --dry-run")
+    printf '==> Would autoremove 1 unneeded formula:\nold-dependency\n'
+    ;;
+  "cleanup --dry-run --prune=all")
+    printf 'Would remove: /tmp/old (1.2MB)\n'
+    ;;
 esac"#,
     );
 }
@@ -172,7 +178,9 @@ fn stops_colima_and_restores_containers_around_the_formula_upgrade() {
             &db("up -d"),
             "brew outdated --cask --greedy",
             "brew outdated --cask --greedy --quiet",
+            "brew autoremove --dry-run",
             "brew autoremove",
+            "brew cleanup --dry-run --prune=all",
             "brew cleanup --prune=all",
             "colima status",
             "docker compose ls --format json",
@@ -234,7 +242,9 @@ fn up_to_date_colima_is_never_stopped() {
             "brew outdated --formula --quiet",
             "brew outdated --cask --greedy",
             "brew outdated --cask --greedy --quiet",
+            "brew autoremove --dry-run",
             "brew autoremove",
+            "brew cleanup --dry-run --prune=all",
             "brew cleanup --prune=all",
             "colima status",
             "docker compose ls --format json",
@@ -280,7 +290,9 @@ fn a_stopped_colima_is_not_started_and_docker_updates_are_skipped() {
             "brew upgrade --formula",
             "brew outdated --cask --greedy",
             "brew outdated --cask --greedy --quiet",
+            "brew autoremove --dry-run",
             "brew autoremove",
+            "brew cleanup --dry-run --prune=all",
             "brew cleanup --prune=all",
             "colima status",
         ]
@@ -322,7 +334,9 @@ fn colima_is_stopped_without_docker_and_the_docker_step_is_skipped() {
             "colima start",
             "brew outdated --cask --greedy",
             "brew outdated --cask --greedy --quiet",
+            "brew autoremove --dry-run",
             "brew autoremove",
+            "brew cleanup --dry-run --prune=all",
             "brew cleanup --prune=all",
         ]
     );

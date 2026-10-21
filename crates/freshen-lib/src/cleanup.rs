@@ -50,10 +50,56 @@ pub fn run(
     options: &RunOptions,
 ) -> Result<Option<CleanupReport>, StepError> {
     if !options.cleanup_enabled() {
-        println!("{label}: skipped destructive cleanup (pass {ENABLE_FLAG} to enable)");
+        return skipped(label);
+    }
+
+    run_enabled(step, label, spec)
+}
+
+/// Runs a destructive cleanup command only when its dry-run listing reports
+/// something to remove.
+///
+/// The listing is the read-only form of the command (for example
+/// `brew cleanup --dry-run --prune=all`). A listing that prints no removal
+/// lines leaves the mutating command untouched and reports that there was
+/// nothing to remove. With cleanup disabled the listing is not run either.
+///
+/// # Errors
+///
+/// Returns a step error when the listing or the command cannot be run or exits
+/// unsuccessfully.
+pub fn run_guarded(
+    step: StepId,
+    label: &str,
+    listing: CommandSpec,
+    spec: CommandSpec,
+    options: &RunOptions,
+) -> Result<Option<CleanupReport>, StepError> {
+    if !options.cleanup_enabled() {
+        return skipped(label);
+    }
+
+    let listing = listing
+        .run()
+        .map_err(|error| StepError::run_from_process(step, &error))?;
+    if !listing_reports_removals(listing.stdout()) {
+        println!("{label}: nothing to remove");
         return Ok(None);
     }
 
+    run_enabled(step, label, spec)
+}
+
+fn skipped(label: &str) -> Result<Option<CleanupReport>, StepError> {
+    println!("{label}: skipped destructive cleanup (pass {ENABLE_FLAG} to enable)");
+    Ok(None)
+}
+
+fn run_enabled(
+    step: StepId,
+    label: &str,
+    spec: CommandSpec,
+) -> Result<Option<CleanupReport>, StepError> {
     println!("{label}:");
     let mut removed = Vec::new();
     let output = spec
@@ -77,6 +123,20 @@ pub fn run(
     }
 
     Ok(Some(CleanupReport { removed, reclaimed }))
+}
+
+/// Returns whether a dry-run cleanup listing shows work to do.
+///
+/// Homebrew uses `Would autoremove`, `Would remove` and `Would prune` for the
+/// lines that describe removals. Anything else (including an empty listing) is
+/// treated as nothing to remove, so a warning cannot trigger a mutation.
+fn listing_reports_removals(stdout: &str) -> bool {
+    stdout.lines().any(|line| {
+        let line = line.trim();
+        line.contains("Would autoremove")
+            || line.contains("Would remove")
+            || line.contains("Would prune")
+    })
 }
 
 /// Extracts the reclaimed space from a cleanup command's output.
@@ -152,7 +212,7 @@ fn parenthesized_size(line: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_reclaimed_space;
+    use super::{listing_reports_removals, parse_reclaimed_space};
 
     #[test]
     fn parses_docker_total_reclaimed_space() {
@@ -176,5 +236,20 @@ mod tests {
     fn returns_none_when_the_tool_reports_no_space() {
         assert_eq!(parse_reclaimed_space("pruned node@20.0.0\n"), None);
         assert_eq!(parse_reclaimed_space(""), None);
+    }
+
+    #[test]
+    fn recognises_homebrew_dry_run_removal_lines() {
+        assert!(listing_reports_removals(
+            "==> Would autoremove 1 unneeded formula:\nold-dependency\n"
+        ));
+        assert!(listing_reports_removals("Would remove: /tmp/old (1.2MB)\n"));
+        assert!(listing_reports_removals("Would prune 2 files from: /tmp\n"));
+    }
+
+    #[test]
+    fn warnings_and_empty_listings_do_not_count_as_work() {
+        assert!(!listing_reports_removals(""));
+        assert!(!listing_reports_removals("Warning: nothing to do\n"));
     }
 }
