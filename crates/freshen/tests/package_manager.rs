@@ -7,12 +7,35 @@
 
 mod support;
 
-use std::process::Output;
+use std::process::{Child, Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use support::StubTools;
 
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+fn send_signal(child: &Child, signal: &str) {
+    let status = Command::new("kill")
+        .args([signal, &child.id().to_string()])
+        .status()
+        .unwrap_or_else(|error| panic!("failed to run kill: {error}"));
+    assert!(status.success(), "kill {signal} failed with {status}");
+}
+
+fn wait_for_run_lock(tools: &StubTools) {
+    let pid_file = tools.home().join("lock").join("freshen.lock.pid");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !pid_file.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for the run lock at {}",
+            pid_file.display()
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
 }
 
 fn run(tools: &StubTools, managers: &str, args: &[&str]) -> Output {
@@ -97,4 +120,48 @@ fn dry_run_and_check_do_not_look_for_package_managers() {
         assert!(output.status.success(), "{args:?}: {}", stderr(&output));
         assert!(!stderr(&output).contains("another package manager"));
     }
+}
+
+#[test]
+fn sigint_during_the_package_manager_wait_returns_promptly() {
+    let tools = StubTools::new(&["probe"]);
+
+    let child = tools
+        .command()
+        .env_remove("FRESHEN_SKIP_PREFLIGHT")
+        .env("FRESHEN_TEST_STEPS", "probe run")
+        .env("FRESHEN_TEST_PREFLIGHT", "network=up")
+        .env("FRESHEN_TEST_PACKAGE_MANAGERS", "brew:4242")
+        .args(["--package-manager-wait", "30"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    wait_for_run_lock(&tools);
+    thread::sleep(Duration::from_millis(100));
+
+    let interrupted_at = Instant::now();
+    send_signal(&child, "-INT");
+    let output = child
+        .wait_with_output()
+        .unwrap_or_else(|error| panic!("failed to wait for freshen: {error}"));
+    let elapsed = interrupted_at.elapsed();
+
+    assert_eq!(
+        output.status.code(),
+        Some(130),
+        "stderr: {}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("interrupted"),
+        "stderr: {}",
+        stderr(&output)
+    );
+    assert!(tools.calls().is_empty(), "a step ran after the interrupt");
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "SIGINT waited for the package-manager wait: {elapsed:?}"
+    );
 }

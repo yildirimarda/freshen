@@ -127,8 +127,10 @@ fn wait_for_package_managers_or_abort(config: &PackageManagerConfig) -> Option<E
     let probe = package_manager_probe();
     let outcome = wait_for_package_managers(probe.as_ref(), config);
 
-    let WaitOutcome::Busy { waited, processes } = outcome else {
-        return None;
+    let (waited, processes, interrupted) = match outcome {
+        WaitOutcome::Idle | WaitOutcome::Waited { .. } => return None,
+        WaitOutcome::Busy { waited, processes } => (waited, processes, false),
+        WaitOutcome::Interrupted { waited, processes } => (waited, processes, true),
     };
 
     let processes = processes
@@ -136,6 +138,10 @@ fn wait_for_package_managers_or_abort(config: &PackageManagerConfig) -> Option<E
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(", ");
+    if interrupted {
+        eprintln!("freshen: interrupted while waiting for another package manager: {processes}");
+        return Some(exit::code(exit::INTERRUPTED));
+    }
     if waited.is_zero() {
         eprintln!("freshen: another package manager is running: {processes}");
     } else {
