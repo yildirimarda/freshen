@@ -886,6 +886,9 @@ pT8yRnSiD29WLvz412hxX/k=
             let Some(authority) = authority else {
                 return;
             };
+            // `localhost` resolves to ::1 first on Windows, where the test server
+            // does not listen and refused connects are retried for seconds.
+            let authority = authority.replacen("localhost", "127.0.0.1", 1);
             let Ok(mut upstream) = TcpStream::connect(authority) else {
                 return;
             };
@@ -1361,7 +1364,7 @@ pT8yRnSiD29WLvz412hxX/k=
             ..direct
         };
 
-        assert!(check_with(&proxied, &[unreachable], Duration::from_secs(2)).is_ok());
+        assert!(check_with(&proxied, &[unreachable], Duration::from_secs(10)).is_ok());
         server
             .join()
             .unwrap_or_else(|_| panic!("TLS test server panicked"));
