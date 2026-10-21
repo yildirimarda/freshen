@@ -126,7 +126,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add a config file (TOML) at the OS-appropriate location (`~/.config/<name>/config.toml`, `%APPDATA%`) with a documented schema and validation errors that point at the offending line
 - [x] Support per-step enable/disable, include/exclude lists (casks, packages, containers, projects) and `NEVER_QUIT` / `ALWAYS_QUIT` app lists
 - [x] Run every command whose output is parsed with a neutral locale (`LC_ALL=C`, `LANG=C`; UTF-8 console and `--disable-interactivity` on Windows) so localized output such as Turkish and progress spinners cannot break parsers, covered by tests that run the parsers on non-English fixtures
-- [ ] Detect an Automation (TCC) denial when quitting apps through AppleScript (error -1743) and print an actionable message naming the System Settings pane instead of treating the app as unquittable, covered by tests with injected osascript output
+- [x] Detect an Automation (TCC) denial when quitting apps through AppleScript (error -1743) and print an actionable message naming the System Settings pane instead of treating the app as unquittable, covered by tests with injected osascript output
 - [ ] Detect casks whose installer needs an administrator password (pkg installers, `sudo` prompts) and skip them with a clear reason in non-interactive runs instead of hanging, covered by tests
 - [ ] Handle `version :latest` casks and `auto_updates true` casks correctly: decide per cask whether `--greedy` is needed, and show the reason in the check output
 - [ ] Respect pinned formulae (`brew pin`) and report them as "held back" instead of failing
@@ -153,6 +153,8 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Add a read-only Homebrew cask metadata probe to `--check` (or a dedicated command) so the real-tools job verifies the recorded `brew info --cask --json=v2` transcript and fails on cask JSON parser drift, covered by tests
 - [ ] Apply the package include/exclude list to the mise step, so an excluded mise tool is not upgraded (mise upgrades every plugin in one command, so the list needs a per-tool upgrade path), covered by tests
 - [ ] Skip the steps whose prerequisite is disabled in the configuration file, so disabling `brew` also skips the Homebrew steps that need it, covered by tests
+- [ ] Name the host terminal application in the Automation denial message (for example `Terminal`), so the user knows which entry to switch on in the System Settings Automation pane, covered by tests
+- [ ] Report why an AppleScript quit failed when the failure is not a denied Automation request (for example error -600 "application isn't running"), instead of the generic "did not quit" message, covered by tests with injected osascript output
 
 ## Milestone 5: Linux
 

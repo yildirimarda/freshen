@@ -296,6 +296,17 @@ esac"#,
     (tools, app, state)
 }
 
+/// Makes the `osascript` stub answer like macOS does when the Automation
+/// permission was never granted.
+#[cfg(unix)]
+fn deny_automation(tools: &StubTools) {
+    tools.set_script(
+        "osascript",
+        r#"printf 'execution error: Not authorized to send Apple events to "com.example.firefox". (-1743)\n' >&2
+exit 1"#,
+    );
+}
+
 #[cfg(unix)]
 fn run_apps(
     tools: &StubTools,
@@ -553,6 +564,51 @@ fn never_quits_the_terminal_running_the_script() {
         "output: {text}"
     );
     assert!(!text.contains("Quitting:"), "output: {text}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_denied_automation_request_names_the_system_settings_pane() {
+    let (tools, _app, state) = app_tools(false);
+    deny_automation(&tools);
+
+    let output = run_apps(&tools, &state, &[("QUIT_TIMEOUT", "1")], &[]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+
+    let text = stdout(&output);
+    assert!(
+        text.contains("Firefox.app could not be quit"),
+        "output: {text}"
+    );
+    assert!(
+        text.contains("macOS denied the request to control it"),
+        "output: {text}"
+    );
+    assert!(
+        text.contains("System Settings > Privacy & Security > Automation"),
+        "output: {text}"
+    );
+    assert!(
+        !text.contains("did not quit"),
+        "the app was reported as unquittable: {text}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_denied_automation_request_still_upgrades_the_casks() {
+    let (tools, _app, state) = app_tools(false);
+    deny_automation(&tools);
+
+    let output = run_apps(&tools, &state, &[("QUIT_TIMEOUT", "1")], &[]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(
+        calls.contains(&"brew upgrade --cask --greedy".to_owned()),
+        "calls: {calls:?}"
+    );
 }
 
 #[cfg(unix)]

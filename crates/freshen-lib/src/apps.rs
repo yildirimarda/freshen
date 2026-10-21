@@ -19,6 +19,9 @@ use crate::process::CommandSpec;
 /// Seconds `osascript` waits for an app before the quit command gives up.
 const APPLESCRIPT_TIMEOUT_SECS: u64 = 3;
 
+/// The error number macOS reports for a denied Automation request.
+const AUTOMATION_DENIED_ERROR: &str = "-1743";
+
 /// Default seconds to wait for an app to quit, matching `QUIT_TIMEOUT`.
 const DEFAULT_QUIT_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -203,6 +206,47 @@ pub fn quit_choice(answer: &str) -> QuitChoice {
     }
 }
 
+/// What happened when an app was asked to quit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum QuitOutcome {
+    /// The quit request was delivered to the app.
+    #[default]
+    Quit,
+    /// macOS denied the request to control the app.
+    ///
+    /// The Automation permission was never granted, so the app never saw the
+    /// request. This is a missing permission, not an app that refuses to quit.
+    Denied,
+    /// The quit request failed for another reason.
+    Failed,
+}
+
+/// Returns `true` when the `osascript` output describes a denied Automation
+/// request.
+///
+/// macOS refuses to send Apple events to an app the user has not allowed, and
+/// reports it as error -1743. The message also names the permission, which
+/// is what a localized or a rewritten error may keep.
+#[must_use]
+pub fn is_automation_denied(output: &str) -> bool {
+    let text = output.to_ascii_lowercase();
+
+    text.contains(AUTOMATION_DENIED_ERROR) || text.contains("not authorized to send apple event")
+}
+
+/// The message shown when macOS denied the request to control an app.
+///
+/// The fix is a permission in System Settings, so the message names the pane
+/// instead of reporting the app as one that cannot be quit.
+#[must_use]
+pub fn automation_denied_message(app_name: &str) -> String {
+    format!(
+        "{app_name} could not be quit: macOS denied the request to control it (error -1743). \
+         Allow the terminal that runs freshen to control it in \
+         System Settings > Privacy & Security > Automation, then run freshen again."
+    )
+}
+
 /// The operating-system operations the quit/reopen policy needs.
 ///
 /// The real implementation is [`MacAppSystem`]. Tests provide a fake process
@@ -218,7 +262,11 @@ pub trait AppSystem: Send + Sync {
     fn pids(&self, app: &Path) -> Vec<u32>;
 
     /// Asks the application to quit gracefully.
-    fn quit(&self, bundle_id: &str);
+    ///
+    /// The outcome says whether the request was delivered or denied by
+    /// macOS, so a denial can be explained instead of being reported as an
+    /// app that does not quit.
+    fn quit(&self, bundle_id: &str) -> QuitOutcome;
 
     /// Force-kills the given pids.
     fn force_kill(&self, pids: &[u32]);
@@ -300,7 +348,15 @@ pub fn reopen_apps<S: AppSystem + ?Sized>(system: &S, bundle_ids: &[String]) {
 }
 
 fn quit_one<S: AppSystem + ?Sized>(system: &S, app: &RunningApp, policy: &QuitPolicy) -> bool {
-    system.quit(app.bundle_id());
+    if system.quit(app.bundle_id()) == QuitOutcome::Denied {
+        // The request never reached the app, so waiting for it to exit would
+        // only burn the timeout.
+        warn(&automation_denied_message(app.name()));
+        if policy.force_kill() {
+            kill_app(system, app, policy);
+        }
+        return false;
+    }
 
     let mut running = system.is_running(app.path());
     let mut waited = Duration::ZERO;
@@ -315,12 +371,7 @@ fn quit_one<S: AppSystem + ?Sized>(system: &S, app: &RunningApp, policy: &QuitPo
     }
 
     if policy.force_kill {
-        warn(&format!("{} did not quit, force-killing", app.name));
-        let pids = system.pids(app.path());
-        if !pids.is_empty() {
-            system.force_kill(&pids);
-            std::thread::sleep(policy.force_kill_grace);
-        }
+        kill_app(system, app, policy);
         return true;
     }
 
@@ -329,6 +380,16 @@ fn quit_one<S: AppSystem + ?Sized>(system: &S, app: &RunningApp, policy: &QuitPo
         app.name
     ));
     false
+}
+
+/// Kills the app's main executable and waits for it to disappear.
+fn kill_app<S: AppSystem + ?Sized>(system: &S, app: &RunningApp, policy: &QuitPolicy) {
+    warn(&format!("{} did not quit, force-killing", app.name));
+    let pids = system.pids(app.path());
+    if !pids.is_empty() {
+        system.force_kill(&pids);
+        std::thread::sleep(policy.force_kill_grace);
+    }
 }
 
 fn warn(message: &str) {
@@ -440,8 +501,21 @@ impl AppSystem for MacAppSystem {
         }
     }
 
-    fn quit(&self, bundle_id: &str) {
-        let _ = quit_command(bundle_id).run();
+    fn quit(&self, bundle_id: &str) -> QuitOutcome {
+        match quit_command(bundle_id).run() {
+            Ok(_) => QuitOutcome::Quit,
+            Err(error) => {
+                let output = error
+                    .output()
+                    .map(|output| format!("{}{}", output.stdout(), output.stderr()))
+                    .unwrap_or_default();
+                if is_automation_denied(&output) {
+                    QuitOutcome::Denied
+                } else {
+                    QuitOutcome::Failed
+                }
+            }
+        }
     }
 
     fn force_kill(&self, pids: &[u32]) {
@@ -463,9 +537,10 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        bundle_id_command, find_running_apps, kill_command, open_command, pid_list_command,
-        pids_from_processes, process_list_command, quit_apps, quit_choice, quit_command,
-        reopen_apps, AppSystem, QuitChoice, QuitPolicy,
+        automation_denied_message, bundle_id_command, find_running_apps, is_automation_denied,
+        kill_command, open_command, pid_list_command, pids_from_processes, process_list_command,
+        quit_apps, quit_choice, quit_command, reopen_apps, AppSystem, QuitChoice, QuitOutcome,
+        QuitPolicy,
     };
     use crate::policy::AppLists;
 
@@ -474,10 +549,12 @@ mod tests {
         bundle_ids: Mutex<HashMap<PathBuf, String>>,
         running: Mutex<HashMap<PathBuf, Vec<u32>>>,
         quit_stops_apps: bool,
+        quit_outcome: QuitOutcome,
         open_succeeds: bool,
         quit_calls: Mutex<Vec<String>>,
         killed: Mutex<Vec<Vec<u32>>>,
         opened: Mutex<Vec<String>>,
+        running_checks: Mutex<usize>,
     }
 
     fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -511,6 +588,11 @@ mod tests {
             self.open_succeeds = false;
             self
         }
+
+        fn denies_automation(mut self) -> Self {
+            self.quit_outcome = QuitOutcome::Denied;
+            self
+        }
     }
 
     impl AppSystem for FakeSystem {
@@ -519,6 +601,8 @@ mod tests {
         }
 
         fn is_running(&self, app: &std::path::Path) -> bool {
+            let mut checks = lock(&self.running_checks);
+            *checks += 1;
             lock(&self.running)
                 .get(app)
                 .is_some_and(|pids| !pids.is_empty())
@@ -528,11 +612,12 @@ mod tests {
             lock(&self.running).get(app).cloned().unwrap_or_default()
         }
 
-        fn quit(&self, bundle_id: &str) {
+        fn quit(&self, bundle_id: &str) -> QuitOutcome {
             lock(&self.quit_calls).push(bundle_id.to_owned());
             if self.quit_stops_apps {
                 lock(&self.running).clear();
             }
+            self.quit_outcome
         }
 
         fn force_kill(&self, pids: &[u32]) {
@@ -720,6 +805,106 @@ mod tests {
 
         assert_eq!(reopen, ["com.firefox"]);
         assert_eq!(lock(&system.killed).as_slice(), [vec![10, 11]]);
+    }
+
+    #[test]
+    fn a_denied_automation_request_is_not_treated_as_an_app_that_cannot_quit() {
+        let system = FakeSystem::new()
+            .with_app("/Applications/Firefox.app", "com.firefox", &[10])
+            .denies_automation();
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/Firefox.app"]),
+            None,
+            &AppLists::new(),
+        );
+
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
+
+        assert_eq!(reopen, ["com.firefox"]);
+        assert_eq!(lock(&system.quit_calls).as_slice(), ["com.firefox"]);
+        assert!(lock(&system.killed).is_empty());
+        assert!(running(&system, "/Applications/Firefox.app"));
+    }
+
+    #[test]
+    fn a_denied_automation_request_does_not_wait_for_the_app_to_exit() {
+        let system = FakeSystem::new()
+            .with_app("/Applications/Firefox.app", "com.firefox", &[10])
+            .denies_automation();
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/Firefox.app"]),
+            None,
+            &AppLists::new(),
+        );
+        // The scan checks the process table once, which does not count.
+        *lock(&system.running_checks) = 0;
+
+        let reopen = quit_apps(
+            &system,
+            scan.running(),
+            &QuitPolicy::new(Duration::from_secs(20), false),
+        );
+
+        assert_eq!(reopen, ["com.firefox"]);
+
+        assert_eq!(
+            *lock(&system.running_checks),
+            0,
+            "the app was waited for even though the request never reached it"
+        );
+    }
+
+    #[test]
+    fn a_denied_automation_request_is_force_killed_when_the_policy_allows_it() {
+        let system = FakeSystem::new()
+            .with_app("/Applications/Firefox.app", "com.firefox", &[10])
+            .denies_automation();
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/Firefox.app"]),
+            None,
+            &AppLists::new(),
+        );
+
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(true));
+
+        assert_eq!(reopen, ["com.firefox"]);
+        assert_eq!(lock(&system.killed).as_slice(), [vec![10]]);
+    }
+
+    #[test]
+    fn detects_a_denied_automation_request_in_the_osascript_output() {
+        for message in [
+            "execution error: Not authorized to send Apple events to \"com.example.firefox\". (-1743)",
+            "osascript: execution error: Not authorized to send Apple events to com.example.firefox. (-1743)",
+            "Not authorized to send Apple events to com.example.firefox. (-1743)",
+            "Not authorized to send Apple events to com.example.firefox.",
+        ] {
+            assert!(is_automation_denied(message), "{message}");
+        }
+
+        for message in [
+            "",
+            "execution error: Application isn't running. (-600)",
+            "osascript: syntax error",
+        ] {
+            assert!(!is_automation_denied(message), "{message}");
+        }
+    }
+
+    #[test]
+    fn the_automation_denial_message_names_the_system_settings_pane() {
+        let message = automation_denied_message("Firefox.app");
+
+        assert!(message.contains("Firefox.app"), "{message}");
+        assert!(
+            message.contains("System Settings > Privacy & Security > Automation"),
+            "{message}"
+        );
+        assert!(message.contains("-1743"), "{message}");
+        assert!(!message.contains("did not quit"), "{message}");
     }
 
     #[test]
