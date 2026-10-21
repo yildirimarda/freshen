@@ -19,7 +19,7 @@ use crate::process::{CommandSpec, NETWORK_RETRIES};
 use crate::registry::Registry;
 use crate::snapshot::{SnapshotCommand, SnapshotSection};
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
-use crate::warnings::warn_about_stale_node_processes;
+use crate::warnings::warn_about_stale_tool_processes;
 
 /// Installed uv tools and the uv cache.
 pub const UV: StepId = "uv";
@@ -136,7 +136,7 @@ impl Step for MiseStep {
             failures.push(StepError::run_from_process(MISE, &error));
         }
 
-        warn_about_stale_node_processes();
+        warn_about_stale_tool_processes();
 
         finish(failures)
     }

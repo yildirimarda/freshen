@@ -6,8 +6,9 @@
 //!
 //! * Upgrading zellij from inside a zellij session leaves the running client
 //!   unable to attach to sessions created by the old server.
-//! * `mise prune` cannot remove an old Node version while a process started by
-//!   another application (an MCP server, for example) still runs from it.
+//! * `mise prune` cannot remove an old toolchain version while a process
+//!   started by another application (an MCP server, for example) still runs
+//!   from it. Node, Python, Java and Go are checked.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -18,12 +19,23 @@ use crate::process::CommandSpec;
 pub const ZELLIJ_WARNING: &str =
     "zellij will be upgraded while you are inside a zellij session. Close and recreate your sessions afterwards.";
 
-/// Header of the warning about processes running an old Node version.
-pub const STALE_NODE_WARNING: &str = "Processes still running on an old node version (restart the app that started them so mise can prune it):";
+/// Toolchains whose unused versions `mise prune` removes.
+const TOOLCHAINS: [&str; 4] = ["node", "python", "java", "go"];
 
-/// A process that keeps an old Node version alive.
+/// Header of the warning about processes running an old toolchain version.
+///
+/// The toolchain name is inserted so each group names the runtime the user
+/// has to restart.
+#[must_use]
+pub fn stale_tool_warning(tool: &str) -> String {
+    format!(
+        "Processes still running on an old {tool} version (restart the app that started them so mise can prune it):"
+    )
+}
+
+/// A process that keeps an old toolchain version alive.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StaleNodeProcess {
+pub struct StaleToolProcess {
     /// Process id.
     pub pid: u32,
     /// Name of the application that started it, as reported by `ps`.
@@ -32,7 +44,7 @@ pub struct StaleNodeProcess {
     pub command: String,
 }
 
-impl StaleNodeProcess {
+impl StaleToolProcess {
     /// The indented line the zsh script prints for this process.
     #[must_use]
     pub fn display_line(&self) -> String {
@@ -65,48 +77,51 @@ fn inside_zellij_session() -> bool {
     env::var_os("ZELLIJ").is_some_and(|value| !value.is_empty())
 }
 
-/// Warns about processes still running from an old Node install under mise.
+/// Warns about processes still running from an old toolchain install under mise.
 ///
-/// The probe is best effort, matching the zsh script: a missing `mise`, a
-/// failed `ps` or an empty result prints nothing and never fails the step.
-pub fn warn_about_stale_node_processes() {
-    let processes = stale_node_processes();
-    if processes.is_empty() {
+/// The probe is best effort: a missing `mise`, a failed `ps` or an empty result
+/// prints nothing and never fails the step. Only toolchains that mise reports
+/// an active version for are checked.
+pub fn warn_about_stale_tool_processes() {
+    let active_toolchains = active_toolchain_paths();
+    if active_toolchains.is_empty() {
         return;
     }
-
-    println!("warning: {STALE_NODE_WARNING}");
-    for process in processes {
-        println!("{}", process.display_line());
-    }
-}
-
-fn stale_node_processes() -> Vec<StaleNodeProcess> {
-    let Some(active_node) = active_node_path() else {
-        return Vec::new();
-    };
     let Ok(output) = CommandSpec::new("ps")
         .args(["-axo", "pid=,ppid=,command="])
         .run()
     else {
-        return Vec::new();
+        return;
     };
+    let processes = parse_process_table(output.stdout());
 
-    stale_node_entries(&parse_process_table(output.stdout()), &active_node)
-        .into_iter()
-        .map(|entry| StaleNodeProcess {
-            pid: entry.pid,
-            parent: parent_name(entry.ppid),
-            command: entry.command,
-        })
+    for (tool, active_path) in active_toolchains {
+        let entries = stale_tool_entries(&processes, &active_path);
+        if entries.is_empty() {
+            continue;
+        }
+
+        println!("warning: {}", stale_tool_warning(tool));
+        for entry in entries {
+            let process = StaleToolProcess {
+                pid: entry.pid,
+                parent: parent_name(entry.ppid),
+                command: entry.command,
+            };
+            println!("{}", process.display_line());
+        }
+    }
+}
+
+fn active_toolchain_paths() -> Vec<(&'static str, PathBuf)> {
+    TOOLCHAINS
+        .iter()
+        .filter_map(|&tool| active_tool_path(tool).map(|path| (tool, path)))
         .collect()
 }
 
-fn active_node_path() -> Option<PathBuf> {
-    let output = CommandSpec::new("mise")
-        .args(["where", "node"])
-        .run()
-        .ok()?;
+fn active_tool_path(tool: &str) -> Option<PathBuf> {
+    let output = CommandSpec::new("mise").args(["where", tool]).run().ok()?;
     let path = output.stdout().trim();
     if path.is_empty() {
         None
@@ -122,12 +137,12 @@ struct ProcessEntry {
     command: String,
 }
 
-fn stale_node_entries(processes: &[ProcessEntry], active_node: &Path) -> Vec<ProcessEntry> {
-    let Some(install_dir) = active_node.parent() else {
+fn stale_tool_entries(processes: &[ProcessEntry], active_tool: &Path) -> Vec<ProcessEntry> {
+    let Some(install_dir) = active_tool.parent() else {
         return Vec::new();
     };
     let install_prefix = format!("{}/", install_dir.display());
-    let active_prefix = format!("{}/", active_node.display());
+    let active_prefix = format!("{}/", active_tool.display());
 
     processes
         .iter()
@@ -180,10 +195,12 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        basename, parse_process_table, stale_node_entries, zellij_warning_applies, StaleNodeProcess,
+        basename, parse_process_table, stale_tool_entries, stale_tool_warning,
+        zellij_warning_applies, StaleToolProcess,
     };
 
     const ACTIVE_NODE: &str = "/home/user/.local/share/mise/installs/node/22.1.0";
+    const ACTIVE_PYTHON: &str = "/home/user/.local/share/mise/installs/python/3.12.0";
 
     #[test]
     fn zellij_warning_needs_an_outdated_zellij_and_a_session() {
@@ -228,27 +245,46 @@ not a process
     }
 
     #[test]
-    fn only_processes_from_an_older_node_install_are_stale() {
+    fn only_processes_from_an_older_install_of_the_same_toolchain_are_stale() {
         let table = format!(
             "\
   100 1 {ACTIVE_NODE}/bin/node /current.js
   101 1 /home/user/.local/share/mise/installs/node/20.0.0/bin/node /old.js
   102 1 /usr/bin/node /system.js
   103 1 /home/user/.local/share/mise/installs/node/20.0.0/bin/node-foo /old.js
+  200 1 {ACTIVE_PYTHON}/bin/python3 /current.py
+  201 1 /home/user/.local/share/mise/installs/python/3.10.0/bin/python3 /old.py
 "
         );
         let processes = parse_process_table(&table);
 
-        let stale = stale_node_entries(&processes, Path::new(ACTIVE_NODE));
+        let stale = stale_tool_entries(&processes, Path::new(ACTIVE_NODE));
 
         assert_eq!(stale.len(), 2);
         assert_eq!(stale[0].pid, 101);
         assert_eq!(stale[1].pid, 103);
+
+        let stale = stale_tool_entries(&processes, Path::new(ACTIVE_PYTHON));
+
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].pid, 201);
+    }
+
+    #[test]
+    fn the_warning_names_the_toolchain() {
+        assert_eq!(
+            stale_tool_warning("python"),
+            "Processes still running on an old python version (restart the app that started them so mise can prune it):"
+        );
+        assert_eq!(
+            stale_tool_warning("go"),
+            "Processes still running on an old go version (restart the app that started them so mise can prune it):"
+        );
     }
 
     #[test]
     fn a_display_line_matches_the_zsh_format_and_truncates_at_eighty_characters() {
-        let process = StaleNodeProcess {
+        let process = StaleToolProcess {
             pid: 4242,
             parent: "LM Studio".to_owned(),
             command: "x".repeat(120),

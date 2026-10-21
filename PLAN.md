@@ -84,7 +84,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Idempotency guarantee: running the tool twice in a row must be a no-op the second time; add a test asserting it
 - [x] Per-step and global timeouts with a clear "timed out" status distinct from "failed"
 - [x] Network failure handling: retry transient download errors with exponential backoff, skip the step if the registry is unreachable
-- [ ] Detect processes running from a tool version that is about to be removed (old Node, Python, Java, Go toolchains) and report them with the parent application that started them
+- [x] Detect processes running from a tool version that is about to be removed (old Node, Python, Java, Go toolchains) and report them with the parent application that started them
 - [ ] Detect long-running interactive sessions that an upgrade would break (zellij, tmux server, SSH sessions, running docker builds) and warn or defer
 - [ ] Never run destructive cleanup (volume prune, cache wipe) unless explicitly enabled; log everything a cleanup removed and the space reclaimed
 - [ ] Exit codes documented and stable: 0 ok, 1 step failure, 2 updates pending (check mode), 3 preflight failed, 130 interrupted
@@ -95,6 +95,8 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Extend the idempotency test to the uv, mise, Docker and Colima steps with stateful stubs, so every mutating step proves a second run changes nothing
 - [ ] Apply per-step and global timeouts to `--check` mode, with a "timed out" check status distinct from "failed", so a hung read-only query cannot hang the report
 - [ ] Make retry backoff sleeps respect the step and global deadlines and SIGINT, so a long retry wait cannot overshoot a timeout or delay interrupt handling, covered by tests
+- [ ] Probe the process table for stale toolchain processes on Windows (parent PID and command line) instead of silently skipping when `ps` is unavailable, covered by tests with injected process facts
+- [ ] Warn only about toolchain versions `mise prune` will actually remove, using a dry-run or install listing so a process on a newer non-active version is not reported as old, covered by tests
 
 ## Milestone 4: macOS Depth
 
