@@ -21,7 +21,7 @@ use crate::process::{CommandSpec, NETWORK_RETRIES};
 use crate::registry::Registry;
 use crate::snapshot::{SnapshotCommand, SnapshotSection};
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
-use crate::warnings::warn_about_stale_tool_processes;
+use crate::warnings::{prunable_tool_versions, warn_about_stale_tool_processes};
 
 /// Installed uv tools and the uv cache.
 pub const UV: StepId = "uv";
@@ -145,6 +145,8 @@ impl Step for MiseStep {
             failures.push(StepError::run_from_process(MISE, &error));
         }
 
+        let prunable = prunable_tool_versions();
+
         if let Err(error) = cleanup::run(
             MISE,
             "mise: prune (remove unused old versions)",
@@ -154,7 +156,7 @@ impl Step for MiseStep {
             failures.push(error);
         }
 
-        warn_about_stale_tool_processes();
+        warn_about_stale_tool_processes(&prunable);
 
         finish(failures)
     }
