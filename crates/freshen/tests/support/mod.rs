@@ -19,10 +19,12 @@
 //! (`cargo test --all-features`) enables it.
 
 use std::fs;
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(unix)]
+use std::time::Duration;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -396,6 +398,49 @@ impl StubTools {
     #[cfg(not(any(unix, windows)))]
     fn write_stub(&self, _tool: &str) {
         panic!("stub executables are not supported on this platform");
+    }
+}
+
+/// How many times to retry an execution that fails with `ETXTBSY`.
+#[cfg(unix)]
+const TEXT_FILE_BUSY_RETRIES: u32 = 50;
+
+/// Runs `attempt`, retrying briefly while it fails with `ETXTBSY`.
+///
+/// Test threads run in parallel, so one thread can still hold a freshly
+/// written stub open for writing when another thread forks. The forked child
+/// keeps that descriptor until it execs, which makes executing the stub in
+/// that window fail with `Text file busy`. The window is tiny, so a short
+/// retry is enough.
+#[cfg(unix)]
+#[allow(dead_code)]
+pub fn retry_text_file_busy<T>(mut attempt: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    let mut retries = 0;
+    loop {
+        match attempt() {
+            Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) => {
+                if retries >= TEXT_FILE_BUSY_RETRIES {
+                    return Err(error);
+                }
+                retries += 1;
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            result => return result,
+        }
+    }
+}
+
+/// Runs `command` to completion, retrying while its stub is temporarily busy.
+#[allow(dead_code)]
+pub fn output_with_retry(mut command: Command) -> io::Result<Output> {
+    #[cfg(unix)]
+    {
+        retry_text_file_busy(|| command.output())
+    }
+
+    #[cfg(not(unix))]
+    {
+        command.output()
     }
 }
 
