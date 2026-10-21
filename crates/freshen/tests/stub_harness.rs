@@ -131,7 +131,7 @@ fn a_stub_returns_canned_stdout_stderr_and_status_per_invocation() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(not(windows))]
 #[test]
 fn a_ported_step_replays_a_recorded_command_transcript() {
     const CASK_INFO: &str = include_str!("../../freshen-lib/tests/fixtures/brew-info-casks.json");

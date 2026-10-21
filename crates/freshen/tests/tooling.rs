@@ -4,13 +4,13 @@
 //! executables and asserts the exact command transcript of the corresponding
 //! block in `update-all.sh`. No real tool is touched.
 
-#![cfg(all(feature = "test-harness", unix))]
+#![cfg(feature = "test-harness")]
 
 mod support;
 
 use std::process::Output;
 
-use support::StubTools;
+use support::{StubOutput, StubTools};
 
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
@@ -20,49 +20,16 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
-fn install_uv(tools: &StubTools) {
-    tools.set_script(
-        "uv",
-        r#"case "$*" in
-  "tool upgrade --all")
-    exit "${FRESHEN_UV_UPGRADE_STATUS:-0}"
-    ;;
-  "cache prune")
-    exit "${FRESHEN_UV_PRUNE_STATUS:-0}"
-    ;;
-esac"#,
-    );
+fn uv_responses(transcript: &[StubOutput]) -> Vec<StubOutput> {
+    let mut responses = vec![StubOutput::new()];
+    responses.extend_from_slice(transcript);
+    responses
 }
 
-fn install_mise(tools: &StubTools) {
-    tools.set_script(
-        "mise",
-        r#"case "$*" in
-  "self-update -y")
-    exit "${FRESHEN_MISE_SELF_UPDATE_STATUS:-0}"
-    ;;
-  "upgrade")
-    exit "${FRESHEN_MISE_UPGRADE_STATUS:-0}"
-    ;;
-  "ls --prunable --json")
-    printf '{}'
-    ;;
-  "prune -y")
-    exit "${FRESHEN_MISE_PRUNE_STATUS:-0}"
-    ;;
-esac"#,
-    );
-}
-
-fn install_brew(tools: &StubTools) {
-    tools.set_script(
-        "brew",
-        r#"case "$*" in
-  "list --formula mise")
-    exit "${FRESHEN_MISE_IN_BREW:-1}"
-    ;;
-esac"#,
-    );
+fn mise_responses(transcript: &[StubOutput]) -> Vec<StubOutput> {
+    let mut responses = vec![StubOutput::new()];
+    responses.extend_from_slice(transcript);
+    responses
 }
 
 fn run(tools: &StubTools, steps: &str) -> Output {
@@ -76,7 +43,10 @@ fn run(tools: &StubTools, steps: &str) -> Output {
 #[test]
 fn uv_upgrades_tools_and_prunes_the_cache() {
     let tools = StubTools::new(&["uv"]);
-    install_uv(&tools);
+    tools.set_responses(
+        "uv",
+        &uv_responses(&[StubOutput::new(), StubOutput::new(), StubOutput::new()]),
+    );
 
     let output = run(&tools, "uv");
 
@@ -94,11 +64,17 @@ fn uv_upgrades_tools_and_prunes_the_cache() {
 #[test]
 fn a_failing_uv_upgrade_still_prunes_the_cache_and_fails_the_step() {
     let tools = StubTools::new(&["uv"]);
-    install_uv(&tools);
+    tools.set_responses(
+        "uv",
+        &uv_responses(&[
+            StubOutput::new(),
+            StubOutput::new().with_status(1),
+            StubOutput::new(),
+        ]),
+    );
 
     let output = tools
         .command()
-        .env("FRESHEN_UV_UPGRADE_STATUS", "1")
         .args(["--only", "uv", "--cleanup"])
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
@@ -122,8 +98,17 @@ fn a_failing_uv_upgrade_still_prunes_the_cache_and_fails_the_step() {
 #[test]
 fn mise_self_updates_upgrades_and_prunes_when_not_installed_with_brew() {
     let tools = StubTools::new(&["brew", "mise"]);
-    install_brew(&tools);
-    install_mise(&tools);
+    tools.set_responses("brew", &[StubOutput::new().with_status(1)]);
+    tools.set_responses(
+        "mise",
+        &mise_responses(&[
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::stdout("{}"),
+            StubOutput::new(),
+        ]),
+    );
 
     let output = run(&tools, "mise");
 
@@ -144,12 +129,19 @@ fn mise_self_updates_upgrades_and_prunes_when_not_installed_with_brew() {
 #[test]
 fn mise_installed_with_brew_is_not_self_updated() {
     let tools = StubTools::new(&["brew", "mise"]);
-    install_brew(&tools);
-    install_mise(&tools);
+    tools.set_responses("brew", &[StubOutput::new()]);
+    tools.set_responses(
+        "mise",
+        &mise_responses(&[
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::stdout("{}"),
+            StubOutput::new(),
+        ]),
+    );
 
     let output = tools
         .command()
-        .env("FRESHEN_MISE_IN_BREW", "0")
         .args(["--only", "mise", "--cleanup"])
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
@@ -170,7 +162,16 @@ fn mise_installed_with_brew_is_not_self_updated() {
 #[test]
 fn mise_self_updates_when_brew_is_not_installed() {
     let tools = StubTools::new(&["mise"]);
-    install_mise(&tools);
+    tools.set_responses(
+        "mise",
+        &mise_responses(&[
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::stdout("{}"),
+            StubOutput::new(),
+        ]),
+    );
 
     let output = run(&tools, "mise");
 
@@ -190,11 +191,19 @@ fn mise_self_updates_when_brew_is_not_installed() {
 #[test]
 fn a_failing_mise_self_update_is_only_a_warning() {
     let tools = StubTools::new(&["mise"]);
-    install_mise(&tools);
+    tools.set_responses(
+        "mise",
+        &mise_responses(&[
+            StubOutput::new(),
+            StubOutput::new().with_status(1),
+            StubOutput::new(),
+            StubOutput::stdout("{}"),
+            StubOutput::new(),
+        ]),
+    );
 
     let output = tools
         .command()
-        .env("FRESHEN_MISE_SELF_UPDATE_STATUS", "1")
         .args(["--only", "mise", "--cleanup"])
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
@@ -220,11 +229,19 @@ fn a_failing_mise_self_update_is_only_a_warning() {
 #[test]
 fn a_failing_mise_upgrade_still_prunes_and_fails_the_step() {
     let tools = StubTools::new(&["mise"]);
-    install_mise(&tools);
+    tools.set_responses(
+        "mise",
+        &mise_responses(&[
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::new().with_status(1),
+            StubOutput::stdout("{}"),
+            StubOutput::new(),
+        ]),
+    );
 
     let output = tools
         .command()
-        .env("FRESHEN_MISE_UPGRADE_STATUS", "1")
         .args(["--only", "mise", "--cleanup"])
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
@@ -262,6 +279,7 @@ fn a_missing_uv_or_mise_is_skipped_without_calling_anything() {
     );
 }
 
+#[cfg(unix)]
 fn install_stale_node(tools: &StubTools) {
     tools.set_script(
         "mise",
@@ -288,6 +306,7 @@ esac"#,
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn warns_about_processes_still_running_an_old_node_version() {
     let tools = StubTools::new(&["mise", "ps"]);
@@ -331,6 +350,7 @@ fn warns_about_processes_still_running_an_old_node_version() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn warns_about_old_node_python_java_and_go_processes_with_their_parent_apps() {
     let tools = StubTools::new(&["mise", "ps"]);
@@ -420,6 +440,7 @@ esac"#,
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn no_stale_node_warning_when_every_process_uses_the_active_version() {
     let tools = StubTools::new(&["mise", "ps"]);
@@ -461,13 +482,11 @@ esac"#,
 #[test]
 fn check_reports_outdated_uv_tools_and_exits_2() {
     let tools = StubTools::new(&["uv"]);
-    tools.set_script(
+    tools.set_responses(
         "uv",
-        r#"case "$*" in
-  "tool list --outdated")
-    printf 'black v23.1.0 [latest: 26.10.1]\n- black\n- blackd\nruff v0.6.0 [latest: 0.7.0]\n- ruff\n'
-    ;;
-esac"#,
+        &[StubOutput::stdout(
+            "black v23.1.0 [latest: 26.10.1]\n- black\n- blackd\nruff v0.6.0 [latest: 0.7.0]\n- ruff\n",
+        )],
     );
 
     let output = tools
@@ -491,15 +510,11 @@ esac"#,
 #[test]
 fn check_reports_outdated_mise_tools_and_exits_2() {
     let tools = StubTools::new(&["mise"]);
-    tools.set_script(
+    tools.set_responses(
         "mise",
-        r#"case "$*" in
-  "outdated")
-    printf 'Plugin  Requested  Current  Latest\n'
-    printf 'node    20         20.0.0   20.1.0\n'
-    printf 'python  3.11       3.11.0   3.11.1\n'
-    ;;
-esac"#,
+        &[StubOutput::stdout(
+            "Plugin  Requested  Current  Latest\nnode    20         20.0.0   20.1.0\npython  3.11       3.11.0   3.11.1\n",
+        )],
     );
 
     let output = tools
@@ -523,22 +538,8 @@ esac"#,
 #[test]
 fn check_reports_uv_and_mise_up_to_date_without_running_them() {
     let tools = StubTools::new(&["uv", "mise"]);
-    tools.set_script(
-        "uv",
-        r#"case "$*" in
-  "tool list --outdated")
-    printf 'No tools installed\n'
-    ;;
-esac"#,
-    );
-    tools.set_script(
-        "mise",
-        r#"case "$*" in
-  "outdated")
-    printf 'All tools are up to date\n' >&2
-    ;;
-esac"#,
-    );
+    tools.set_responses("uv", &[StubOutput::stdout("No tools installed\n")]);
+    tools.set_responses("mise", &[StubOutput::stderr("All tools are up to date\n")]);
 
     let output = tools
         .command()
@@ -557,14 +558,7 @@ esac"#,
 #[test]
 fn check_reports_a_failed_tool_query_with_exit_1() {
     let tools = StubTools::new(&["uv"]);
-    tools.set_script(
-        "uv",
-        r#"case "$*" in
-  "tool list --outdated")
-    exit 1
-    ;;
-esac"#,
-    );
+    tools.set_responses("uv", &[StubOutput::new().with_status(1)]);
 
     let output = tools
         .command()

@@ -9,6 +9,7 @@ pub mod check;
 pub mod cleanup;
 pub mod containers;
 pub(crate) mod deadline;
+mod executable;
 pub mod exit;
 pub mod homebrew;
 pub mod listing;

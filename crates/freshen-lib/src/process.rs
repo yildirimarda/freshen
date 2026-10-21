@@ -597,6 +597,12 @@ impl CommandSpec {
         on_line: &mut dyn FnMut(OutputStream, &str),
     ) -> Result<AttemptResult, ProcessError> {
         let program = self.program.to_string_lossy().into_owned();
+        #[cfg(windows)]
+        let mut command = match crate::executable::resolve(&self.program) {
+            Some(path) => Command::new(path),
+            None => Command::new(&self.program),
+        };
+        #[cfg(not(windows))]
         let mut command = Command::new(&self.program);
         command
             .args(&self.args)

@@ -4,13 +4,13 @@
 //! invocations and replays recorded output, so the expected command transcript
 //! is exactly what `update-all.sh` runs.
 
-#![cfg(all(feature = "test-harness", unix))]
+#![cfg(all(feature = "test-harness", not(windows)))]
 
 mod support;
 
 use std::process::Output;
 
-use support::StubTools;
+use support::{StubOutput, StubTools};
 
 const CASK_INFO: &str = include_str!("../../freshen-lib/tests/fixtures/brew-info-casks.json");
 const HOMEBREW_STEPS: &str =
@@ -27,7 +27,6 @@ fn stderr(output: &Output) -> String {
 fn run(tools: &StubTools, args: &[&str]) -> Output {
     tools
         .command()
-        .env("FRESHEN_BREW_INFO_JSON", CASK_INFO)
         .env_remove("ZELLIJ")
         .arg("--cleanup")
         .args(args)
@@ -35,28 +34,31 @@ fn run(tools: &StubTools, args: &[&str]) -> Output {
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
 }
 
+fn homebrew_responses(transcript: &[StubOutput]) -> Vec<StubOutput> {
+    let mut responses = vec![StubOutput::new(); 3];
+    responses.extend_from_slice(transcript);
+    responses
+}
+
 #[test]
 fn command_transcript_matches_the_zsh_homebrew_block() {
     let tools = StubTools::new(&["brew"]);
-    tools.set_script(
+    tools.set_responses(
         "brew",
-        r#"case "$*" in
-  "outdated --formula --quiet")
-    printf 'jq\n'
-    ;;
-  "outdated --cask --greedy --quiet")
-    printf 'firefox\ngoogle-chrome\n'
-    ;;
-  "info --cask --json=v2 firefox google-chrome")
-    printf '%s\n' "$FRESHEN_BREW_INFO_JSON"
-    ;;
-  "autoremove --dry-run")
-    printf '==> Would autoremove 1 unneeded formula:\nold-dependency\n'
-    ;;
-  "cleanup --dry-run --prune=all")
-    printf 'Would remove: /tmp/old (1.2MB)\n'
-    ;;
-esac"#,
+        &homebrew_responses(&[
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::stdout("jq\n"),
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::stdout("firefox\ngoogle-chrome\n"),
+            StubOutput::stdout(CASK_INFO),
+            StubOutput::new(),
+            StubOutput::stdout("==> Would autoremove 1 unneeded formula:\nold-dependency\n"),
+            StubOutput::new(),
+            StubOutput::stdout("Would remove: /tmp/old (1.2MB)\n"),
+            StubOutput::new(),
+        ]),
     );
     std::fs::create_dir_all(tools.home().join("Applications/Firefox.app"))
         .unwrap_or_else(|error| panic!("failed to create test app: {error}"));
@@ -149,25 +151,22 @@ fn a_missing_brew_skips_every_homebrew_step_without_calling_anything() {
 #[test]
 fn invalid_cask_metadata_does_not_stop_the_cask_upgrade() {
     let tools = StubTools::new(&["brew"]);
-    tools.set_script(
+    tools.set_responses(
         "brew",
-        r#"case "$*" in
-  "outdated --formula --quiet")
-    printf 'jq\n'
-    ;;
-  "outdated --cask --greedy --quiet")
-    printf 'firefox\n'
-    ;;
-  "info --cask --json=v2 firefox")
-    printf 'not json\n'
-    ;;
-  "autoremove --dry-run")
-    printf '==> Would autoremove 1 unneeded formula:\nold-dependency\n'
-    ;;
-  "cleanup --dry-run --prune=all")
-    printf 'Would remove: /tmp/old (1.2MB)\n'
-    ;;
-esac"#,
+        &homebrew_responses(&[
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::stdout("jq\n"),
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::stdout("firefox\n"),
+            StubOutput::stdout("not json\n"),
+            StubOutput::new(),
+            StubOutput::stdout("==> Would autoremove 1 unneeded formula:\nold-dependency\n"),
+            StubOutput::new(),
+            StubOutput::stdout("Would remove: /tmp/old (1.2MB)\n"),
+            StubOutput::new(),
+        ]),
     );
 
     let output = run(&tools, &["--only", HOMEBREW_STEPS]);
@@ -200,28 +199,22 @@ esac"#,
 #[test]
 fn a_failing_formula_upgrade_does_not_stop_the_cask_steps() {
     let tools = StubTools::new(&["brew"]);
-    tools.set_script(
+    tools.set_responses(
         "brew",
-        r#"case "$*" in
-  "outdated --formula --quiet")
-    printf 'jq\n'
-    ;;
-  "upgrade --formula")
-    exit 1
-    ;;
-  "outdated --cask --greedy --quiet")
-    printf 'firefox\n'
-    ;;
-  "info --cask --json=v2 firefox")
-    printf '%s\n' "$FRESHEN_BREW_INFO_JSON"
-    ;;
-  "autoremove --dry-run")
-    printf '==> Would autoremove 1 unneeded formula:\nold-dependency\n'
-    ;;
-  "cleanup --dry-run --prune=all")
-    printf 'Would remove: /tmp/old (1.2MB)\n'
-    ;;
-esac"#,
+        &homebrew_responses(&[
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::stdout("jq\n"),
+            StubOutput::new().with_status(1),
+            StubOutput::new(),
+            StubOutput::stdout("firefox\n"),
+            StubOutput::stdout(CASK_INFO),
+            StubOutput::new(),
+            StubOutput::stdout("==> Would autoremove 1 unneeded formula:\nold-dependency\n"),
+            StubOutput::new(),
+            StubOutput::stdout("Would remove: /tmp/old (1.2MB)\n"),
+            StubOutput::new(),
+        ]),
     );
 
     let output = run(&tools, &["--only", HOMEBREW_STEPS]);
@@ -252,6 +245,7 @@ esac"#,
     assert!(text.contains("failed"), "summary: {text}");
 }
 
+#[cfg(unix)]
 fn app_tools(osascript_quits: bool) -> (StubTools, std::path::PathBuf, std::path::PathBuf) {
     let tools = StubTools::new(&["brew", "defaults", "ps", "osascript", "open", "kill"]);
     tools.set_script(
@@ -302,6 +296,7 @@ esac"#,
     (tools, app, state)
 }
 
+#[cfg(unix)]
 fn run_apps(
     tools: &StubTools,
     state: &std::path::Path,
@@ -320,6 +315,7 @@ fn run_apps(
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
 }
 
+#[cfg(unix)]
 fn run_apps_with_stdin(tools: &StubTools, state: &std::path::Path, stdin: &str) -> Output {
     let mut command = tools.command();
     command
@@ -330,6 +326,7 @@ fn run_apps_with_stdin(tools: &StubTools, state: &std::path::Path, stdin: &str) 
     tools.run_with_stdin(command, stdin)
 }
 
+#[cfg(unix)]
 #[test]
 fn quits_running_cask_apps_before_the_upgrade_and_reopens_after_cleanup() {
     let (tools, app, state) = app_tools(true);
@@ -378,6 +375,7 @@ fn quits_running_cask_apps_before_the_upgrade_and_reopens_after_cleanup() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn yes_at_the_prompt_quits_apps_and_upgrades_casks() {
     let (tools, app, state) = app_tools(true);
@@ -425,6 +423,7 @@ fn yes_at_the_prompt_quits_apps_and_upgrades_casks() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn skip_quitting_at_the_prompt_upgrades_casks_without_quitting_apps() {
     let (tools, app, state) = app_tools(true);
@@ -466,6 +465,7 @@ fn skip_quitting_at_the_prompt_upgrades_casks_without_quitting_apps() {
     assert!(!text.contains("Opening:"), "apps were reopened: {text}");
 }
 
+#[cfg(unix)]
 #[test]
 fn skip_casks_at_the_prompt_skips_the_cask_upgrade() {
     let (tools, app, state) = app_tools(true);
@@ -509,6 +509,7 @@ fn skip_casks_at_the_prompt_skips_the_cask_upgrade() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn never_quits_the_terminal_running_the_script() {
     let (tools, _app, state) = app_tools(true);
@@ -554,6 +555,7 @@ fn never_quits_the_terminal_running_the_script() {
     assert!(!text.contains("Quitting:"), "output: {text}");
 }
 
+#[cfg(unix)]
 #[test]
 fn force_kill_terminates_an_app_that_does_not_quit_gracefully() {
     let (tools, _app, state) = app_tools(false);
@@ -584,20 +586,18 @@ fn force_kill_terminates_an_app_that_does_not_quit_gracefully() {
 
 fn run_formulae(outdated: &str, inside_zellij: bool) -> (Output, Vec<String>) {
     let tools = StubTools::new(&["brew"]);
-    tools.set_script(
+    tools.set_responses(
         "brew",
-        r#"case "$*" in
-  "outdated --formula --quiet")
-    printf '%s\n' "$FRESHEN_OUTDATED"
-    ;;
-esac"#,
+        &homebrew_responses(&[
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::stdout(outdated),
+            StubOutput::new(),
+        ]),
     );
 
     let mut command = tools.command();
-    command
-        .env("FRESHEN_BREW_INFO_JSON", CASK_INFO)
-        .env("FRESHEN_OUTDATED", outdated)
-        .args(["--only", "brew,brew-formulae"]);
+    command.args(["--only", "brew,brew-formulae"]);
     if inside_zellij {
         command.env("ZELLIJ", "0");
     } else {
@@ -650,16 +650,12 @@ fn no_zellij_warning_outside_a_session_or_when_zellij_is_current() {
 #[test]
 fn check_reports_outdated_versions_and_exits_2() {
     let tools = StubTools::new(&["brew"]);
-    tools.set_script(
+    tools.set_responses(
         "brew",
-        r#"case "$*" in
-  "outdated --formula")
-    printf 'jq (1.7.1) < 1.8.0\nnode (20.10.0) < 20.11.0\n'
-    ;;
-  "outdated --cask --greedy")
-    printf 'firefox (121.0) != 122.0\n'
-    ;;
-esac"#,
+        &[
+            StubOutput::stdout("jq (1.7.1) < 1.8.0\nnode (20.10.0) < 20.11.0\n"),
+            StubOutput::stdout("firefox (121.0) != 122.0\n"),
+        ],
     );
 
     let output = run(
@@ -724,6 +720,7 @@ fn check_skips_a_missing_tool_and_never_calls_it() {
     assert_eq!(stdout(&output), "Everything is up to date.\n");
 }
 
+#[cfg(unix)]
 #[test]
 fn check_reports_a_hung_query_as_timed_out_with_exit_1() {
     let tools = StubTools::new(&["brew"]);
@@ -754,14 +751,7 @@ esac"#,
 #[test]
 fn check_reports_a_failed_query_with_exit_1() {
     let tools = StubTools::new(&["brew"]);
-    tools.set_script(
-        "brew",
-        r#"case "$*" in
-  "outdated --formula")
-    exit 1
-    ;;
-esac"#,
-    );
+    tools.set_responses("brew", &[StubOutput::new().with_status(1)]);
 
     let output = run(&tools, &["--check", "--only", "brew-formulae"]);
 

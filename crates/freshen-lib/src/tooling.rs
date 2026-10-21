@@ -10,9 +10,6 @@
 //! upgrade already replaced it. `brew list --formula mise` is the same probe
 //! the zsh script uses; when Homebrew itself is missing the self-update runs.
 
-use std::env;
-use std::path::Path;
-
 use crate::cleanup;
 use crate::homebrew::BREW;
 use crate::options::RunOptions;
@@ -274,23 +271,7 @@ fn detect_tool(tool: &str) -> Detection {
 }
 
 fn command_exists(program: &str) -> bool {
-    let Some(path) = env::var_os("PATH") else {
-        return false;
-    };
-    env::split_paths(&path).any(|directory| is_executable(&directory.join(program)))
-}
-
-#[cfg(unix)]
-fn is_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-
-    path.metadata()
-        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-}
-
-#[cfg(not(unix))]
-fn is_executable(path: &Path) -> bool {
-    path.is_file()
+    crate::executable::command_exists(program)
 }
 
 #[cfg(test)]

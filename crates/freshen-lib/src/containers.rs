@@ -12,8 +12,6 @@
 //! steps, exactly like `colima_was_running`, `compose_projects` and
 //! `standalone_containers` in `update-all.sh`.
 
-use std::env;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
@@ -557,23 +555,7 @@ fn detect_with_brew(tool: &str) -> Detection {
 }
 
 fn command_exists(program: &str) -> bool {
-    let Some(path) = env::var_os("PATH") else {
-        return false;
-    };
-    env::split_paths(&path).any(|directory| is_executable(&directory.join(program)))
-}
-
-#[cfg(unix)]
-fn is_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-
-    path.metadata()
-        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-}
-
-#[cfg(not(unix))]
-fn is_executable(path: &Path) -> bool {
-    path.is_file()
+    crate::executable::command_exists(program)
 }
 
 #[cfg(test)]

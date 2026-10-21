@@ -4,7 +4,7 @@
 //! touch the real network, battery or disk. The stub harness normally disables
 //! preflight; each test here removes that bypass explicitly.
 
-#![cfg(all(feature = "test-harness", unix))]
+#![cfg(feature = "test-harness")]
 
 mod support;
 
