@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Validate freshen JSON reports from the read-only real-Homebrew CI job.
+"""Validate freshen JSON reports from the read-only real-tool CI jobs.
 
-The job must fail on parser drift, not only on a non-zero command exit. The
-`brew outdated` parser is deliberately lenient, so a changed line can become a
-bogus package name instead of an error; this validator rejects names that are
-not Homebrew tokens and also fails when a Homebrew step was skipped or failed.
+The jobs must fail on parser drift, not only on a non-zero command exit. Some
+parsers (for example `brew outdated`) are deliberately lenient, so a changed
+line can become a bogus package name instead of an error; this validator
+rejects names that are not package tokens and also fails when an expected step
+was skipped, failed, timed out or is missing from the report.
+
+The `--profile` selects the steps a job must exercise: `homebrew` (the default,
+so older invocations keep working), `apt` or `windows` (winget and Chocolatey).
 """
 
 import argparse
@@ -12,16 +16,36 @@ import json
 import re
 import sys
 
-HOMEBREW_STEPS = (
-    "brew",
-    "brew-formulae",
-    "brew-casks",
-    "brew-autoremove",
-    "brew-cleanup",
-    "brew-reopen",
-)
+PROFILES = {
+    "homebrew": {
+        "steps": (
+            "brew",
+            "brew-formulae",
+            "brew-casks",
+            "brew-autoremove",
+            "brew-cleanup",
+            "brew-reopen",
+        ),
+        "tool": "Homebrew",
+        "noun": "Homebrew token",
+    },
+    "apt": {
+        "steps": ("apt",),
+        "tool": "apt",
+        "noun": "apt package name",
+    },
+    "windows": {
+        "steps": ("winget", "choco"),
+        "tool": "winget or Chocolatey",
+        "noun": "winget or Chocolatey package name",
+    },
+}
 
-HOMEBREW_TOKEN = re.compile(r"^[A-Za-z0-9@._+/-]+$")
+# Package ids/names seen in these tools' output. This is intentionally a
+# little wider than any one tool (apt allows `:` for an architecture and `+`
+# in names, winget ids contain dots, Homebrew allows `@` and `/`): it must
+# reject prose that leaked into a name, not enforce each tool's exact grammar.
+PACKAGE_TOKEN = re.compile(r"^[A-Za-z0-9@._+~:/-]+$")
 
 
 def load_report(path):
@@ -48,15 +72,15 @@ def validate_step_error(step_id, step, errors):
         errors.append(f"{step_id}: report contains an error: {step['error']}")
 
 
-def validate_item(step_id, item, errors):
+def validate_item(step_id, item, errors, noun):
     if not isinstance(item, dict):
         errors.append(f"{step_id}: malformed outdated item")
         return
 
     name = item.get("name")
-    if not isinstance(name, str) or not HOMEBREW_TOKEN.fullmatch(name):
+    if not isinstance(name, str) or not PACKAGE_TOKEN.fullmatch(name):
         errors.append(
-            f"{step_id}: outdated item {name!r} does not look like a Homebrew token "
+            f"{step_id}: outdated item {name!r} does not look like a {noun} "
             "(parser drift?)"
         )
 
@@ -68,7 +92,7 @@ def validate_item(step_id, item, errors):
             errors.append(f"{step_id}: invalid {field} version {value!r}")
 
 
-def validate_check(report):
+def validate_check(report, profile):
     errors = []
     if report.get("failed"):
         errors.append(f"check report has {report['failed']} failed step(s)")
@@ -80,7 +104,7 @@ def validate_check(report):
     if by_id is None:
         return errors
 
-    for step_id in HOMEBREW_STEPS:
+    for step_id in profile["steps"]:
         step = by_id.get(step_id)
         if step is None:
             errors.append(f"{step_id}: step is missing from the check report")
@@ -90,7 +114,8 @@ def validate_check(report):
         if status not in ("up to date", "outdated"):
             errors.append(
                 f"{step_id}: check status is {status!r}; expected 'up to date' or "
-                "'outdated' (a skipped step means real Homebrew was not exercised)"
+                f"'outdated' (a skipped step means real {profile['tool']} was not "
+                "exercised)"
             )
         validate_step_error(step_id, step, errors)
 
@@ -99,12 +124,12 @@ def validate_check(report):
             errors.append(f"{step_id}: report has no items list")
             continue
         for item in items:
-            validate_item(step_id, item, errors)
+            validate_item(step_id, item, errors, profile["noun"])
 
     return errors
 
 
-def validate_dry_run(report):
+def validate_dry_run(report, profile):
     errors = []
     if report.get("failed"):
         errors.append(f"dry-run report has {report['failed']} failed step(s)")
@@ -118,7 +143,7 @@ def validate_dry_run(report):
     if by_id is None:
         return errors
 
-    for step_id in HOMEBREW_STEPS:
+    for step_id in profile["steps"]:
         step = by_id.get(step_id)
         if step is None:
             errors.append(f"{step_id}: step is missing from the dry-run report")
@@ -128,7 +153,7 @@ def validate_dry_run(report):
         if status != "planned":
             errors.append(
                 f"{step_id}: dry-run status is {status!r}; expected 'planned' "
-                "(a skipped step means real Homebrew was not exercised)"
+                f"(a skipped step means real {profile['tool']} was not exercised)"
             )
         validate_step_error(step_id, step, errors)
 
@@ -139,6 +164,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("check", "dry-run"))
     parser.add_argument("report", help="path to the JSON report written by freshen")
+    parser.add_argument(
+        "--profile",
+        choices=tuple(PROFILES),
+        default="homebrew",
+        help="real tools whose steps the report must contain (default: homebrew)",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -151,13 +182,18 @@ def main(argv=None):
         print(f"error: {args.report} is not a JSON object", file=sys.stderr)
         return 1
 
-    errors = validate_check(report) if args.mode == "check" else validate_dry_run(report)
+    profile = PROFILES[args.profile]
+    errors = (
+        validate_check(report, profile)
+        if args.mode == "check"
+        else validate_dry_run(report, profile)
+    )
     if errors:
         for error in errors:
             print(f"error: {error}", file=sys.stderr)
         return 1
 
-    print(f"ok: {args.mode} report {args.report}")
+    print(f"ok: {args.mode} report {args.report} ({args.profile})")
     return 0
 
 

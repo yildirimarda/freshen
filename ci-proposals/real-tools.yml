@@ -13,10 +13,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The stub-based tests prove the command transcripts; this job proves that
-  # the same parsers still understand what a real Homebrew prints today. It is
+  # The stub-based tests prove the command transcripts; these jobs prove that
+  # the same parsers still understand what the real tools print today. They are
   # deliberately read-only: `--check` and `--dry-run` never upgrade, install,
-  # remove or clean up anything, and the job itself does not run `brew update`.
+  # remove or clean up anything, and the jobs never refresh package metadata.
+  #
+  # The apt and Windows jobs exercise the apt (Milestone 5) and winget /
+  # Chocolatey (Milestone 6) steps. They fail closed until those steps exist:
+  # a missing, skipped or failed step is a failure, exactly like the Homebrew
+  # job, so an unimplemented step cannot make the job pass silently.
   homebrew-read-only:
     name: real Homebrew (macOS, read-only)
     runs-on: macos-latest
@@ -80,5 +85,139 @@ jobs:
           python3 tests/real-tools-check.py dry-run dry-run.json
           if grep -E 'invalid Homebrew cask JSON|could not read cask metadata|could not inspect casks|failed during (detect|check|run|cleanup)' check.log dry-run.log; then
             echo "::error::freshen reported a Homebrew parser error"
+            exit 1
+          fi
+
+  apt-read-only:
+    name: real apt (Ubuntu, read-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      APT_STEPS: apt
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain
+
+      - name: Build freshen
+        run: cargo build --locked --bin freshen
+
+      - name: Real apt is available
+        run: |
+          command -v apt
+          apt --version
+
+      # Exit code 2 is success here: it means apt has updates pending, which is
+      # exactly what the read-only check is supposed to report.
+      - name: freshen --check against the real apt
+        run: |
+          set -euo pipefail
+          status=0
+          ./target/debug/freshen --check --json --jobs 1 --step-timeout 600 \
+            --only "$APT_STEPS" > check.json 2> check.log || status=$?
+          cat check.log
+          cat check.json
+          case "$status" in
+            0|2) ;;
+            *)
+              echo "::error::freshen --check exited $status"
+              exit 1
+              ;;
+          esac
+
+      - name: freshen --dry-run against the real apt
+        run: |
+          set -euo pipefail
+          status=0
+          ./target/debug/freshen --dry-run --json --jobs 1 \
+            --only "$APT_STEPS" > dry-run.json 2> dry-run.log || status=$?
+          cat dry-run.log
+          cat dry-run.json
+          if [ "$status" -ne 0 ]; then
+            echo "::error::freshen --dry-run exited $status"
+            exit 1
+          fi
+
+      # The same failure rule as the Homebrew job: a skipped, failed or missing
+      # apt step fails the job, and a line that did not parse into a package
+      # name fails the validator instead of being reported as a bogus package.
+      - name: Fail on apt parser errors
+        run: |
+          set -euo pipefail
+          python3 tests/real-tools-check.py check check.json --profile apt
+          python3 tests/real-tools-check.py dry-run dry-run.json --profile apt
+          if grep -E 'failed during (detect|check|run|cleanup)' check.log dry-run.log; then
+            echo "::error::freshen reported an apt parser error"
+            exit 1
+          fi
+
+  windows-read-only:
+    name: real Chocolatey and winget (Windows, read-only)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      WINDOWS_STEPS: winget,choco
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain
+
+      - name: Build freshen
+        run: cargo build --locked --bin freshen
+
+      - name: Real winget and Chocolatey are available
+        run: |
+          command -v winget
+          winget --version
+          command -v choco
+          choco --version
+
+      # Exit code 2 is success here: it means the tools have updates pending,
+      # which is exactly what the read-only check is supposed to report.
+      - name: freshen --check against real winget and Chocolatey
+        run: |
+          set -euo pipefail
+          status=0
+          ./target/debug/freshen --check --json --jobs 1 --step-timeout 600 \
+            --only "$WINDOWS_STEPS" > check.json 2> check.log || status=$?
+          cat check.log
+          cat check.json
+          case "$status" in
+            0|2) ;;
+            *)
+              echo "::error::freshen --check exited $status"
+              exit 1
+              ;;
+          esac
+
+      - name: freshen --dry-run against real winget and Chocolatey
+        run: |
+          set -euo pipefail
+          status=0
+          ./target/debug/freshen --dry-run --json --jobs 1 \
+            --only "$WINDOWS_STEPS" > dry-run.json 2> dry-run.log || status=$?
+          cat dry-run.log
+          cat dry-run.json
+          if [ "$status" -ne 0 ]; then
+            echo "::error::freshen --dry-run exited $status"
+            exit 1
+          fi
+
+      # The same failure rule as the other platforms: a skipped, failed or
+      # missing winget/Chocolatey step fails the job, and a line that did not
+      # parse into a package name fails the validator.
+      - name: Fail on winget and Chocolatey parser errors
+        run: |
+          set -euo pipefail
+          # The Windows runner exposes `python`, not necessarily `python3`.
+          python tests/real-tools-check.py check check.json --profile windows
+          python tests/real-tools-check.py dry-run dry-run.json --profile windows
+          if grep -E 'failed during (detect|check|run|cleanup)' check.log dry-run.log; then
+            echo "::error::freshen reported a winget or Chocolatey parser error"
             exit 1
           fi
