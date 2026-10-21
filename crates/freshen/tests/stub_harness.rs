@@ -51,6 +51,29 @@ fn text_file_busy_is_retried_until_the_stub_is_runnable() {
 
 #[cfg(unix)]
 #[test]
+fn text_file_busy_is_returned_once_the_retry_budget_is_exhausted() {
+    use std::io;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    let attempts = AtomicU32::new(0);
+    let result = support::retry_text_file_busy(|| {
+        attempts.fetch_add(1, Ordering::Relaxed);
+        Err::<(), _>(io::Error::from_raw_os_error(libc::ETXTBSY))
+    });
+
+    let error = match result {
+        Ok(()) => panic!("expected the busy executable error"),
+        Err(error) => error,
+    };
+    assert_eq!(error.raw_os_error(), Some(libc::ETXTBSY));
+    assert!(
+        attempts.load(Ordering::Relaxed) > 1,
+        "the helper should retry before giving up"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn other_execution_errors_are_not_retried() {
     use std::io;
     use std::sync::atomic::{AtomicU32, Ordering};
