@@ -17,13 +17,14 @@ use std::sync::{Arc, Mutex};
 use serde_json::Value;
 
 use crate::apps::{
-    find_running_apps, quit_apps, quit_choice, reopen_apps, AppSystem, MacAppSystem, QuitChoice,
-    QuitPolicy,
+    find_running_apps, quit_apps, quit_choice, reopen_apps, AppScan, AppSystem, MacAppSystem,
+    QuitChoice, QuitPolicy, RunningApp,
 };
 use crate::cleanup;
 use crate::options::RunOptions;
 use crate::output::{flush, human, human_print};
 use crate::platform::Platform;
+use crate::policy::AppLists;
 use crate::process::{CommandSpec, ProcessOutput, NETWORK_RETRIES};
 use crate::registry::Registry;
 use crate::snapshot::{self, SnapshotSection};
@@ -316,35 +317,65 @@ impl Step for FormulaeStep {
     }
 
     fn check(&self) -> Result<CheckReport, StepError> {
-        outdated(FORMULAE, &["--formula"])
+        self.check_with_options(&RunOptions::new())
+    }
+
+    fn check_with_options(&self, options: &RunOptions) -> Result<CheckReport, StepError> {
+        let report = outdated(FORMULAE, &["--formula"])?;
+        Ok(report.filtered(|name| options.filters().packages().includes(name)))
     }
 
     fn run(&self) -> Result<(), StepError> {
+        self.run_with_options(&RunOptions::new())
+    }
+
+    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
         let outdated = match CommandSpec::new("brew")
             .args(["outdated", "--formula", "--quiet"])
             .retry_transient_network(NETWORK_RETRIES)
             .run()
         {
-            Ok(outdated) => {
-                warn_about_breakable_sessions(outdated.stdout());
-                Some(lines(outdated.stdout()))
-            }
+            Ok(outdated) => Some(lines(outdated.stdout())),
             Err(error) => {
                 eprintln!("freshen: could not list outdated formulae: {error}");
                 None
             }
         };
 
-        if outdated.is_some_and(|formulae| formulae.is_empty()) {
-            human!("No outdated formulae.");
+        let Some(formulae) = outdated else {
+            return run_brew(
+                FORMULAE,
+                CommandSpec::new("brew").args(["upgrade", "--formula"]),
+            )
+            .map(|_| ());
+        };
+
+        let filter = options.filters().packages();
+        let selected: Vec<String> = formulae
+            .iter()
+            .filter(|name| filter.includes(name))
+            .cloned()
+            .collect();
+
+        warn_about_breakable_sessions(&selected.join("\n"));
+
+        if selected.is_empty() {
+            if formulae.is_empty() {
+                human!("No outdated formulae.");
+            } else {
+                human!("No outdated formulae left after applying the include/exclude lists.");
+            }
             return Ok(());
         }
 
-        run_brew(
-            FORMULAE,
-            CommandSpec::new("brew").args(["upgrade", "--formula"]),
-        )
-        .map(|_| ())
+        let mut spec = CommandSpec::new("brew").args(["upgrade", "--formula"]);
+        if !filter.is_empty() {
+            for name in &selected {
+                spec = spec.arg(name);
+            }
+        }
+
+        run_brew(FORMULAE, spec).map(|_| ())
     }
 
     fn snapshot(&self) -> Option<SnapshotSection> {
@@ -377,6 +408,36 @@ fn own_bundle_id(get: impl Fn(&str) -> Option<String>) -> Option<String> {
         .or_else(|| detect_terminal_app(&get).and_then(|app| app.bundle_id().map(str::to_string)))
 }
 
+/// Which apps are quit before a cask upgrade and whether the user is asked.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct QuitPlan {
+    /// The apps that are quit even when the user skips quitting the others.
+    always: Vec<RunningApp>,
+
+    /// Whether the user is asked before anything is quit.
+    ask: bool,
+}
+
+/// Decides which of the running apps are quit and whether the user is asked.
+///
+/// The apps on the always-quit list are quit without asking, so a run whose
+/// apps are all on that list never shows the prompt. Every other app is quit
+/// only when the user says so.
+fn quit_plan(scan: &AppScan, app_lists: &AppLists, assume_yes: bool) -> QuitPlan {
+    let always: Vec<RunningApp> = scan
+        .running()
+        .iter()
+        .filter(|app| app_lists.is_always_quit(app.bundle_id(), app.name()))
+        .cloned()
+        .collect();
+    let everything_is_always = !always.is_empty() && always.len() == scan.running().len();
+
+    QuitPlan {
+        always,
+        ask: !assume_yes && !everything_is_always,
+    }
+}
+
 impl CasksStep {
     fn new(reopen: ReopenQueue) -> Self {
         Self {
@@ -394,12 +455,21 @@ impl CasksStep {
         let installed = installed_app_paths(apps, &app_roots());
         let self_bundle_id = own_bundle_id(|key| env::var(key).ok());
         let system = self.system.as_ref();
-        let scan = find_running_apps(system, &installed, self_bundle_id.as_deref());
+        let scan = find_running_apps(
+            system,
+            &installed,
+            self_bundle_id.as_deref(),
+            options.app_lists(),
+        );
 
         for name in scan.protected() {
             human!(
                 "warning: {name} is the terminal running this script, not quitting it (restart it manually after the upgrade)."
             );
+        }
+
+        for name in scan.never_quit() {
+            human!("warning: {name} is on the never-quit list, not quitting it.");
         }
 
         if scan.is_empty() {
@@ -411,20 +481,31 @@ impl CasksStep {
             human!("   - {}", app.name());
         }
 
-        let choice = if options.assume_yes() {
-            QuitChoice::Quit
-        } else {
+        let always_quit = quit_plan(&scan, options.app_lists(), options.assume_yes());
+
+        let choice = if always_quit.ask {
             ask_quit_choice()
+        } else {
+            QuitChoice::Quit
         };
 
-        if choice != QuitChoice::Quit {
+        if choice == QuitChoice::SkipCasks {
             return choice;
         }
 
-        let policy = QuitPolicy::from_env(options.force_kill());
-        let reopen_ids = quit_apps(system, scan.running(), &policy);
-        self.reopen.extend(reopen_ids);
-        QuitChoice::Quit
+        let to_quit: Vec<RunningApp> = match choice {
+            QuitChoice::Quit => scan.running().to_vec(),
+            QuitChoice::SkipQuit => always_quit.always,
+            QuitChoice::SkipCasks => Vec::new(),
+        };
+
+        if !to_quit.is_empty() {
+            let policy = QuitPolicy::from_env(options.force_kill());
+            let reopen_ids = quit_apps(system, &to_quit, &policy);
+            self.reopen.extend(reopen_ids);
+        }
+
+        choice
     }
 }
 
@@ -451,7 +532,12 @@ impl Step for CasksStep {
     }
 
     fn check(&self) -> Result<CheckReport, StepError> {
-        outdated(CASKS, &["--cask", "--greedy"])
+        self.check_with_options(&RunOptions::new())
+    }
+
+    fn check_with_options(&self, options: &RunOptions) -> Result<CheckReport, StepError> {
+        let report = outdated(CASKS, &["--cask", "--greedy"])?;
+        Ok(report.filtered(|name| options.filters().casks().includes(name)))
     }
 
     fn run(&self) -> Result<(), StepError> {
@@ -463,7 +549,11 @@ impl Step for CasksStep {
             CASKS,
             CommandSpec::new("brew").args(["outdated", "--cask", "--greedy", "--quiet"]),
         )?;
-        let casks = lines(outdated.stdout());
+        let filter = options.filters().casks();
+        let casks: Vec<String> = lines(outdated.stdout())
+            .into_iter()
+            .filter(|cask| filter.includes(cask))
+            .collect();
 
         if casks.is_empty() {
             human!("No outdated casks.");
@@ -495,11 +585,14 @@ impl Step for CasksStep {
             return Ok(());
         }
 
-        run_brew(
-            CASKS,
-            CommandSpec::new("brew").args(["upgrade", "--cask", "--greedy"]),
-        )
-        .map(|_| ())
+        let mut spec = CommandSpec::new("brew").args(["upgrade", "--cask", "--greedy"]);
+        if !filter.is_empty() {
+            for cask in &casks {
+                spec = spec.arg(cask);
+            }
+        }
+
+        run_brew(CASKS, spec).map(|_| ())
     }
 
     fn snapshot(&self) -> Option<SnapshotSection> {
@@ -695,11 +788,12 @@ impl Step for ReopenStep {
 #[cfg(test)]
 mod tests {
     use super::{
-        cask_app_artifacts, installed_app_paths, own_bundle_id, parse_outdated, register,
-        CaskError, CasksStep, ReopenQueue, ReopenStep, CASKS, FORMULAE, REOPEN,
+        cask_app_artifacts, installed_app_paths, own_bundle_id, parse_outdated, quit_plan,
+        register, CaskError, CasksStep, ReopenQueue, ReopenStep, CASKS, FORMULAE, REOPEN,
     };
-    use crate::apps::AppSystem;
+    use crate::apps::{AppScan, AppSystem, RunningApp};
     use crate::platform::Platform;
+    use crate::policy::AppLists;
     use crate::registry::Registry;
     use crate::step::{Step, StepId};
     use std::path::Path;
@@ -971,5 +1065,60 @@ mod tests {
             bundle_id_from(&[("TERM_PROGRAM", "unknown-terminal")]),
             None
         );
+    }
+
+    fn scan_with(apps: &[(&str, &str)]) -> AppScan {
+        let running = apps
+            .iter()
+            .map(|(bundle_id, name)| {
+                RunningApp::new(
+                    std::path::PathBuf::from(format!("/Applications/{name}")),
+                    *bundle_id,
+                )
+            })
+            .collect();
+        AppScan::with_running(running)
+    }
+
+    #[test]
+    fn the_user_is_asked_when_no_app_is_on_the_always_quit_list() {
+        let scan = scan_with(&[("com.firefox", "Firefox.app")]);
+
+        let plan = quit_plan(&scan, &AppLists::new(), false);
+
+        assert!(plan.ask);
+        assert!(plan.always.is_empty());
+    }
+
+    #[test]
+    fn the_user_is_not_asked_when_every_app_is_on_the_always_quit_list() {
+        let scan = scan_with(&[("com.firefox", "Firefox.app"), ("com.editor", "Editor.app")]);
+        let lists = AppLists::new().with_always_quit(["com.firefox", "Editor"]);
+
+        let plan = quit_plan(&scan, &lists, false);
+
+        assert!(!plan.ask);
+        assert_eq!(plan.always.len(), 2);
+    }
+
+    #[test]
+    fn the_user_is_asked_when_only_some_apps_are_on_the_always_quit_list() {
+        let scan = scan_with(&[("com.firefox", "Firefox.app"), ("com.editor", "Editor.app")]);
+        let lists = AppLists::new().with_always_quit(["com.firefox"]);
+
+        let plan = quit_plan(&scan, &lists, false);
+
+        assert!(plan.ask);
+        assert_eq!(plan.always.len(), 1);
+        assert_eq!(plan.always[0].bundle_id(), "com.firefox");
+    }
+
+    #[test]
+    fn assuming_yes_never_asks_the_user() {
+        let scan = scan_with(&[("com.firefox", "Firefox.app")]);
+
+        let plan = quit_plan(&scan, &AppLists::new(), true);
+
+        assert!(!plan.ask);
     }
 }

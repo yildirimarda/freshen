@@ -5,12 +5,13 @@
 //! and Windows. Step availability is the only platform-specific input, and it
 //! comes from the step registry rather than from the host operating system.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::time::Duration;
 
 use crate::package_manager::PackageManagerConfig;
 use crate::platform::Platform;
+use crate::policy::{AppLists, ItemFilters};
 use crate::preflight::PreflightConfig;
 use crate::registry::{Registry, RegistryError};
 use crate::snapshot::DEFAULT_SNAPSHOT_RETENTION;
@@ -71,23 +72,43 @@ pub enum PlanError {
         /// Platform of the run.
         platform: Platform,
     },
+
+    /// The configuration file named a step that is not registered at all.
+    #[error("unknown step `{id}` in the configuration file (known steps: {known})")]
+    UnknownConfiguredStep {
+        /// Id that was not found.
+        id: String,
+        /// Comma-separated list of known step ids.
+        known: String,
+    },
 }
 
 impl PlanError {
     fn unknown(flag: SelectionFlag, id: &str, known: &[StepId]) -> Self {
-        let mut names = known.to_vec();
-        names.sort_unstable();
-        names.dedup();
-        let known = if names.is_empty() {
-            "none".to_owned()
-        } else {
-            names.join(", ")
-        };
         Self::UnknownStep {
             flag,
             id: id.to_owned(),
-            known,
+            known: known_list(known),
         }
+    }
+
+    fn unknown_configured(id: &str, known: &[StepId]) -> Self {
+        Self::UnknownConfiguredStep {
+            id: id.to_owned(),
+            known: known_list(known),
+        }
+    }
+}
+
+/// The known step ids as a comma-separated list.
+fn known_list(known: &[StepId]) -> String {
+    let mut names = known.to_vec();
+    names.sort_unstable();
+    names.dedup();
+    if names.is_empty() {
+        "none".to_owned()
+    } else {
+        names.join(", ")
     }
 }
 
@@ -197,6 +218,9 @@ pub struct RunOptions {
     global_timeout: Option<Duration>,
     snapshot_retention: Option<usize>,
     jobs: Option<usize>,
+    step_overrides: BTreeMap<String, bool>,
+    filters: ItemFilters,
+    app_lists: AppLists,
 }
 
 impl RunOptions {
@@ -289,6 +313,29 @@ impl RunOptions {
         self
     }
 
+    /// Replaces the per-step enable and disable flags.
+    ///
+    /// A step that is not named stays enabled.
+    #[must_use]
+    pub fn with_step_overrides(mut self, overrides: BTreeMap<String, bool>) -> Self {
+        self.step_overrides = overrides;
+        self
+    }
+
+    /// Replaces the include and exclude lists of the items a run may touch.
+    #[must_use]
+    pub fn with_filters(mut self, filters: ItemFilters) -> Self {
+        self.filters = filters;
+        self
+    }
+
+    /// Replaces the app lists that decide which applications are quit.
+    #[must_use]
+    pub fn with_app_lists(mut self, app_lists: AppLists) -> Self {
+        self.app_lists = app_lists;
+        self
+    }
+
     /// Returns `true` when `--dry-run` is set.
     #[must_use]
     pub fn is_dry_run(&self) -> bool {
@@ -356,12 +403,43 @@ impl RunOptions {
         self.jobs.unwrap_or(DEFAULT_JOBS).max(1)
     }
 
+    /// The per-step enable and disable flags.
+    #[must_use]
+    pub fn step_overrides(&self) -> &BTreeMap<String, bool> {
+        &self.step_overrides
+    }
+
+    /// Returns `true` when the step with `id` may run.
+    ///
+    /// A step that the configuration file does not name is enabled.
+    #[must_use]
+    pub fn is_step_enabled(&self, id: &str) -> bool {
+        self.step_overrides.get(id).copied().unwrap_or(true)
+    }
+
+    /// The include and exclude lists of the items a run may touch.
+    #[must_use]
+    pub fn filters(&self) -> &ItemFilters {
+        &self.filters
+    }
+
+    /// The app lists that decide which applications are quit.
+    #[must_use]
+    pub fn app_lists(&self) -> &AppLists {
+        &self.app_lists
+    }
+
     /// Builds the ordered list of steps this run should execute on `platform`.
     ///
     /// Unknown ids in either flag are an error, and an `--only` id that is not
     /// available on `platform` is an error too. Steps that `--skip` names but
     /// that cannot run on `platform` are accepted, since they are not part of
-    /// the run anyway.
+    /// the run anyway. A step id in the configuration file that is not
+    /// registered is an error as well, so a typo does not silently disable
+    /// nothing.
+    ///
+    /// A step the configuration file disables stays part of the plan, so the
+    /// runner can report it as skipped.
     ///
     /// # Errors
     ///
@@ -378,6 +456,12 @@ impl RunOptions {
 
         self.selection.validate(&known, &available, platform)?;
 
+        for id in self.step_overrides.keys() {
+            if !known.iter().any(|known| known == id) {
+                return Err(PlanError::unknown_configured(id, &known));
+            }
+        }
+
         Ok(ordered
             .into_iter()
             .filter(|step| self.selection.includes(step.id()))
@@ -392,6 +476,7 @@ mod tests {
     use crate::preflight::{PreflightCheck, PreflightConfig};
     use crate::registry::Registry;
     use crate::step::{CheckReport, Detection, Step, StepError, StepId};
+    use std::collections::BTreeMap;
 
     struct TestStep {
         id: StepId,
@@ -641,6 +726,55 @@ mod tests {
             assert_eq!(only_platform, Ok(vec![platform_step]), "{platform}");
             assert_eq!(skip_common, Ok(vec![platform_step]), "{platform}");
         }
+    }
+
+    #[test]
+    fn a_step_that_is_not_configured_is_enabled() {
+        let options = RunOptions::new();
+
+        assert!(options.is_step_enabled("brew"));
+        assert!(options.step_overrides().is_empty());
+    }
+
+    #[test]
+    fn a_configured_step_can_be_disabled_and_enabled_again() {
+        let mut overrides = BTreeMap::new();
+        overrides.insert("brew-casks".to_owned(), false);
+        overrides.insert("docker".to_owned(), true);
+
+        let options = RunOptions::new().with_step_overrides(overrides);
+
+        assert!(!options.is_step_enabled("brew-casks"));
+        assert!(options.is_step_enabled("docker"));
+        assert!(options.is_step_enabled("brew"));
+    }
+
+    #[test]
+    fn a_disabled_step_stays_in_the_plan_so_it_can_be_reported() {
+        let mut overrides = BTreeMap::new();
+        overrides.insert("mac".to_owned(), false);
+        let options = RunOptions::new().with_step_overrides(overrides);
+
+        let planned = plan(&options, &registry(), Platform::Macos);
+
+        assert_eq!(planned, Ok(vec!["common", "mac"]));
+    }
+
+    #[test]
+    fn an_unknown_configured_step_is_rejected_with_the_known_ids() {
+        let mut overrides = BTreeMap::new();
+        overrides.insert("nope".to_owned(), false);
+        let options = RunOptions::new().with_step_overrides(overrides);
+
+        let error = plan(&options, &registry(), Platform::Linux).err();
+
+        assert_eq!(
+            error,
+            Some(PlanError::UnknownConfiguredStep {
+                id: "nope".to_owned(),
+                known: "common, linux, mac, windows".to_owned(),
+            })
+        );
     }
 
     #[test]

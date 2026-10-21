@@ -124,7 +124,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Make the Windows unit tests pass on `windows-latest` (run `gh run view --log-failed` style output is in the CI log): (1) apps.rs `command_transcripts_match_the_zsh_script` joins with `\\`, compare normalized paths; (2) executable.rs `a_windows_candidate_is_found_through_its_extension` returns `tool.CMD` from PATHEXT, compare case-insensitively; (3) lock.rs `a_stale_lock_file_from_a_dead_run_does_not_block` reads a file that another handle has byte-range locked (os error 33), read through the locking handle or open with sharing; (4) network.rs CA bundle tests (os error 123, invalid file name syntax) build a path that is invalid on Windows, fix the name and `file://`-style path handling; (5) process.rs `a_windows_child_joins_its_job_before_it_can_start_a_grandchild` never sees the marker, investigate the suspended-child/job-object ordering. Then remove `continue-on-error` from `.github/workflows/rust.yml` via a `ci-proposals/` note in HUMAN-TASKS.md
 - [x] Replace the unmaintained `rustls-pemfile` (used in network.rs) with `rustls_pki_types::pem::PemObject`, bump `rustls-native-certs` to 0.8, then remove the RUSTSEC-2025-0134 ignore from deny.toml
 - [x] Add a config file (TOML) at the OS-appropriate location (`~/.config/<name>/config.toml`, `%APPDATA%`) with a documented schema and validation errors that point at the offending line
-- [ ] Support per-step enable/disable, include/exclude lists (casks, packages, containers, projects) and `NEVER_QUIT` / `ALWAYS_QUIT` app lists
+- [x] Support per-step enable/disable, include/exclude lists (casks, packages, containers, projects) and `NEVER_QUIT` / `ALWAYS_QUIT` app lists
 - [ ] Run every command whose output is parsed with a neutral locale (`LC_ALL=C`, `LANG=C`; UTF-8 console and `--disable-interactivity` on Windows) so localized output such as Turkish and progress spinners cannot break parsers, covered by tests that run the parsers on non-English fixtures
 - [ ] Detect an Automation (TCC) denial when quitting apps through AppleScript (error -1743) and print an actionable message naming the System Settings pane instead of treating the app as unquittable, covered by tests with injected osascript output
 - [ ] Detect casks whose installer needs an administrator password (pkg installers, `sudo` prompts) and skip them with a clear reason in non-interactive runs instead of hanging, covered by tests
@@ -151,6 +151,8 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Add native Docker Engine on Linux to the runtime abstraction (restart through `systemctl restart docker` with a warning about running containers when `live-restore` is off), covered by tests with injected facts
 - [ ] Update the README and docs to describe the supported container runtimes and replace the Colima-only wording, once the runtime abstraction exists
 - [ ] Add a read-only Homebrew cask metadata probe to `--check` (or a dedicated command) so the real-tools job verifies the recorded `brew info --cask --json=v2` transcript and fails on cask JSON parser drift, covered by tests
+- [ ] Apply the package include/exclude list to the mise step, so an excluded mise tool is not upgraded (mise upgrades every plugin in one command, so the list needs a per-tool upgrade path), covered by tests
+- [ ] Skip the steps whose prerequisite is disabled in the configuration file, so disabling `brew` also skips the Homebrew steps that need it, covered by tests
 
 ## Milestone 5: Linux
 

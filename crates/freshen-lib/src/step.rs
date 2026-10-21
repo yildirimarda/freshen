@@ -147,6 +147,23 @@ impl CheckReport {
     pub fn pending(&self) -> usize {
         self.items.len()
     }
+
+    /// Keeps only the items whose name passes `predicate`.
+    ///
+    /// Steps that apply an include or exclude list use this to report only
+    /// the items they would really upgrade.
+    #[must_use]
+    pub fn filtered<F>(self, predicate: F) -> Self
+    where
+        F: Fn(&str) -> bool,
+    {
+        Self::from_items(
+            self.items
+                .into_iter()
+                .filter(|item| predicate(item.name()))
+                .collect::<Vec<_>>(),
+        )
+    }
 }
 
 impl FromIterator<OutdatedItem> for CheckReport {
@@ -297,6 +314,17 @@ pub trait Step: Sync {
 
     /// Reports what is outdated without changing anything.
     fn check(&self) -> Result<CheckReport, StepError>;
+
+    /// Reports what is outdated without changing anything, honouring the
+    /// options of the current run.
+    ///
+    /// Steps that apply an include or exclude list use this to report only
+    /// the items they would really upgrade. The default ignores the options
+    /// and calls [`Step::check`], so a step only overrides it when it needs
+    /// them.
+    fn check_with_options(&self, _options: &RunOptions) -> Result<CheckReport, StepError> {
+        self.check()
+    }
 
     /// Performs the upgrade.
     fn run(&self) -> Result<(), StepError>;
