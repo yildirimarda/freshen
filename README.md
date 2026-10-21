@@ -70,6 +70,20 @@ freshen --package-manager-wait 0                      # abort instead of waiting
 
 `--yes` and `--force-kill` replace the old `ASSUME_YES`/`FORCE_KILL` environment variables.
 
+## Exit codes
+
+The exit codes are part of the command-line contract and are stable across releases:
+
+| Code | Meaning |
+|---|---|
+| `0` | Success: every step that ran completed, or `--check` found no updates |
+| `1` | A step failed or timed out; also used for startup errors (invalid arguments, a held lock, an unsupported platform) |
+| `2` | `--check` found updates pending |
+| `3` | A preflight check or the other-package-manager check failed, so no step ran |
+| `130` | The run was interrupted by SIGINT or SIGTERM |
+
+`--help` prints the same table. Scripts can rely on these values, for example `freshen --check || [ "$?" -eq 2 ]` to detect pending updates.
+
 ## Migrating from update-all.sh
 
 The zsh implementation and its deprecated POSIX `sh` compatibility wrapper have been removed now that the Rust port reached parity, and `freshen` is the implementation. Existing aliases and scripts should call `freshen` directly; install it with `cargo install --path crates/freshen` or use a release binary.

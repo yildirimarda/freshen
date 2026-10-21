@@ -14,7 +14,12 @@ use freshen_lib::{
 /// Keep a developer machine up to date: package managers, language toolchains
 /// and containers, on macOS, Linux and Windows.
 #[derive(Debug, Parser)]
-#[command(name = "freshen", version, about)]
+#[command(
+    name = "freshen",
+    version,
+    about,
+    after_help = "Exit codes:\n  0    success\n  1    a step failed or timed out (also used for startup errors)\n  2    updates are pending (--check)\n  3    a preflight or package-manager check failed\n  130  the run was interrupted"
+)]
 pub struct Cli {
     /// Show what would run without changing anything.
     #[arg(long)]

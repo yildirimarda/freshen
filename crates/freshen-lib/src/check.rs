@@ -233,15 +233,16 @@ impl CheckSummary {
         crate::report::check_markdown(self)
     }
 
-    /// Exit code for check mode: `0` up to date, `1` failure, `2` updates pending.
+    /// Exit code for check mode: `0` up to date, `1` failure, `2` updates
+    /// pending. These values are stable; see [`crate::exit`].
     #[must_use]
     pub fn exit_code(&self) -> ExitCode {
         if self.has_failures() {
-            ExitCode::FAILURE
+            crate::exit::code(crate::exit::STEP_FAILURE)
         } else if self.has_updates() {
-            ExitCode::from(2)
+            crate::exit::code(crate::exit::UPDATES_PENDING)
         } else {
-            ExitCode::SUCCESS
+            crate::exit::code(crate::exit::OK)
         }
     }
 }

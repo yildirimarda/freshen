@@ -435,15 +435,16 @@ impl RunSummary {
     }
 
     /// Process exit code: `0` when every step succeeded, `1` when a step
-    /// failed or timed out and `130` when the run was interrupted.
+    /// failed or timed out and `130` when the run was interrupted. These
+    /// values are stable; see [`crate::exit`].
     #[must_use]
     pub fn exit_code(&self) -> ExitCode {
         if self.interrupted {
-            ExitCode::from(130)
+            crate::exit::code(crate::exit::INTERRUPTED)
         } else if self.has_failures() {
-            ExitCode::FAILURE
+            crate::exit::code(crate::exit::STEP_FAILURE)
         } else {
-            ExitCode::SUCCESS
+            crate::exit::code(crate::exit::OK)
         }
     }
 }

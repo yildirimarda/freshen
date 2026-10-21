@@ -5,9 +5,9 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use freshen_lib::{
-    install_interrupt_handler, list_steps, wait_for_package_managers, HostPackageManagerProbe,
-    HostPreflightProbe, PackageManagerConfig, PackageManagerProbe, Platform, PreflightReport,
-    Registry, RunLock, Runner, WaitOutcome,
+    exit, install_interrupt_handler, list_steps, wait_for_package_managers,
+    HostPackageManagerProbe, HostPreflightProbe, PackageManagerConfig, PackageManagerProbe,
+    Platform, PreflightReport, Registry, RunLock, Runner, WaitOutcome,
 };
 
 mod cli;
@@ -20,7 +20,7 @@ use cli::Cli;
 fn main() -> ExitCode {
     if let Err(error) = install_interrupt_handler() {
         eprintln!("freshen: {error}");
-        return ExitCode::FAILURE;
+        return exit::code(exit::STEP_FAILURE);
     }
 
     let cli = Cli::parse();
@@ -29,20 +29,20 @@ fn main() -> ExitCode {
 
     let Some(platform) = Platform::current() else {
         eprintln!("freshen: unsupported operating system");
-        return ExitCode::FAILURE;
+        return exit::code(exit::STEP_FAILURE);
     };
 
     let steps = match options.plan(&registry, platform) {
         Ok(steps) => steps,
         Err(error) => {
             eprintln!("freshen: {error}");
-            return ExitCode::FAILURE;
+            return exit::code(exit::STEP_FAILURE);
         }
     };
 
     if cli.list_steps {
         print!("{}", list_steps(&registry, options.selection(), platform));
-        return ExitCode::SUCCESS;
+        return exit::code(exit::OK);
     }
 
     if cli.check {
@@ -64,7 +64,7 @@ fn main() -> ExitCode {
             Ok(lock) => Some(lock),
             Err(error) => {
                 eprintln!("freshen: {error}");
-                return ExitCode::FAILURE;
+                return exit::code(exit::STEP_FAILURE);
             }
         }
     };
@@ -73,7 +73,7 @@ fn main() -> ExitCode {
         let report = run_preflight(&options);
         if !report.is_ok() {
             eprint!("{report}");
-            return ExitCode::from(3);
+            return exit::code(exit::PREFLIGHT_FAILED);
         }
 
         if options.package_manager().is_enabled() {
@@ -145,7 +145,7 @@ fn wait_for_package_managers_or_abort(config: &PackageManagerConfig) -> Option<E
         );
     }
 
-    Some(ExitCode::from(3))
+    Some(exit::code(exit::PREFLIGHT_FAILED))
 }
 
 fn preflight_skipped() -> bool {
