@@ -111,6 +111,8 @@ impl StaleToolProcess {
 /// session of that tool, and how to recognise its server process.
 #[derive(Debug, Clone, Copy)]
 struct SessionGuard {
+    /// Display name used by the README and the supported-tool list.
+    name: &'static str,
     /// Outdated package names that make this warning relevant.
     packages: &'static [&'static str],
     /// Environment variables that are set inside a session of this tool.
@@ -142,6 +144,7 @@ impl SessionGuard {
 /// The tools checked before an upgrade for sessions it would break.
 const SESSION_GUARDS: &[SessionGuard] = &[
     SessionGuard {
+        name: "zellij",
         packages: &["zellij"],
         environment: &["ZELLIJ"],
         is_server: is_zellij_process,
@@ -149,6 +152,7 @@ const SESSION_GUARDS: &[SessionGuard] = &[
         server_warning: ZELLIJ_SERVER_WARNING,
     },
     SessionGuard {
+        name: "tmux",
         packages: &["tmux"],
         environment: &["TMUX"],
         is_server: is_tmux_process,
@@ -156,6 +160,7 @@ const SESSION_GUARDS: &[SessionGuard] = &[
         server_warning: TMUX_WARNING,
     },
     SessionGuard {
+        name: "OpenSSH",
         packages: &["openssh", "openssh-server", "dropbear"],
         environment: &["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"],
         is_server: is_ssh_process,
@@ -163,6 +168,7 @@ const SESSION_GUARDS: &[SessionGuard] = &[
         server_warning: SSH_WARNING,
     },
     SessionGuard {
+        name: "GNU screen",
         packages: &["screen", "gnu-screen"],
         environment: &["STY"],
         is_server: is_screen_process,
@@ -170,6 +176,7 @@ const SESSION_GUARDS: &[SessionGuard] = &[
         server_warning: SCREEN_WARNING,
     },
     SessionGuard {
+        name: "byobu",
         packages: &["byobu"],
         environment: &["BYOBU_CONFIG_DIR", "BYOBU_BACKEND", "BYOBU_PREFIX"],
         is_server: is_byobu_process,
@@ -177,6 +184,7 @@ const SESSION_GUARDS: &[SessionGuard] = &[
         server_warning: BYOBU_WARNING,
     },
     SessionGuard {
+        name: "dtach",
         packages: &["dtach"],
         environment: &[],
         is_server: is_dtach_process,
@@ -184,6 +192,7 @@ const SESSION_GUARDS: &[SessionGuard] = &[
         server_warning: DTACH_WARNING,
     },
     SessionGuard {
+        name: "abduco",
         packages: &["abduco"],
         environment: &["ABDUCO_SESSION", "ABDUCO_SOCKET"],
         is_server: is_abduco_process,
@@ -191,6 +200,7 @@ const SESSION_GUARDS: &[SessionGuard] = &[
         server_warning: ABDUCO_WARNING,
     },
     SessionGuard {
+        name: "mosh",
         packages: &["mosh"],
         environment: &[],
         is_server: is_mosh_process,
@@ -198,6 +208,13 @@ const SESSION_GUARDS: &[SessionGuard] = &[
         server_warning: MOSH_WARNING,
     },
 ];
+
+/// Session-aware tools freshen warns about before an upgrade, in
+/// documentation order.
+#[must_use]
+pub fn supported_session_managers() -> Vec<&'static str> {
+    SESSION_GUARDS.iter().map(|guard| guard.name).collect()
+}
 
 /// Warnings that apply to an outdated-formula listing, a per-guard
 /// in-session flag and a snapshot of the process table.

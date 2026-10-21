@@ -298,80 +298,373 @@ impl fmt::Display for TerminalApp {
     }
 }
 
-fn terminal_name_for_bundle_id(bundle_id: &str) -> Option<&'static str> {
-    match bundle_id {
-        "com.apple.Terminal" => Some("Apple Terminal"),
-        "com.googlecode.iterm2" => Some("iTerm2"),
-        "com.raphaelamorim.rio" => Some("Rio"),
-        "com.termius-dmg.mac" => Some("Termius"),
-        "dev.zed.Zed" => Some("Zed"),
-        "dev.zed.Zed-Preview" => Some("Zed Preview"),
-        "com.todesktop.230313mzl4w4u92" => Some("Cursor"),
-        "com.exafunction.windsurf" => Some("Windsurf"),
-        "com.jetbrains.intellij" => Some("IntelliJ IDEA"),
-        "com.jetbrains.intellij.ce" => Some("IntelliJ IDEA CE"),
-        "com.jetbrains.pycharm" => Some("PyCharm"),
-        "com.jetbrains.pycharm.ce" => Some("PyCharm CE"),
-        "com.jetbrains.WebStorm" => Some("WebStorm"),
-        "com.jetbrains.CLion" => Some("CLion"),
-        "com.jetbrains.goland" => Some("GoLand"),
-        "com.jetbrains.rubymine" => Some("RubyMine"),
-        "com.jetbrains.PhpStorm" => Some("PhpStorm"),
-        "com.jetbrains.datagrip" => Some("DataGrip"),
-        "com.jetbrains.rider" => Some("Rider"),
-        "com.jetbrains.AppCode" => Some("AppCode"),
-        "com.jetbrains.rustrover" => Some("RustRover"),
-        "com.jetbrains.fleet" => Some("Fleet"),
-        "com.google.android.studio" => Some("Android Studio"),
-        "com.mitchellh.ghostty" => Some("Ghostty"),
-        "com.microsoft.VSCode" => Some("Visual Studio Code"),
-        "com.github.wez.wezterm" => Some("WezTerm"),
-        "net.kovidgoyal.kitty" => Some("kitty"),
-        "org.alacritty" => Some("Alacritty"),
-        "co.zeit.hyper" => Some("Hyper"),
-        "dev.warp.Warp-Stable" => Some("Warp"),
-        _ => None,
-    }
+/// A terminal emulator freshen recognises.
+///
+/// The same table drives every detection source and the README list, so
+/// adding a terminal is one row.
+struct TerminalKind {
+    /// Name shown to the user and in the README.
+    name: &'static str,
+    /// macOS bundle identifiers that identify this terminal.
+    bundle_ids: &'static [&'static str],
+    /// `TERM_PROGRAM` values that identify this terminal.
+    term_programs: &'static [&'static str],
+    /// Environment variables set inside this terminal.
+    markers: &'static [&'static str],
+    /// Executable names from the process table.
+    process_names: &'static [&'static str],
+}
+
+/// Terminal emulators freshen can recognise, in documentation order.
+const TERMINALS: &[TerminalKind] = &[
+    TerminalKind {
+        name: "Apple Terminal",
+        bundle_ids: &["com.apple.Terminal"],
+        term_programs: &["Apple_Terminal"],
+        markers: &[],
+        process_names: &[],
+    },
+    TerminalKind {
+        name: "iTerm2",
+        bundle_ids: &["com.googlecode.iterm2"],
+        term_programs: &["iTerm.app"],
+        markers: &[],
+        process_names: &[],
+    },
+    TerminalKind {
+        name: "Ghostty",
+        bundle_ids: &["com.mitchellh.ghostty"],
+        term_programs: &["ghostty"],
+        markers: &[],
+        process_names: &["ghostty"],
+    },
+    TerminalKind {
+        name: "kitty",
+        bundle_ids: &["net.kovidgoyal.kitty"],
+        term_programs: &["kitty"],
+        markers: &["KITTY_WINDOW_ID"],
+        process_names: &["kitty"],
+    },
+    TerminalKind {
+        name: "WezTerm",
+        bundle_ids: &["com.github.wez.wezterm"],
+        term_programs: &["WezTerm"],
+        markers: &["WEZTERM_PANE"],
+        process_names: &["wezterm", "wezterm-gui"],
+    },
+    TerminalKind {
+        name: "Alacritty",
+        bundle_ids: &["org.alacritty"],
+        term_programs: &["Alacritty"],
+        markers: &["ALACRITTY_WINDOW_ID"],
+        process_names: &["alacritty"],
+    },
+    TerminalKind {
+        name: "Hyper",
+        bundle_ids: &["co.zeit.hyper"],
+        term_programs: &["Hyper"],
+        markers: &[],
+        process_names: &["hyper"],
+    },
+    TerminalKind {
+        name: "Warp",
+        bundle_ids: &["dev.warp.Warp-Stable"],
+        term_programs: &["WarpTerminal"],
+        markers: &[],
+        process_names: &["warp", "warp-terminal"],
+    },
+    TerminalKind {
+        name: "Tabby",
+        bundle_ids: &[],
+        term_programs: &["Tabby"],
+        markers: &[],
+        process_names: &["tabby"],
+    },
+    TerminalKind {
+        name: "Rio",
+        bundle_ids: &["com.raphaelamorim.rio"],
+        term_programs: &["rio"],
+        markers: &[],
+        process_names: &["rio"],
+    },
+    TerminalKind {
+        name: "Termius",
+        bundle_ids: &["com.termius-dmg.mac"],
+        term_programs: &["Termius"],
+        markers: &[],
+        process_names: &["termius"],
+    },
+    TerminalKind {
+        name: "Visual Studio Code",
+        bundle_ids: &["com.microsoft.VSCode"],
+        term_programs: &["vscode"],
+        markers: &["VSCODE_IPC_HOOK_CLI"],
+        process_names: &["code", "code-insiders"],
+    },
+    TerminalKind {
+        name: "Zed",
+        bundle_ids: &["dev.zed.Zed"],
+        term_programs: &["zed"],
+        markers: &["ZED_TERM"],
+        process_names: &["zed"],
+    },
+    TerminalKind {
+        name: "Zed Preview",
+        bundle_ids: &["dev.zed.Zed-Preview"],
+        term_programs: &[],
+        markers: &[],
+        process_names: &[],
+    },
+    TerminalKind {
+        name: "Cursor",
+        bundle_ids: &["com.todesktop.230313mzl4w4u92"],
+        term_programs: &["cursor"],
+        markers: &["CURSOR_TRACE_ID"],
+        process_names: &["cursor"],
+    },
+    TerminalKind {
+        name: "Windsurf",
+        bundle_ids: &["com.exafunction.windsurf"],
+        term_programs: &["windsurf"],
+        markers: &["WINDSURF_SESSION"],
+        process_names: &["windsurf"],
+    },
+    TerminalKind {
+        name: "JetBrains",
+        bundle_ids: &[],
+        term_programs: &["JetBrains-JediTerm"],
+        markers: &["TERMINAL_EMULATOR"],
+        process_names: &[],
+    },
+    TerminalKind {
+        name: "IntelliJ IDEA",
+        bundle_ids: &["com.jetbrains.intellij"],
+        term_programs: &[],
+        markers: &[],
+        process_names: &["idea"],
+    },
+    TerminalKind {
+        name: "IntelliJ IDEA CE",
+        bundle_ids: &["com.jetbrains.intellij.ce"],
+        term_programs: &[],
+        markers: &[],
+        process_names: &[],
+    },
+    TerminalKind {
+        name: "PyCharm",
+        bundle_ids: &["com.jetbrains.pycharm"],
+        term_programs: &[],
+        markers: &[],
+        process_names: &["pycharm"],
+    },
+    TerminalKind {
+        name: "PyCharm CE",
+        bundle_ids: &["com.jetbrains.pycharm.ce"],
+        term_programs: &[],
+        markers: &[],
+        process_names: &[],
+    },
+    TerminalKind {
+        name: "WebStorm",
+        bundle_ids: &["com.jetbrains.WebStorm"],
+        term_programs: &[],
+        markers: &[],
+        process_names: &["webstorm"],
+    },
+    TerminalKind {
+        name: "CLion",
+        bundle_ids: &["com.jetbrains.CLion"],
+        term_programs: &[],
+        markers: &[],
+        process_names: &["clion"],
+    },
+    TerminalKind {
+        name: "GoLand",
+        bundle_ids: &["com.jetbrains.goland"],
+        term_programs: &[],
+        markers: &[],
+        process_names: &["goland"],
+    },
+    TerminalKind {
+        name: "RubyMine",
+        bundle_ids: &["com.jetbrains.rubymine"],
+        term_programs: &[],
+        markers: &[],
+        process_names: &["rubymine"],
+    },
+    TerminalKind {
+        name: "PhpStorm",
+        bundle_ids: &["com.jetbrains.PhpStorm"],
+        term_programs: &[],
+        markers: &[],
+        process_names: &["phpstorm"],
+    },
+    TerminalKind {
+        name: "DataGrip",
+        bundle_ids: &["com.jetbrains.datagrip"],
+        term_programs: &[],
+        markers: &[],
+        process_names: &["datagrip"],
+    },
+    TerminalKind {
+        name: "Rider",
+        bundle_ids: &["com.jetbrains.rider"],
+        term_programs: &[],
+        markers: &[],
+        process_names: &["rider"],
+    },
+    TerminalKind {
+        name: "AppCode",
+        bundle_ids: &["com.jetbrains.AppCode"],
+        term_programs: &[],
+        markers: &[],
+        process_names: &[],
+    },
+    TerminalKind {
+        name: "RustRover",
+        bundle_ids: &["com.jetbrains.rustrover"],
+        term_programs: &[],
+        markers: &[],
+        process_names: &["rustrover"],
+    },
+    TerminalKind {
+        name: "Fleet",
+        bundle_ids: &["com.jetbrains.fleet"],
+        term_programs: &[],
+        markers: &[],
+        process_names: &["fleet"],
+    },
+    TerminalKind {
+        name: "Android Studio",
+        bundle_ids: &["com.google.android.studio"],
+        term_programs: &[],
+        markers: &[],
+        process_names: &["studio.sh", "studio"],
+    },
+    TerminalKind {
+        name: "GNOME Terminal",
+        bundle_ids: &["org.gnome.Terminal"],
+        term_programs: &[],
+        markers: &["GNOME_TERMINAL_SCREEN"],
+        process_names: &["gnome-terminal", "gnome-terminal-server"],
+    },
+    TerminalKind {
+        name: "Konsole",
+        bundle_ids: &["org.kde.konsole"],
+        term_programs: &[],
+        markers: &["KONSOLE_VERSION"],
+        process_names: &["konsole"],
+    },
+    TerminalKind {
+        name: "Windows Terminal",
+        bundle_ids: &[],
+        term_programs: &[],
+        markers: &["WT_SESSION"],
+        process_names: &["windowsterminal", "wt"],
+    },
+    TerminalKind {
+        name: "Windows Console",
+        bundle_ids: &[],
+        term_programs: &[],
+        markers: &[],
+        process_names: &["conhost", "openconsole"],
+    },
+    TerminalKind {
+        name: "xterm",
+        bundle_ids: &[],
+        term_programs: &[],
+        markers: &[],
+        process_names: &["xterm"],
+    },
+    TerminalKind {
+        name: "Xfce Terminal",
+        bundle_ids: &[],
+        term_programs: &[],
+        markers: &[],
+        process_names: &["xfce4-terminal"],
+    },
+    TerminalKind {
+        name: "LXTerminal",
+        bundle_ids: &[],
+        term_programs: &[],
+        markers: &[],
+        process_names: &["lxterminal"],
+    },
+    TerminalKind {
+        name: "MATE Terminal",
+        bundle_ids: &[],
+        term_programs: &[],
+        markers: &[],
+        process_names: &["mate-terminal"],
+    },
+    TerminalKind {
+        name: "Terminator",
+        bundle_ids: &[],
+        term_programs: &[],
+        markers: &[],
+        process_names: &["terminator"],
+    },
+    TerminalKind {
+        name: "Tilix",
+        bundle_ids: &[],
+        term_programs: &[],
+        markers: &[],
+        process_names: &["tilix"],
+    },
+    TerminalKind {
+        name: "urxvt",
+        bundle_ids: &[],
+        term_programs: &[],
+        markers: &[],
+        process_names: &["urxvt"],
+    },
+    TerminalKind {
+        name: "foot",
+        bundle_ids: &[],
+        term_programs: &[],
+        markers: &[],
+        process_names: &["foot"],
+    },
+    TerminalKind {
+        name: "GNOME Console",
+        bundle_ids: &[],
+        term_programs: &[],
+        markers: &[],
+        process_names: &["kgx"],
+    },
+    TerminalKind {
+        name: "st",
+        bundle_ids: &[],
+        term_programs: &[],
+        markers: &[],
+        process_names: &["st"],
+    },
+];
+
+/// Terminal emulators freshen can recognise, in documentation order.
+#[must_use]
+pub fn supported_terminals() -> Vec<&'static str> {
+    TERMINALS.iter().map(|terminal| terminal.name).collect()
+}
+
+fn terminal_for_bundle_id(bundle_id: &str) -> Option<&'static TerminalKind> {
+    TERMINALS
+        .iter()
+        .find(|terminal| terminal.bundle_ids.contains(&bundle_id))
+}
+
+fn terminal_for_program(program: &str) -> Option<&'static TerminalKind> {
+    TERMINALS
+        .iter()
+        .find(|terminal| terminal.term_programs.contains(&program))
 }
 
 fn terminal_name_for_program(program: &str) -> &str {
-    match program {
-        "Apple_Terminal" => "Apple Terminal",
-        "iTerm.app" => "iTerm2",
-        "rio" => "Rio",
-        "Termius" => "Termius",
-        "zed" => "Zed",
-        "cursor" => "Cursor",
-        "windsurf" => "Windsurf",
-        "JetBrains-JediTerm" => "JetBrains",
-        "vscode" => "Visual Studio Code",
-        "ghostty" => "Ghostty",
-        "WezTerm" => "WezTerm",
-        "kitty" => "kitty",
-        "Hyper" => "Hyper",
-        "WarpTerminal" => "Warp",
-        "Tabby" => "Tabby",
-        other => other,
-    }
+    terminal_for_program(program).map_or(program, |terminal| terminal.name)
 }
 
 fn bundle_id_for_program(program: &str) -> Option<&'static str> {
-    match program {
-        "Apple_Terminal" => Some("com.apple.Terminal"),
-        "iTerm.app" => Some("com.googlecode.iterm2"),
-        "rio" => Some("com.raphaelamorim.rio"),
-        "Termius" => Some("com.termius-dmg.mac"),
-        "zed" => Some("dev.zed.Zed"),
-        "cursor" => Some("com.todesktop.230313mzl4w4u92"),
-        "windsurf" => Some("com.exafunction.windsurf"),
-        "vscode" => Some("com.microsoft.VSCode"),
-        "ghostty" => Some("com.mitchellh.ghostty"),
-        "WezTerm" => Some("com.github.wez.wezterm"),
-        "kitty" => Some("net.kovidgoyal.kitty"),
-        "Hyper" => Some("co.zeit.hyper"),
-        "WarpTerminal" => Some("dev.warp.Warp-Stable"),
-        _ => None,
-    }
+    terminal_for_program(program).and_then(|terminal| terminal.bundle_ids.first().copied())
 }
 
 fn detect_terminal_app(get: impl Fn(&str) -> Option<String>) -> Option<TerminalApp> {
@@ -379,8 +672,8 @@ fn detect_terminal_app(get: impl Fn(&str) -> Option<String>) -> Option<TerminalA
     let term_program = get("TERM_PROGRAM").filter(|value| !value.is_empty());
 
     if let Some(bundle_id) = bundle_id {
-        let name = terminal_name_for_bundle_id(&bundle_id)
-            .map(str::to_string)
+        let name = terminal_for_bundle_id(&bundle_id)
+            .map(|terminal| terminal.name.to_string())
             .or_else(|| {
                 term_program
                     .as_deref()
@@ -397,39 +690,16 @@ fn detect_terminal_app(get: impl Fn(&str) -> Option<String>) -> Option<TerminalA
         ));
     }
 
-    let markers = [
-        ("WT_SESSION", "Windows Terminal", None),
-        ("KITTY_WINDOW_ID", "kitty", Some("net.kovidgoyal.kitty")),
-        ("WEZTERM_PANE", "WezTerm", Some("com.github.wez.wezterm")),
-        ("ALACRITTY_WINDOW_ID", "Alacritty", Some("org.alacritty")),
-        (
-            "GNOME_TERMINAL_SCREEN",
-            "GNOME Terminal",
-            Some("org.gnome.Terminal"),
-        ),
-        ("KONSOLE_VERSION", "Konsole", Some("org.kde.konsole")),
-        ("ZED_TERM", "Zed", Some("dev.zed.Zed")),
-        (
-            "CURSOR_TRACE_ID",
-            "Cursor",
-            Some("com.todesktop.230313mzl4w4u92"),
-        ),
-        (
-            "WINDSURF_SESSION",
-            "Windsurf",
-            Some("com.exafunction.windsurf"),
-        ),
-        (
-            "VSCODE_IPC_HOOK_CLI",
-            "Visual Studio Code",
-            Some("com.microsoft.VSCode"),
-        ),
-        ("TERMINAL_EMULATOR", "JetBrains", None),
-    ];
-
-    for (variable, name, bundle_id) in markers {
-        if get(variable).is_some_and(|value| !value.is_empty()) {
-            return Some(TerminalApp::new(name, bundle_id.map(str::to_string)));
+    for terminal in TERMINALS {
+        if terminal
+            .markers
+            .iter()
+            .any(|variable| get(variable).is_some_and(|value| !value.is_empty()))
+        {
+            return Some(TerminalApp::new(
+                terminal.name,
+                terminal.bundle_ids.first().map(|id| (*id).to_string()),
+            ));
         }
     }
 
@@ -451,54 +721,13 @@ fn terminal_app_for_process(name: &str) -> Option<TerminalApp> {
         .unwrap_or(file_name);
     let key = stem.to_ascii_lowercase();
 
-    let (display_name, bundle_id) = match key.as_str() {
-        "gnome-terminal" | "gnome-terminal-server" => {
-            ("GNOME Terminal", Some("org.gnome.Terminal"))
-        }
-        "konsole" => ("Konsole", Some("org.kde.konsole")),
-        "kitty" => ("kitty", Some("net.kovidgoyal.kitty")),
-        "wezterm" | "wezterm-gui" => ("WezTerm", Some("com.github.wez.wezterm")),
-        "alacritty" => ("Alacritty", Some("org.alacritty")),
-        "ghostty" => ("Ghostty", Some("com.mitchellh.ghostty")),
-        "hyper" => ("Hyper", Some("co.zeit.hyper")),
-        "code" | "code-insiders" => ("Visual Studio Code", Some("com.microsoft.VSCode")),
-        "cursor" => ("Cursor", Some("com.todesktop.230313mzl4w4u92")),
-        "windsurf" => ("Windsurf", Some("com.exafunction.windsurf")),
-        "zed" => ("Zed", Some("dev.zed.Zed")),
-        "rio" => ("Rio", Some("com.raphaelamorim.rio")),
-        "termius" => ("Termius", Some("com.termius-dmg.mac")),
-        "idea" => ("IntelliJ IDEA", Some("com.jetbrains.intellij")),
-        "pycharm" => ("PyCharm", Some("com.jetbrains.pycharm")),
-        "webstorm" => ("WebStorm", Some("com.jetbrains.WebStorm")),
-        "clion" => ("CLion", Some("com.jetbrains.CLion")),
-        "goland" => ("GoLand", Some("com.jetbrains.goland")),
-        "rubymine" => ("RubyMine", Some("com.jetbrains.rubymine")),
-        "phpstorm" => ("PhpStorm", Some("com.jetbrains.PhpStorm")),
-        "datagrip" => ("DataGrip", Some("com.jetbrains.datagrip")),
-        "rider" => ("Rider", Some("com.jetbrains.rider")),
-        "rustrover" => ("RustRover", Some("com.jetbrains.rustrover")),
-        "fleet" => ("Fleet", Some("com.jetbrains.fleet")),
-        "studio.sh" | "studio" => ("Android Studio", Some("com.google.android.studio")),
-        "tabby" => ("Tabby", None),
-        "warp" | "warp-terminal" => ("Warp", Some("dev.warp.Warp-Stable")),
-        "windowsterminal" | "wt" => ("Windows Terminal", None),
-        "conhost" | "openconsole" => ("Windows Console", None),
-        "xterm" => ("xterm", None),
-        "xfce4-terminal" => ("Xfce Terminal", None),
-        "lxterminal" => ("LXTerminal", None),
-        "mate-terminal" => ("MATE Terminal", None),
-        "terminator" => ("Terminator", None),
-        "tilix" => ("Tilix", None),
-        "urxvt" => ("urxvt", None),
-        "foot" => ("foot", None),
-        "kgx" => ("GNOME Console", None),
-        "st" => ("st", None),
-        _ => return None,
-    };
+    let terminal = TERMINALS
+        .iter()
+        .find(|terminal| terminal.process_names.contains(&key.as_str()))?;
 
     Some(TerminalApp::new(
-        display_name,
-        bundle_id.map(str::to_string),
+        terminal.name,
+        terminal.bundle_ids.first().map(|id| (*id).to_string()),
     ))
 }
 
