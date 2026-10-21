@@ -101,9 +101,14 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Assign a Windows child to its job object before it starts running (spawn suspended, then resume after assignment) so a grandchild spawned immediately cannot escape the process tree on timeout, covered by a Windows test
 - [x] Make the package-manager wait loop check for SIGINT instead of polling until the wait expires, so an interrupt during the pre-run wait is honored promptly, covered by a test
 - [ ] Send human progress and cleanup log lines to stderr when `--json` or `--markdown` is selected, so the structured report is the only thing on stdout and can be parsed directly, covered by tests
+- [ ] Honour `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` and custom CA bundles in the network preflight check and document how every step inherits them, covered by tests with injected environment
 
 ## Milestone 4: macOS Depth
 
+- [ ] CI matrix: macOS, Ubuntu and Windows runners for lint, unit tests and the stub-based integration tests
+- [ ] Run every command whose output is parsed with a neutral locale (`LC_ALL=C`, `LANG=C`; UTF-8 console and `--disable-interactivity` on Windows) so localized output such as Turkish and progress spinners cannot break parsers, covered by tests that run the parsers on non-English fixtures
+- [ ] Detect an Automation (TCC) denial when quitting apps through AppleScript (error -1743) and print an actionable message naming the System Settings pane instead of treating the app as unquittable, covered by tests with injected osascript output
+- [ ] Detect casks whose installer needs an administrator password (pkg installers, `sudo` prompts) and skip them with a clear reason in non-interactive runs instead of hanging, covered by tests
 - [ ] Handle `version :latest` casks and `auto_updates true` casks correctly: decide per cask whether `--greedy` is needed, and show the reason in the check output
 - [ ] Respect pinned formulae (`brew pin`) and report them as "held back" instead of failing
 - [ ] Restart Homebrew services (`brew services`) whose formulae were upgraded, and report which ones were restarted
@@ -140,6 +145,8 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Detect services that need a restart after upgrades (`systemctl`, `needrestart`) and offer to restart them
 - [ ] Quit/restart desktop applications on Linux via `.desktop` entries and `gtk-launch`/`kill -TERM`, with the same graceful-then-force policy
 - [ ] Add a Linux container integration test matrix (Ubuntu, Fedora, Arch) in CI
+- [ ] Make the Homebrew steps work with Homebrew on Linux (`/home/linuxbrew/.linuxbrew`, no casks), covered by tests with injected paths
+- [ ] Add image-based distributions: `rpm-ostree upgrade` (Fedora Silverblue/Kinoite) and `bootc upgrade` as staged upgrades that announce the pending reboot, covered by recorded transcripts
 
 ## Milestone 6: Windows
 
@@ -161,6 +168,10 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Record `choco list --local-only -r` in the pre-upgrade snapshot and print rollback hints (`choco upgrade <name> --version <old>`) for upgraded packages, covered by tests
 - [ ] Report packages that are installed by more than one Windows package manager (winget, Chocolatey, Scoop) so the same application is not upgraded twice unnoticed, as a report-only check covered by tests with injected package lists
 - [ ] Add a stub `choco` executable to the stub harness (canned `outdated` output, exit codes 0, 1641, 3010 and 1) and cover the Chocolatey step end to end on every platform
+- [ ] Warn before `wsl --update` because it shuts down every running WSL distribution and anything running inside it (including containers): list the running distributions and require confirmation or `--yes`, covered by tests with injected `wsl --list --running` output
+- [ ] Detect running processes whose executables live under the install location of an outdated winget, Chocolatey or Scoop package and apply the quit/force-kill policy before upgrading it, covered by tests with injected process and package facts
+- [ ] Run PowerShell-based steps with a process-scoped execution policy (`-NoProfile -ExecutionPolicy Bypass` only for freshen's own invocation) and never change the machine policy, covered by tests of the generated command line
+- [ ] Add Docker Desktop on Windows (WSL2 backend) and Podman Desktop to the container runtime abstraction, including the interaction with `wsl --update`, covered by stub-based tests
 
 ## Milestone 7: Language and Developer Tooling
 
@@ -232,7 +243,6 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 
 ## Milestone 12: Quality
 
-- [ ] CI matrix: macOS, Ubuntu and Windows runners for lint, unit tests and the stub-based integration tests
 - [ ] Recorded-transcript tests for parsers of third-party output (brew JSON, docker compose ls, winget, apt) with fixtures for several tool versions
 - [ ] Property tests (`proptest`) and `cargo fuzz` targets for the parsers so unexpected output never crashes the run
 - [ ] Enforce a minimum test coverage threshold in CI with `cargo llvm-cov`
