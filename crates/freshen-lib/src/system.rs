@@ -302,6 +302,27 @@ fn terminal_name_for_bundle_id(bundle_id: &str) -> Option<&'static str> {
     match bundle_id {
         "com.apple.Terminal" => Some("Apple Terminal"),
         "com.googlecode.iterm2" => Some("iTerm2"),
+        "com.raphaelamorim.rio" => Some("Rio"),
+        "com.termius-dmg.mac" => Some("Termius"),
+        "dev.zed.Zed" => Some("Zed"),
+        "dev.zed.Zed-Preview" => Some("Zed Preview"),
+        "com.todesktop.230313mzl4w4u92" => Some("Cursor"),
+        "com.exafunction.windsurf" => Some("Windsurf"),
+        "com.jetbrains.intellij" => Some("IntelliJ IDEA"),
+        "com.jetbrains.intellij.ce" => Some("IntelliJ IDEA CE"),
+        "com.jetbrains.pycharm" => Some("PyCharm"),
+        "com.jetbrains.pycharm.ce" => Some("PyCharm CE"),
+        "com.jetbrains.WebStorm" => Some("WebStorm"),
+        "com.jetbrains.CLion" => Some("CLion"),
+        "com.jetbrains.goland" => Some("GoLand"),
+        "com.jetbrains.rubymine" => Some("RubyMine"),
+        "com.jetbrains.PhpStorm" => Some("PhpStorm"),
+        "com.jetbrains.datagrip" => Some("DataGrip"),
+        "com.jetbrains.rider" => Some("Rider"),
+        "com.jetbrains.AppCode" => Some("AppCode"),
+        "com.jetbrains.rustrover" => Some("RustRover"),
+        "com.jetbrains.fleet" => Some("Fleet"),
+        "com.google.android.studio" => Some("Android Studio"),
         "com.mitchellh.ghostty" => Some("Ghostty"),
         "com.microsoft.VSCode" => Some("Visual Studio Code"),
         "com.github.wez.wezterm" => Some("WezTerm"),
@@ -317,6 +338,12 @@ fn terminal_name_for_program(program: &str) -> &str {
     match program {
         "Apple_Terminal" => "Apple Terminal",
         "iTerm.app" => "iTerm2",
+        "rio" => "Rio",
+        "Termius" => "Termius",
+        "zed" => "Zed",
+        "cursor" => "Cursor",
+        "windsurf" => "Windsurf",
+        "JetBrains-JediTerm" => "JetBrains",
         "vscode" => "Visual Studio Code",
         "ghostty" => "Ghostty",
         "WezTerm" => "WezTerm",
@@ -332,6 +359,11 @@ fn bundle_id_for_program(program: &str) -> Option<&'static str> {
     match program {
         "Apple_Terminal" => Some("com.apple.Terminal"),
         "iTerm.app" => Some("com.googlecode.iterm2"),
+        "rio" => Some("com.raphaelamorim.rio"),
+        "Termius" => Some("com.termius-dmg.mac"),
+        "zed" => Some("dev.zed.Zed"),
+        "cursor" => Some("com.todesktop.230313mzl4w4u92"),
+        "windsurf" => Some("com.exafunction.windsurf"),
         "vscode" => Some("com.microsoft.VSCode"),
         "ghostty" => Some("com.mitchellh.ghostty"),
         "WezTerm" => Some("com.github.wez.wezterm"),
@@ -376,6 +408,17 @@ fn detect_terminal_app(get: impl Fn(&str) -> Option<String>) -> Option<TerminalA
             Some("org.gnome.Terminal"),
         ),
         ("KONSOLE_VERSION", "Konsole", Some("org.kde.konsole")),
+        ("ZED_TERM", "Zed", Some("dev.zed.Zed")),
+        (
+            "CURSOR_TRACE_ID",
+            "Cursor",
+            Some("com.todesktop.230313mzl4w4u92"),
+        ),
+        (
+            "WINDSURF_SESSION",
+            "Windsurf",
+            Some("com.exafunction.windsurf"),
+        ),
         (
             "VSCODE_IPC_HOOK_CLI",
             "Visual Studio Code",
@@ -419,6 +462,23 @@ fn terminal_app_for_process(name: &str) -> Option<TerminalApp> {
         "ghostty" => ("Ghostty", Some("com.mitchellh.ghostty")),
         "hyper" => ("Hyper", Some("co.zeit.hyper")),
         "code" | "code-insiders" => ("Visual Studio Code", Some("com.microsoft.VSCode")),
+        "cursor" => ("Cursor", Some("com.todesktop.230313mzl4w4u92")),
+        "windsurf" => ("Windsurf", Some("com.exafunction.windsurf")),
+        "zed" => ("Zed", Some("dev.zed.Zed")),
+        "rio" => ("Rio", Some("com.raphaelamorim.rio")),
+        "termius" => ("Termius", Some("com.termius-dmg.mac")),
+        "idea" => ("IntelliJ IDEA", Some("com.jetbrains.intellij")),
+        "pycharm" => ("PyCharm", Some("com.jetbrains.pycharm")),
+        "webstorm" => ("WebStorm", Some("com.jetbrains.WebStorm")),
+        "clion" => ("CLion", Some("com.jetbrains.CLion")),
+        "goland" => ("GoLand", Some("com.jetbrains.goland")),
+        "rubymine" => ("RubyMine", Some("com.jetbrains.rubymine")),
+        "phpstorm" => ("PhpStorm", Some("com.jetbrains.PhpStorm")),
+        "datagrip" => ("DataGrip", Some("com.jetbrains.datagrip")),
+        "rider" => ("Rider", Some("com.jetbrains.rider")),
+        "rustrover" => ("RustRover", Some("com.jetbrains.rustrover")),
+        "fleet" => ("Fleet", Some("com.jetbrains.fleet")),
+        "studio.sh" | "studio" => ("Android Studio", Some("com.google.android.studio")),
         "tabby" => ("Tabby", None),
         "warp" | "warp-terminal" => ("Warp", Some("dev.warp.Warp-Stable")),
         "windowsterminal" | "wt" => ("Windows Terminal", None),
@@ -1304,6 +1364,28 @@ mod tests {
     fn terminal_app_maps_known_bundle_ids() {
         let cases = [
             ("com.apple.Terminal", "Apple Terminal"),
+            ("com.googlecode.iterm2", "iTerm2"),
+            ("com.raphaelamorim.rio", "Rio"),
+            ("com.termius-dmg.mac", "Termius"),
+            ("dev.zed.Zed", "Zed"),
+            ("dev.zed.Zed-Preview", "Zed Preview"),
+            ("com.todesktop.230313mzl4w4u92", "Cursor"),
+            ("com.exafunction.windsurf", "Windsurf"),
+            ("com.jetbrains.intellij", "IntelliJ IDEA"),
+            ("com.jetbrains.intellij.ce", "IntelliJ IDEA CE"),
+            ("com.jetbrains.pycharm", "PyCharm"),
+            ("com.jetbrains.pycharm.ce", "PyCharm CE"),
+            ("com.jetbrains.WebStorm", "WebStorm"),
+            ("com.jetbrains.CLion", "CLion"),
+            ("com.jetbrains.goland", "GoLand"),
+            ("com.jetbrains.rubymine", "RubyMine"),
+            ("com.jetbrains.PhpStorm", "PhpStorm"),
+            ("com.jetbrains.datagrip", "DataGrip"),
+            ("com.jetbrains.rider", "Rider"),
+            ("com.jetbrains.AppCode", "AppCode"),
+            ("com.jetbrains.rustrover", "RustRover"),
+            ("com.jetbrains.fleet", "Fleet"),
+            ("com.google.android.studio", "Android Studio"),
             ("com.mitchellh.ghostty", "Ghostty"),
             ("com.microsoft.VSCode", "Visual Studio Code"),
         ];
@@ -1311,6 +1393,33 @@ mod tests {
             let app = detected_app(&[("__CFBundleIdentifier", bundle_id)]);
             assert_eq!(app.name(), expected_name);
             assert_eq!(app.bundle_id(), Some(bundle_id));
+        }
+    }
+
+    #[test]
+    fn terminal_app_maps_term_program_values() {
+        let cases = [
+            (
+                "Apple_Terminal",
+                "Apple Terminal",
+                Some("com.apple.Terminal"),
+            ),
+            ("iTerm.app", "iTerm2", Some("com.googlecode.iterm2")),
+            ("rio", "Rio", Some("com.raphaelamorim.rio")),
+            ("Termius", "Termius", Some("com.termius-dmg.mac")),
+            ("zed", "Zed", Some("dev.zed.Zed")),
+            ("cursor", "Cursor", Some("com.todesktop.230313mzl4w4u92")),
+            ("windsurf", "Windsurf", Some("com.exafunction.windsurf")),
+            ("JetBrains-JediTerm", "JetBrains", None),
+        ];
+        for (program, expected_name, expected_bundle_id) in cases {
+            let app = detected_app(&[("TERM_PROGRAM", program)]);
+            assert_eq!(app.name(), expected_name, "unexpected name for {program}");
+            assert_eq!(
+                app.bundle_id(),
+                expected_bundle_id,
+                "unexpected bundle id for {program}"
+            );
         }
     }
 
@@ -1353,18 +1462,38 @@ mod tests {
     #[test]
     fn terminal_app_detects_environment_markers() {
         let cases = [
-            ("WT_SESSION", "Windows Terminal"),
-            ("KITTY_WINDOW_ID", "kitty"),
-            ("WEZTERM_PANE", "WezTerm"),
-            ("ALACRITTY_WINDOW_ID", "Alacritty"),
-            ("GNOME_TERMINAL_SCREEN", "GNOME Terminal"),
-            ("KONSOLE_VERSION", "Konsole"),
-            ("VSCODE_IPC_HOOK_CLI", "Visual Studio Code"),
-            ("TERMINAL_EMULATOR", "JetBrains"),
+            ("WT_SESSION", "Windows Terminal", None),
+            ("KITTY_WINDOW_ID", "kitty", Some("net.kovidgoyal.kitty")),
+            ("WEZTERM_PANE", "WezTerm", Some("com.github.wez.wezterm")),
+            ("ALACRITTY_WINDOW_ID", "Alacritty", Some("org.alacritty")),
+            (
+                "GNOME_TERMINAL_SCREEN",
+                "GNOME Terminal",
+                Some("org.gnome.Terminal"),
+            ),
+            ("KONSOLE_VERSION", "Konsole", Some("org.kde.konsole")),
+            ("ZED_TERM", "Zed", Some("dev.zed.Zed")),
+            (
+                "CURSOR_TRACE_ID",
+                "Cursor",
+                Some("com.todesktop.230313mzl4w4u92"),
+            ),
+            (
+                "WINDSURF_SESSION",
+                "Windsurf",
+                Some("com.exafunction.windsurf"),
+            ),
+            (
+                "VSCODE_IPC_HOOK_CLI",
+                "Visual Studio Code",
+                Some("com.microsoft.VSCode"),
+            ),
+            ("TERMINAL_EMULATOR", "JetBrains", None),
         ];
-        for (variable, expected_name) in cases {
+        for (variable, expected_name, expected_bundle_id) in cases {
             let app = detected_app(&[(variable, "1")]);
             assert_eq!(app.name(), expected_name);
+            assert_eq!(app.bundle_id(), expected_bundle_id);
         }
     }
 
@@ -1484,6 +1613,28 @@ mod tests {
             (
                 "/usr/bin/code-insiders",
                 Some(("Visual Studio Code", Some("com.microsoft.VSCode"))),
+            ),
+            (
+                "/usr/bin/cursor",
+                Some(("Cursor", Some("com.todesktop.230313mzl4w4u92"))),
+            ),
+            (
+                "/usr/bin/windsurf",
+                Some(("Windsurf", Some("com.exafunction.windsurf"))),
+            ),
+            ("/usr/bin/zed", Some(("Zed", Some("dev.zed.Zed")))),
+            ("/usr/bin/rio", Some(("Rio", Some("com.raphaelamorim.rio")))),
+            (
+                "C:/Users/me/AppData/Local/Programs/Termius.exe",
+                Some(("Termius", Some("com.termius-dmg.mac"))),
+            ),
+            (
+                "/opt/idea/bin/idea",
+                Some(("IntelliJ IDEA", Some("com.jetbrains.intellij"))),
+            ),
+            (
+                "/usr/bin/pycharm",
+                Some(("PyCharm", Some("com.jetbrains.pycharm"))),
             ),
             ("/usr/bin/unknown-terminal", None),
         ];
