@@ -56,7 +56,9 @@ pub use process::{
 pub use registry::{Registry, RegistryError};
 pub use runner::{RunSummary, Runner, SkipReason, StepResult, StepStatus, VersionChange};
 pub use signals::{install as install_interrupt_handler, requested as interrupted, SignalError};
-pub use snapshot::{RollbackCommand, SnapshotCommand, SnapshotRecorder, SnapshotSection};
+pub use snapshot::{
+    RollbackCommand, SnapshotCommand, SnapshotRecorder, SnapshotSection, DEFAULT_SNAPSHOT_RETENTION,
+};
 pub use step::{CheckReport, Detection, Operation, OutdatedItem, Step, StepError, StepId};
 pub use system::{
     Arch, Distro, Environment, HostProbe, OsInfo, Privilege, ProcessInfo, SystemInfo, SystemProbe,

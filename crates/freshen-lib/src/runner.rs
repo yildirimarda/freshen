@@ -621,7 +621,8 @@ impl<'a> Runner<'a> {
             crate::warnings::warn_about_running_docker_builds();
         }
 
-        let mut snapshots = SnapshotRecorder::new();
+        let mut snapshots =
+            SnapshotRecorder::new().with_retention(self.options.snapshot_retention());
         let mut results = Vec::with_capacity(self.steps.len());
         let mut interrupted = false;
         let mut timed_out = false;
