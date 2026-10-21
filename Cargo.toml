@@ -12,7 +12,7 @@ homepage = "https://github.com/yildirimarda/freshen"
 readme = "README.md"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 unwrap_used = "deny"

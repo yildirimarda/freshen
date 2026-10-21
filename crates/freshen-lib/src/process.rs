@@ -14,6 +14,8 @@
 //! * a timeout or interrupt stops the whole process tree (a process group on
 //!   Unix, a job object on Windows), so a grandchild cannot keep the output
 //!   pipes open after the step is gone;
+//! * on Windows the child is created suspended and only resumed after it has
+//!   joined the job, so even a grandchild started immediately is covered;
 //! * the environment is inherited by default and can be extended, reduced or
 //!   cleared;
 //! * a command can be retried with exponential backoff.
@@ -611,6 +613,13 @@ impl CommandSpec {
             command.process_group(0);
         }
 
+        #[cfg(windows)]
+        {
+            // Start the child suspended so it cannot run any code, and thus
+            // cannot start a grandchild, before it joins the job object.
+            win32::suspend_on_spawn(&mut command);
+        }
+
         if self.env_clear {
             command.env_clear();
         }
@@ -625,7 +634,14 @@ impl CommandSpec {
             program: program.clone(),
             source,
         })?;
-        let mut tree = ProcessTree::new(&child);
+        let mut tree = match ProcessTree::new(&child) {
+            Ok(tree) => tree,
+            Err(source) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(ProcessError::Spawn { program, source });
+            }
+        };
 
         let (sender, receiver) = mpsc::channel();
         let mut readers = Vec::with_capacity(2);
@@ -764,6 +780,151 @@ struct AttemptResult {
     captured: Captured,
 }
 
+/// The Win32 calls needed to start a child suspended and resume it after it
+/// has joined a job object.
+///
+/// Everything unsafe is confined to this module; the rest of the process
+/// handling uses these safe wrappers.
+#[cfg(windows)]
+mod win32 {
+    #![allow(unsafe_code)]
+
+    use std::io;
+    use std::process::Command;
+
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenThread, ResumeThread, CREATE_SUSPENDED, THREAD_SUSPEND_RESUME,
+    };
+
+    /// Creates the child suspended so it cannot run before it joins a job.
+    pub(super) fn suspend_on_spawn(command: &mut Command) {
+        use std::os::windows::process::CommandExt;
+
+        command.creation_flags(CREATE_SUSPENDED);
+    }
+
+    /// Resumes every thread of a process that was created suspended.
+    pub(super) fn resume(pid: u32) -> io::Result<()> {
+        // SAFETY: the snapshot handle is closed before returning and `entry`
+        // is a correctly sized buffer owned for the duration of the loop.
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+        if snapshot == INVALID_HANDLE_VALUE {
+            return Err(io::Error::last_os_error());
+        }
+
+        let mut entry = THREADENTRY32 {
+            dwSize: std::mem::size_of::<THREADENTRY32>() as u32,
+            ..Default::default()
+        };
+        let mut resumed = false;
+        let mut result = Err(io::Error::other(format!(
+            "no thread found for suspended process {pid}"
+        )));
+
+        // SAFETY: `snapshot` is a valid snapshot handle and `entry` is a
+        // valid THREADENTRY32 for the duration of the iteration.
+        let mut found = unsafe { Thread32First(snapshot, &mut entry) } != 0;
+        while found {
+            if entry.th32OwnerProcessID == pid {
+                // SAFETY: `entry` describes a real thread and the returned
+                // handle is closed below.
+                let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
+                if thread.is_null() {
+                    result = Err(io::Error::last_os_error());
+                } else {
+                    // SAFETY: `thread` is a valid handle opened with
+                    // THREAD_SUSPEND_RESUME. u32::MAX signals failure; any
+                    // other value is the previous suspend count.
+                    let previous = unsafe { ResumeThread(thread) };
+                    result = if previous == u32::MAX {
+                        Err(io::Error::last_os_error())
+                    } else {
+                        Ok(())
+                    };
+                    // SAFETY: `thread` is a handle we own and no longer use.
+                    unsafe { CloseHandle(thread) };
+                }
+                resumed = true;
+                break;
+            }
+            // SAFETY: `snapshot` and `entry` remain valid between calls.
+            found = unsafe { Thread32Next(snapshot, &mut entry) } != 0;
+        }
+
+        // SAFETY: `snapshot` is a handle we own and no longer use.
+        unsafe { CloseHandle(snapshot) };
+
+        if resumed {
+            result
+        } else {
+            Err(io::Error::other(format!(
+                "no thread found for suspended process {pid}"
+            )))
+        }
+    }
+
+    /// Returns the direct children of `parent` currently in the process table.
+    #[cfg(test)]
+    pub(super) fn child_process_ids(parent: u32) -> Vec<u32> {
+        use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+            Process32First, Process32Next, PROCESSENTRY32, TH32CS_SNAPPROCESS,
+        };
+
+        // SAFETY: the snapshot handle is closed before returning and `entry`
+        // is a correctly sized buffer owned for the duration of the loop.
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+        if snapshot == INVALID_HANDLE_VALUE {
+            return Vec::new();
+        }
+
+        let mut entry = PROCESSENTRY32 {
+            dwSize: std::mem::size_of::<PROCESSENTRY32>() as u32,
+            ..Default::default()
+        };
+        let mut children = Vec::new();
+        // SAFETY: `snapshot` is valid and `entry` is a valid PROCESSENTRY32.
+        let mut found = unsafe { Process32First(snapshot, &mut entry) } != 0;
+        while found {
+            if entry.th32ParentProcessID == parent {
+                children.push(entry.th32ProcessID);
+            }
+            // SAFETY: `snapshot` and `entry` remain valid between calls.
+            found = unsafe { Process32Next(snapshot, &mut entry) } != 0;
+        }
+
+        // SAFETY: `snapshot` is a handle we own and no longer use.
+        unsafe { CloseHandle(snapshot) };
+        children
+    }
+
+    /// Returns whether `pid` is still running.
+    #[cfg(test)]
+    pub(super) fn is_alive(pid: u32) -> bool {
+        use windows_sys::Win32::Foundation::STILL_ACTIVE;
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+
+        // SAFETY: `OpenProcess` does not dereference any pointer; the handle
+        // is closed below when valid.
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if process.is_null() {
+            return false;
+        }
+        let mut code = 0;
+        // SAFETY: `process` is a valid handle and `code` is a valid out-pointer.
+        let alive =
+            unsafe { GetExitCodeProcess(process, &mut code) } != 0 && code == STILL_ACTIVE as u32;
+        // SAFETY: `process` is a handle we own and no longer use.
+        unsafe { CloseHandle(process) };
+        alive
+    }
+}
+
 /// Controls the lifetime of a child and every process it starts.
 ///
 /// Killing only the direct child is not enough: a shell can leave a grandchild
@@ -779,14 +940,14 @@ struct ProcessTree {
 
 impl ProcessTree {
     #[cfg(unix)]
-    fn new(child: &Child) -> Self {
-        Self {
+    fn new(child: &Child) -> std::io::Result<Self> {
+        Ok(Self {
             pgid: i32::try_from(child.id()).unwrap_or(i32::MAX),
-        }
+        })
     }
 
     #[cfg(windows)]
-    fn new(child: &Child) -> Self {
+    fn new(child: &Child) -> std::io::Result<Self> {
         use std::os::windows::io::AsRawHandle;
 
         let mut limits = win32job::ExtendedLimitInfo::new();
@@ -797,12 +958,23 @@ impl ProcessTree {
                 job.assign_process(child.as_raw_handle() as isize).ok()?;
                 Some(job)
             });
-        Self { job }
+
+        // The child was created suspended, so it is in the job (when one could
+        // be created) before its first instruction runs. Resume it even
+        // without a job so the taskkill fallback in `terminate` still works.
+        if let Err(error) = win32::resume(child.id()) {
+            // Dropping the job kills the still-suspended child because the
+            // job was created with kill-on-close.
+            drop(job);
+            return Err(error);
+        }
+
+        Ok(Self { job })
     }
 
     #[cfg(not(any(unix, windows)))]
-    fn new(_child: &Child) -> Self {
-        Self {}
+    fn new(_child: &Child) -> std::io::Result<Self> {
+        Ok(Self {})
     }
 
     /// Kills the child and all of its descendants, then reaps the child.
@@ -1091,9 +1263,9 @@ impl ProcessError {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        network_failure, Backoff, CommandSpec, NetworkFailure, OutputStream, ProcessError,
-    };
+    use super::{network_failure, Backoff, CommandSpec, NetworkFailure};
+    #[cfg(unix)]
+    use super::{OutputStream, ProcessError};
     use std::time::{Duration, Instant};
 
     fn backoff() -> Backoff {
@@ -1325,6 +1497,91 @@ mod tests {
             Err(ProcessError::TimedOut { .. }) => {}
             other => panic!("expected a timeout, got {other:?}"),
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_child_joins_its_job_before_it_can_start_a_grandchild() {
+        use super::{win32, ProcessTree};
+
+        let marker =
+            std::env::temp_dir().join(format!("freshen-windows-job-{}.txt", std::process::id()));
+        let _ = std::fs::remove_file(&marker);
+        let script = format!(
+            "echo started>\"{}\" & start \"\" /B ping -n 30 127.0.0.1 >nul & ping -n 30 127.0.0.1 >nul",
+            marker.display()
+        );
+
+        let mut command = std::process::Command::new("cmd");
+        command
+            .args(["/C", &script])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        win32::suspend_on_spawn(&mut command);
+
+        let mut child = command
+            .spawn()
+            .unwrap_or_else(|error| panic!("failed to spawn suspended child: {error}"));
+
+        // A suspended process cannot execute its first instruction, so the
+        // marker must not exist until the job assignment has happened.
+        std::thread::sleep(Duration::from_millis(250));
+        assert!(
+            !marker.exists(),
+            "the child ran before it was assigned to the job"
+        );
+
+        let mut tree = ProcessTree::new(&child)
+            .unwrap_or_else(|error| panic!("failed to assign and resume the child: {error}"));
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !marker.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "the resumed child never wrote its marker"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        // `start /B` runs immediately after the marker, so this grandchild is
+        // created as soon as the child gets to run.
+        let grandchild = wait_for_child_of(child.id(), Duration::from_secs(10));
+
+        tree.terminate(&mut child);
+        let _ = std::fs::remove_file(&marker);
+
+        assert!(
+            wait_until_gone(grandchild, Duration::from_secs(5)),
+            "grandchild {grandchild} outlived the job"
+        );
+    }
+
+    #[cfg(windows)]
+    fn wait_for_child_of(parent: u32, limit: Duration) -> u32 {
+        let deadline = Instant::now() + limit;
+        loop {
+            if let Some(&pid) = super::win32::child_process_ids(parent).first() {
+                return pid;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the child never started a grandchild"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[cfg(windows)]
+    fn wait_until_gone(pid: u32, limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        while Instant::now() < deadline {
+            if !super::win32::is_alive(pid) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        !super::win32::is_alive(pid)
     }
 
     #[cfg(unix)]
