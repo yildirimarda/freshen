@@ -26,6 +26,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(unix)]
 use std::time::Duration;
 
+use freshen_lib::{ConfigEnvironment, Platform};
+
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
 /// The canned result of one stub invocation.
@@ -121,8 +123,35 @@ impl StubTools {
             .env("FRESHEN_SKIP_PREFLIGHT", "1")
             .env("HOME", &self.dir)
             .env("FRESHEN_APP_ROOTS", self.dir.join("Applications"))
-            .env("USERPROFILE", &self.dir);
+            .env("USERPROFILE", &self.dir)
+            .env("XDG_CONFIG_HOME", self.config_home())
+            .env("APPDATA", self.app_data());
         command
+    }
+
+    /// The directory the binary reads the configuration file from.
+    #[allow(dead_code)]
+    pub fn config_home(&self) -> PathBuf {
+        self.dir.join("config")
+    }
+
+    /// The roaming application data directory the binary reads the
+    /// configuration file from on Windows.
+    #[allow(dead_code)]
+    pub fn app_data(&self) -> PathBuf {
+        self.dir.join("appdata")
+    }
+
+    /// The configuration file the binary reads when no `--config` is given.
+    #[allow(dead_code)]
+    pub fn config_path(&self) -> PathBuf {
+        let environment = ConfigEnvironment {
+            appdata: Some(self.app_data()),
+            xdg_config_home: Some(self.config_home()),
+            home: Some(self.dir.clone()),
+        };
+
+        environment.config_path(Platform::current().unwrap_or(Platform::Linux))
     }
 
     /// Runs the binary with `FRESHEN_TEST_STEPS` set to `steps`.

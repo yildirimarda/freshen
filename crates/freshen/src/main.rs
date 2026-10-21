@@ -5,9 +5,9 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use freshen_lib::{
-    exit, install_interrupt_handler, list_steps, wait_for_package_managers,
-    HostPackageManagerProbe, HostPreflightProbe, PackageManagerConfig, PackageManagerProbe,
-    Platform, PreflightReport, Registry, RunLock, Runner, WaitOutcome,
+    exit, install_interrupt_handler, list_steps, wait_for_package_managers, Config,
+    ConfigEnvironment, HostPackageManagerProbe, HostPreflightProbe, PackageManagerConfig,
+    PackageManagerProbe, Platform, PreflightReport, Registry, RunLock, Runner, WaitOutcome,
 };
 
 mod cli;
@@ -27,13 +27,21 @@ fn main() -> ExitCode {
     if cli.json || cli.markdown {
         freshen_lib::route_to_stderr();
     }
-    let options = cli.run_options();
-    let registry = build_registry();
 
     let Some(platform) = Platform::current() else {
         eprintln!("freshen: unsupported operating system");
         return exit::code(exit::STEP_FAILURE);
     };
+
+    let config = match load_config(&cli, platform) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("freshen: {error}");
+            return exit::code(exit::STEP_FAILURE);
+        }
+    };
+    let options = cli.run_options_with(&config);
+    let registry = build_registry();
 
     let steps = match options.plan(&registry, platform) {
         Ok(steps) => steps,
@@ -95,6 +103,19 @@ fn main() -> ExitCode {
         print!("{summary}");
     }
     summary.exit_code()
+}
+
+/// Loads the configuration file.
+///
+/// A file named with `--config` has to exist; the file in the default
+/// location is optional.
+fn load_config(cli: &Cli, platform: Platform) -> Result<Config, freshen_lib::ConfigError> {
+    if let Some(path) = &cli.config {
+        return Config::load(path);
+    }
+
+    let path = ConfigEnvironment::from_env().config_path(platform);
+    Ok(Config::load_optional(&path)?.unwrap_or_default())
 }
 
 fn build_registry() -> Registry {

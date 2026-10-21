@@ -268,6 +268,8 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Cap captured subprocess output (for example the last N bytes per stream) so a runaway command cannot exhaust memory, while still streaming every line live
 - [ ] Refuse to load the config file, hooks and custom steps from world-writable files or directories and print the offending path, covered by tests on Unix and with injected ACL facts on Windows
 - [ ] Print the exact command of every hook and custom step before running it (unless `--quiet`) and require `--trust-config`, or an interactive confirmation that stores a hash, the first time a new or changed hook or custom step is seen, covered by tests
+- [ ] Add a `FRESHEN_CONFIG` environment variable that points at an alternative configuration file, so a scheduled run or a wrapper script can choose the file without changing the command line, covered by tests
+- [ ] Print the configuration file freshen read and the values it set (in `--doctor` and in the run summary), so a user can see which settings were in effect, covered by tests
 
 ## Milestone 10: Automation
 

@@ -3,10 +3,25 @@
 //! These tests never run a package manager: detection only looks for an
 //! executable on `PATH`, and the run cases exclude every built-in step.
 
+use std::path::PathBuf;
 use std::process::{Command, Output};
 
+/// A directory without a configuration file, so the binary never reads the
+/// configuration of the machine the test runs on.
+fn empty_home() -> PathBuf {
+    let home = std::env::temp_dir().join(format!("freshen-cli-{}", std::process::id()));
+    std::fs::create_dir_all(&home)
+        .unwrap_or_else(|error| panic!("failed to create {}: {error}", home.display()));
+    home
+}
+
 fn run(args: &[&str]) -> Output {
+    let home = empty_home();
     match Command::new(env!("CARGO_BIN_EXE_freshen"))
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("XDG_CONFIG_HOME", home.join("config"))
+        .env("APPDATA", home.join("appdata"))
         .args(args)
         .output()
     {
@@ -35,6 +50,7 @@ fn help_lists_every_flag() {
         "--list-steps",
         "--json",
         "--markdown",
+        "--config",
         "--only",
         "--skip",
         "--yes",
