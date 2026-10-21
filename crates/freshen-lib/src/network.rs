@@ -12,7 +12,7 @@
 use std::fmt;
 use std::fs;
 use std::io::{self, BufReader, Read, Write};
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -272,6 +272,10 @@ fn no_proxy_entry_matches(entry: &str, host: &str, port: u16) -> bool {
         return false;
     }
 
+    if pattern.contains('/') {
+        return cidr_matches(&pattern, host);
+    }
+
     if let Some(suffix) = pattern.strip_prefix("*.") {
         return host.len() > suffix.len()
             && host.ends_with(suffix)
@@ -280,6 +284,46 @@ fn no_proxy_entry_matches(entry: &str, host: &str, port: u16) -> bool {
 
     let pattern = pattern.strip_prefix('.').unwrap_or(&pattern);
     host == pattern || host.ends_with(&format!(".{pattern}"))
+}
+
+/// Returns `true` when `host` is inside the CIDR `pattern`, such as
+/// `10.0.0.0/8` or `fd00::/8`. Hostnames never match a CIDR range.
+fn cidr_matches(pattern: &str, host: &str) -> bool {
+    let Some((network, prefix)) = pattern.split_once('/') else {
+        return false;
+    };
+    let (Ok(network), Ok(host), Ok(prefix)) = (
+        network.parse::<IpAddr>(),
+        host.parse::<IpAddr>(),
+        prefix.parse::<u8>(),
+    ) else {
+        return false;
+    };
+
+    match (network, host) {
+        (IpAddr::V4(network), IpAddr::V4(host)) => {
+            prefix <= 32 && prefix_matches(&network.octets(), &host.octets(), prefix)
+        }
+        (IpAddr::V6(network), IpAddr::V6(host)) => {
+            prefix <= 128 && prefix_matches(&network.octets(), &host.octets(), prefix)
+        }
+        _ => false,
+    }
+}
+
+fn prefix_matches(network: &[u8], host: &[u8], prefix: u8) -> bool {
+    let full_bytes = prefix as usize / 8;
+    let remaining_bits = prefix % 8;
+
+    if network[..full_bytes] != host[..full_bytes] {
+        return false;
+    }
+    if remaining_bits == 0 {
+        return true;
+    }
+
+    let mask = 0xffu8 << (8 - remaining_bits);
+    network[full_bytes] & mask == host[full_bytes] & mask
 }
 
 fn split_no_proxy_port(entry: &str) -> (&str, Option<u16>) {
@@ -935,6 +979,62 @@ pT8yRnSiD29WLvz412hxX/k=
         assert!(no_proxy_matches("*", "anything.example", 443));
         assert!(!no_proxy_matches("example.com", "unrelated.example", 443));
         assert!(no_proxy_matches("10.0.0.1", "10.0.0.1", 443));
+    }
+
+    #[test]
+    fn no_proxy_cidr_ranges_match_addresses_inside_the_network() {
+        assert!(no_proxy_matches("10.0.0.0/8", "10.1.2.3", 443));
+        assert!(no_proxy_matches("10.0.0.0/8", "10.255.255.255", 443));
+        assert!(!no_proxy_matches("10.0.0.0/8", "11.0.0.1", 443));
+        assert!(!no_proxy_matches("10.0.0.0/8", "9.255.255.255", 443));
+
+        assert!(no_proxy_matches("192.168.0.0/16", "192.168.1.1", 443));
+        assert!(!no_proxy_matches("192.168.0.0/16", "192.169.0.1", 443));
+
+        assert!(no_proxy_matches("172.16.0.0/12", "172.31.255.255", 443));
+        assert!(!no_proxy_matches("172.16.0.0/12", "172.32.0.1", 443));
+
+        assert!(no_proxy_matches("0.0.0.0/0", "8.8.8.8", 443));
+        assert!(!no_proxy_matches("10.0.0.0/33", "10.0.0.1", 443));
+        assert!(!no_proxy_matches("10.0.0.0/8", "example.com", 443));
+
+        assert!(no_proxy_matches("10.0.0.0/8:443", "10.0.0.1", 443));
+        assert!(!no_proxy_matches("10.0.0.0/8:443", "10.0.0.1", 8443));
+
+        assert!(no_proxy_matches("fd00::/8", "fd12:3456::1", 443));
+        assert!(!no_proxy_matches("fd00::/8", "fe80::1", 443));
+        assert!(no_proxy_matches("[fd00::/8]:443", "fd12:3456::1", 443));
+        assert!(!no_proxy_matches("[fd00::/8]:443", "fd12:3456::1", 8443));
+        assert!(!no_proxy_matches("fd00::/129", "fd12:3456::1", 443));
+    }
+
+    #[test]
+    fn no_proxy_cidr_bypasses_the_configured_proxy() {
+        let environment = environment(&[
+            ("HTTPS_PROXY", "http://proxy.example:8080"),
+            ("NO_PROXY", "10.0.0.0/8,192.168.0.0/16,fd00::/8"),
+        ]);
+
+        let private = endpoint(
+            "unrelated.example",
+            SocketAddr::from(([10, 20, 30, 40], 443)),
+        );
+        let local = endpoint(
+            "unrelated.example",
+            SocketAddr::from(([192, 168, 1, 1], 443)),
+        );
+        let public = endpoint("unrelated.example", SocketAddr::from(([8, 8, 8, 8], 443)));
+        let v6 = endpoint(
+            "unrelated.example",
+            "[fd12:3456::1]:443"
+                .parse()
+                .unwrap_or_else(|error| panic!("test address should parse: {error}")),
+        );
+
+        assert!(environment.bypasses(&private));
+        assert!(environment.bypasses(&local));
+        assert!(environment.bypasses(&v6));
+        assert!(!environment.bypasses(&public));
     }
 
     #[test]
