@@ -7,6 +7,7 @@
 
 use std::collections::HashSet;
 use std::fmt;
+use std::time::Duration;
 
 use crate::package_manager::PackageManagerConfig;
 use crate::platform::Platform;
@@ -187,6 +188,8 @@ pub struct RunOptions {
     selection: StepSelection,
     preflight: PreflightConfig,
     package_manager: PackageManagerConfig,
+    step_timeout: Option<Duration>,
+    global_timeout: Option<Duration>,
 }
 
 impl RunOptions {
@@ -239,6 +242,21 @@ impl RunOptions {
         self
     }
 
+    /// Sets the maximum time one step may take, including detection, check,
+    /// run and cleanup.
+    #[must_use]
+    pub fn with_step_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.step_timeout = timeout;
+        self
+    }
+
+    /// Sets the maximum time the whole run may take.
+    #[must_use]
+    pub fn with_global_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.global_timeout = timeout;
+        self
+    }
+
     /// Returns `true` when `--dry-run` is set.
     #[must_use]
     pub fn is_dry_run(&self) -> bool {
@@ -273,6 +291,18 @@ impl RunOptions {
     #[must_use]
     pub fn package_manager(&self) -> &PackageManagerConfig {
         &self.package_manager
+    }
+
+    /// Maximum time one step may take, when a timeout is configured.
+    #[must_use]
+    pub fn step_timeout(&self) -> Option<Duration> {
+        self.step_timeout
+    }
+
+    /// Maximum time the whole run may take, when a timeout is configured.
+    #[must_use]
+    pub fn global_timeout(&self) -> Option<Duration> {
+        self.global_timeout
     }
 
     /// Builds the ordered list of steps this run should execute on `platform`.
@@ -377,6 +407,8 @@ mod tests {
         assert!(!options.assume_yes());
         assert!(!options.force_kill());
         assert!(options.selection().is_empty());
+        assert_eq!(options.step_timeout(), None);
+        assert_eq!(options.global_timeout(), None);
     }
 
     #[test]
@@ -384,11 +416,21 @@ mod tests {
         let options = RunOptions::new()
             .with_dry_run(true)
             .with_assume_yes(true)
-            .with_force_kill(true);
+            .with_force_kill(true)
+            .with_step_timeout(Some(std::time::Duration::from_secs(60)))
+            .with_global_timeout(Some(std::time::Duration::from_secs(600)));
 
         assert!(options.is_dry_run());
         assert!(options.assume_yes());
         assert!(options.force_kill());
+        assert_eq!(
+            options.step_timeout(),
+            Some(std::time::Duration::from_secs(60))
+        );
+        assert_eq!(
+            options.global_timeout(),
+            Some(std::time::Duration::from_secs(600))
+        );
     }
 
     #[test]

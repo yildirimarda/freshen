@@ -6,9 +6,9 @@
 //! order, failures are collected instead of aborting the run, and the caller
 //! receives one status and duration per step.
 //!
-//! Exit-code semantics match `update-all.sh`: `0` when no step failed and `1`
-//! when at least one did. A skipped step (its tool is not installed) is not a
-//! failure and therefore does not change the exit code.
+//! Exit-code semantics match `update-all.sh`: `0` when no step failed or
+//! timed out and `1` when at least one did. A skipped step (its tool is not
+//! installed) is not a failure and therefore does not change the exit code.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -17,6 +17,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use crate::check::{CheckResult, CheckSummary};
+use crate::deadline::{self, Deadline};
 use crate::options::{RunOptions, SelectionFlag};
 use crate::snapshot::{RollbackCommand, SnapshotRecorder};
 use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
@@ -32,6 +33,9 @@ pub enum StepStatus {
     Skipped,
     /// Detection, the upgrade or the cleanup failed.
     Failed,
+    /// The step was stopped because its own timeout or the run's global
+    /// timeout elapsed before it finished.
+    TimedOut,
     /// The run was interrupted while this step was running or before it could
     /// start.
     Interrupted,
@@ -46,14 +50,16 @@ impl StepStatus {
             Self::Planned => "planned",
             Self::Skipped => "skipped",
             Self::Failed => "failed",
+            Self::TimedOut => "timed out",
             Self::Interrupted => "interrupted",
         }
     }
 
-    /// Returns `true` for [`StepStatus::Failed`].
+    /// Returns `true` when the step did not complete because it failed or
+    /// timed out.
     #[must_use]
     pub fn is_failure(self) -> bool {
-        matches!(self, Self::Failed)
+        matches!(self, Self::Failed | Self::TimedOut)
     }
 }
 
@@ -217,6 +223,17 @@ impl StepResult {
         Self::new(step, StepStatus::Interrupted, duration)
     }
 
+    fn timed_out(step: &dyn Step, duration: Duration) -> Self {
+        Self::new(step, StepStatus::TimedOut, duration)
+    }
+
+    fn into_timed_out(mut self) -> Self {
+        self.status = StepStatus::TimedOut;
+        self.error = None;
+        self.changes.clear();
+        self
+    }
+
     /// Stable id of the step.
     #[must_use]
     pub fn id(&self) -> StepId {
@@ -346,6 +363,12 @@ impl RunSummary {
         self.count(StepStatus::Failed)
     }
 
+    /// Number of steps that exceeded a timeout.
+    #[must_use]
+    pub fn timed_out_count(&self) -> usize {
+        self.count(StepStatus::TimedOut)
+    }
+
     /// Number of steps that were interrupted.
     #[must_use]
     pub fn interrupted_count(&self) -> usize {
@@ -364,13 +387,13 @@ impl RunSummary {
         &self.restore_failures
     }
 
-    /// Returns `true` when at least one step failed.
+    /// Returns `true` when at least one step failed or timed out.
     #[must_use]
     pub fn has_failures(&self) -> bool {
-        self.failed_count() > 0
+        self.failed_count() > 0 || self.timed_out_count() > 0
     }
 
-    /// Results of the steps that failed.
+    /// Results of the steps that failed or timed out.
     pub fn failures(&self) -> impl Iterator<Item = &StepResult> {
         self.steps
             .iter()
@@ -408,7 +431,7 @@ impl RunSummary {
     }
 
     /// Process exit code: `0` when every step succeeded, `1` when a step
-    /// failed and `130` when the run was interrupted.
+    /// failed or timed out and `130` when the run was interrupted.
     #[must_use]
     pub fn exit_code(&self) -> ExitCode {
         if self.interrupted {
@@ -425,11 +448,12 @@ impl fmt::Display for RunSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
-            "Summary: {} ok, {} planned, {} skipped, {} failed, {} interrupted ({})",
+            "Summary: {} ok, {} planned, {} skipped, {} failed, {} timed out, {} interrupted ({})",
             self.ok_count(),
             self.planned_count(),
             self.skipped_count(),
             self.failed_count(),
+            self.timed_out_count(),
             self.interrupted_count(),
             format_duration(self.total_duration())
         )?;
@@ -584,6 +608,12 @@ impl<'a> Runner<'a> {
         let mut snapshots = SnapshotRecorder::new();
         let mut results = Vec::with_capacity(self.steps.len());
         let mut interrupted = false;
+        let mut timed_out = false;
+        let run_started = Instant::now();
+        let global_deadline = self
+            .options
+            .global_timeout()
+            .map(|limit| Deadline::after(run_started, limit));
 
         for planned in self.steps.iter().copied() {
             if interrupted || (self.interrupt)() {
@@ -599,9 +629,35 @@ impl<'a> Runner<'a> {
                 continue;
             }
 
+            let now = Instant::now();
+            if global_deadline.is_some_and(|deadline| now >= deadline.at()) {
+                timed_out = true;
+                match planned {
+                    PlannedStep::Run(step) => {
+                        results.push(StepResult::timed_out(step, Duration::ZERO));
+                    }
+                    PlannedStep::Skip { step, reason } => {
+                        results.push(StepResult::skipped_because(step, reason, Duration::ZERO));
+                    }
+                }
+                continue;
+            }
+
             let result = match planned {
                 PlannedStep::Run(step) => {
-                    run_step(step, &self.options, &mut snapshots, self.interrupt)
+                    let deadline =
+                        effective_deadline(now, self.options.step_timeout(), global_deadline);
+                    let guard = deadline::enter(deadline);
+                    let mut result = run_step(step, &self.options, &mut snapshots, self.interrupt);
+                    drop(guard);
+
+                    if deadline.is_some_and(|deadline| deadline.expired())
+                        && result.status() != StepStatus::Interrupted
+                    {
+                        timed_out = true;
+                        result = result.into_timed_out();
+                    }
+                    result
                 }
                 PlannedStep::Skip { step, reason } => {
                     StepResult::skipped_because(step, reason, Duration::ZERO)
@@ -612,9 +668,13 @@ impl<'a> Runner<'a> {
         }
 
         let mut restore_failures = Vec::new();
-        if interrupted {
-            eprintln!("freshen: interrupted; restoring everything that was stopped");
-            crate::signals::reset();
+        if interrupted || timed_out {
+            if interrupted {
+                eprintln!("freshen: interrupted; restoring everything that was stopped");
+                crate::signals::reset();
+            } else {
+                eprintln!("freshen: timed out; restoring everything that was stopped");
+            }
 
             for planned in self.steps.iter().rev().copied() {
                 let Some(step) = planned.running() else {
@@ -653,6 +713,23 @@ impl<'a> Runner<'a> {
                 })
                 .collect(),
         )
+    }
+}
+
+fn effective_deadline(
+    now: Instant,
+    step_timeout: Option<Duration>,
+    global: Option<Deadline>,
+) -> Option<Deadline> {
+    let step = step_timeout.map(|limit| Deadline::after(now, limit));
+    match (step, global) {
+        (Some(step), Some(global)) if step.at() <= global.at() => Some(step),
+        (Some(_), Some(global)) | (None, Some(global)) => Some(Deadline::new(
+            global.at(),
+            global.at().saturating_duration_since(now),
+        )),
+        (Some(step), None) => Some(step),
+        (None, None) => None,
     }
 }
 
@@ -1311,6 +1388,67 @@ mod tests {
         assert!(summary.steps()[0].duration() >= Duration::from_millis(1));
         let summed: Duration = summary.steps().iter().map(|step| step.duration()).sum();
         assert_eq!(summary.total_duration(), summed);
+    }
+
+    #[test]
+    fn a_step_that_exceeds_its_timeout_is_timed_out_not_failed() {
+        let slow = FakeStep::new("brew", "Homebrew").sleep(Duration::from_millis(30));
+        let calls = slow.calls();
+        let options = RunOptions::new().with_step_timeout(Some(Duration::from_millis(5)));
+
+        let summary = Runner::with_options([&slow as &dyn Step], options).run();
+        let result = &summary.steps()[0];
+
+        assert_eq!(result.status(), StepStatus::TimedOut);
+        assert_eq!(result.error(), None);
+        assert_eq!(summary.failed_count(), 0);
+        assert_eq!(summary.timed_out_count(), 1);
+        assert!(summary.has_failures());
+        assert_eq!(summary.failures().count(), 1);
+        assert_exit_code(summary.exit_code(), ExitCode::FAILURE);
+        let text = summary.to_string();
+        assert!(text.contains("timed out"), "summary: {text}");
+        assert!(text.contains("0 failed, 1 timed out"), "summary: {text}");
+        assert_eq!(calls.restore.get(), 1);
+    }
+
+    #[test]
+    fn a_step_timeout_does_not_stop_the_next_step() {
+        let slow = FakeStep::new("brew", "Homebrew").sleep(Duration::from_millis(30));
+        let healthy = FakeStep::new("uv", "uv");
+        let healthy_calls = healthy.calls();
+        let options = RunOptions::new().with_step_timeout(Some(Duration::from_millis(5)));
+        let steps: [&dyn Step; 2] = [&slow, &healthy];
+
+        let summary = Runner::with_options(steps, options).run();
+
+        assert_eq!(summary.steps()[0].status(), StepStatus::TimedOut);
+        assert_eq!(summary.steps()[1].status(), StepStatus::Ok);
+        assert_eq!(summary.timed_out_count(), 1);
+        assert_eq!(summary.ok_count(), 1);
+        assert_eq!(healthy_calls.run.get(), 1);
+    }
+
+    #[test]
+    fn a_global_timeout_marks_unstarted_steps_as_timed_out() {
+        let slow = FakeStep::new("brew", "Homebrew").sleep(Duration::from_millis(30));
+        let later = FakeStep::new("uv", "uv");
+        let slow_calls = slow.calls();
+        let later_calls = later.calls();
+        let options = RunOptions::new().with_global_timeout(Some(Duration::from_millis(5)));
+        let steps: [&dyn Step; 2] = [&slow, &later];
+
+        let summary = Runner::with_options(steps, options).run();
+
+        assert_eq!(summary.steps()[0].status(), StepStatus::TimedOut);
+        assert_eq!(summary.steps()[1].status(), StepStatus::TimedOut);
+        assert_eq!(summary.timed_out_count(), 2);
+        assert_eq!(summary.failed_count(), 0);
+        assert_exit_code(summary.exit_code(), ExitCode::FAILURE);
+        assert_eq!(slow_calls.restore.get(), 1);
+        assert_eq!(later_calls.restore.get(), 1);
+        assert_eq!(later_calls.detect.get(), 0);
+        assert_eq!(later_calls.run.get(), 0);
     }
 
     #[test]

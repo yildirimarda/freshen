@@ -82,7 +82,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Detect when another package manager process is running (brew, apt/dpkg lock, winget) and wait or abort with a clear message
 - [x] Graceful handling of SIGINT/SIGTERM on every OS: stop the running step, restore everything that was stopped (apps, containers, VMs), print a partial summary
 - [x] Idempotency guarantee: running the tool twice in a row must be a no-op the second time; add a test asserting it
-- [ ] Per-step and global timeouts with a clear "timed out" status distinct from "failed"
+- [x] Per-step and global timeouts with a clear "timed out" status distinct from "failed"
 - [ ] Network failure handling: retry transient download errors with exponential backoff, skip the step if the registry is unreachable
 - [ ] Detect processes running from a tool version that is about to be removed (old Node, Python, Java, Go toolchains) and report them with the parent application that started them
 - [ ] Detect long-running interactive sessions that an upgrade would break (zellij, tmux server, SSH sessions, running docker builds) and warn or defer
@@ -93,6 +93,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Record cask versions in the pre-upgrade snapshot (`brew list --cask --versions`) so rollback hints can cover upgraded casks, covered by tests
 - [ ] Guard `brew autoremove` and `brew cleanup` with their dry-run listings so a run with nothing to remove does not invoke the mutating command, covered by tests
 - [ ] Extend the idempotency test to the uv, mise, Docker and Colima steps with stateful stubs, so every mutating step proves a second run changes nothing
+- [ ] Apply per-step and global timeouts to `--check` mode, with a "timed out" check status distinct from "failed", so a hung read-only query cannot hang the report
 
 ## Milestone 4: macOS Depth
 

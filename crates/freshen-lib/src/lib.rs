@@ -7,6 +7,7 @@
 pub mod apps;
 pub mod check;
 pub mod containers;
+pub(crate) mod deadline;
 pub mod homebrew;
 pub mod listing;
 pub mod lock;
