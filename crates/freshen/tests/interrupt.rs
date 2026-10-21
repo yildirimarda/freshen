@@ -41,6 +41,55 @@ fn send_signal(child: &Child, signal: &str) {
     assert!(status.success(), "kill {signal} failed with {status}");
 }
 
+fn wait_for_pid(path: &std::path::Path) -> i32 {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            if let Ok(pid) = text.trim().parse() {
+                return pid;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for a pid in {}",
+            path.display()
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn process_is_running(pid: i32) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(stat) => stat
+                .rsplit_once(')')
+                .and_then(|(_, rest)| rest.split_whitespace().next())
+                .is_some_and(|state| state != "Z"),
+            Err(_) => false,
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+}
+
+fn wait_until_gone(pid: i32, limit: Duration) -> bool {
+    let deadline = Instant::now() + limit;
+    while Instant::now() < deadline {
+        if !process_is_running(pid) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    !process_is_running(pid)
+}
+
 fn spawn(tools: &StubTools, steps: &str, args: &[&str]) -> Child {
     tools
         .command()
@@ -143,6 +192,38 @@ fn sigterm_stops_the_running_step_too() {
         stderr(&output)
     );
     assert!(stdout(&output).contains("interrupted"));
+}
+
+#[test]
+fn sigint_kills_grandchildren_started_by_the_running_step() {
+    let tools = StubTools::new(&["slow"]);
+    tools.set_script(
+        "slow",
+        r#"/bin/sleep 30 &
+child=$!
+printf '%s\n' "$child" > "$FRESHEN_STUB_STATE/grandchild.pid"
+wait"#,
+    );
+
+    let child = spawn(&tools, "slow", &[]);
+    wait_for_call(&tools, "slow");
+    let pid = wait_for_pid(&tools.home().join("grandchild.pid"));
+    send_signal(&child, "-INT");
+
+    let output = child
+        .wait_with_output()
+        .unwrap_or_else(|error| panic!("failed to wait for freshen: {error}"));
+
+    assert_eq!(
+        output.status.code(),
+        Some(130),
+        "stderr: {}",
+        stderr(&output)
+    );
+    assert!(
+        wait_until_gone(pid, Duration::from_secs(5)),
+        "grandchild {pid} outlived the interrupted step"
+    );
 }
 
 #[test]
