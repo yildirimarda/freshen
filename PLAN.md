@@ -97,7 +97,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Make retry backoff sleeps respect the step and global deadlines and SIGINT, so a long retry wait cannot overshoot a timeout or delay interrupt handling, covered by tests
 - [x] Probe the process table for stale toolchain processes on Windows (parent PID and command line) instead of silently skipping when `ps` is unavailable, covered by tests with injected process facts
 - [x] Warn only about toolchain versions `mise prune` will actually remove, using a dry-run or install listing so a process on a newer non-active version is not reported as old, covered by tests
-- [ ] Include destructive cleanup results (removed items and reclaimed space) in the `--json` and `--markdown` reports, covered by tests
+- [x] Include destructive cleanup results (removed items and reclaimed space) in the `--json` and `--markdown` reports, covered by tests
 - [ ] Assign a Windows child to its job object before it starts running (spawn suspended, then resume after assignment) so a grandchild spawned immediately cannot escape the process tree on timeout, covered by a Windows test
 - [ ] Make the package-manager wait loop check for SIGINT instead of polling until the wait expires, so an interrupt during the pre-run wait is honored promptly, covered by a test
 
