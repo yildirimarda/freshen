@@ -8,6 +8,20 @@ fail=0
 ok()  { echo "ok    $1"; }
 bad() { echo "FAIL  $1"; fail=1; }
 
+# Workflows are proposed under ci-proposals/ until a human applies them with
+# `git mv` to .github/workflows/. Accept either location for every workflow so
+# applying a proposal never breaks these checks.
+workflow_path() {
+  local name="$1" path
+  for path in "ci-proposals/$name.yml" ".github/workflows/$name.yml"; do
+    if [[ -f "$path" ]]; then
+      printf '%s\n' "$path"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # 1. The legacy zsh implementation and its deprecated sh compatibility shim
 #    are gone.
 if [[ ! -e update-all.sh ]]; then
@@ -85,39 +99,36 @@ PY
   if (( deny_ok )); then ok "deny.toml (valid TOML, licenses allow-list, advisories)"; fi
 
   prop_ok=1
-  if [[ -f ci-proposals/rust.yml ]]; then
-    grep -q 'cargo-deny:' ci-proposals/rust.yml || { echo "  no cargo-deny job"; prop_ok=0; }
-    grep -q 'cargo deny check licenses' ci-proposals/rust.yml || { echo "  missing licenses check"; prop_ok=0; }
-    grep -q 'cargo deny check advisories' ci-proposals/rust.yml || { echo "  missing advisories check"; prop_ok=0; }
-    if (( prop_ok )); then ok "ci-proposals/rust.yml cargo-deny job (licenses + advisories)"; else bad "ci-proposals/rust.yml missing a cargo-deny job running both checks"; fi
+  rust_file="$(workflow_path rust)"
+  if [[ -n "$rust_file" ]]; then
+    grep -q 'cargo-deny:' "$rust_file" || { echo "  no cargo-deny job"; prop_ok=0; }
+    grep -q 'cargo deny check licenses' "$rust_file" || { echo "  missing licenses check"; prop_ok=0; }
+    grep -q 'cargo deny check advisories' "$rust_file" || { echo "  missing advisories check"; prop_ok=0; }
+    if (( prop_ok )); then ok "$rust_file cargo-deny job (licenses + advisories)"; else bad "$rust_file missing a cargo-deny job running both checks"; fi
   else
-    bad "deny.toml present but ci-proposals/rust.yml missing"
+    bad "deny.toml present but no rust workflow in ci-proposals/ or .github/workflows/"
   fi
 fi
 
 # 6. MSRV job: the CI proposal reads the workspace rust-version and checks the
 #    whole workspace including all test targets with that exact toolchain, so a
 #    newer language feature cannot slip in unnoticed.
-if [[ -f Cargo.toml && -f ci-proposals/rust.yml ]]; then
+rust_file="$(workflow_path rust)"
+if [[ -f Cargo.toml && -n "$rust_file" ]]; then
   msrv_ok=1
   msrv="$(sed -n 's/^rust-version[[:space:]]*=[[:space:]]*"\([^"]*\)"/\1/p' Cargo.toml | head -n1)"
   [[ -n "$msrv" ]] || { echo "  Cargo.toml has no rust-version"; msrv_ok=0; }
-  grep -q '^  msrv:' ci-proposals/rust.yml || { echo "  no msrv job"; msrv_ok=0; }
-  grep -q 'rust-version' ci-proposals/rust.yml || { echo "  msrv job does not read rust-version"; msrv_ok=0; }
-  grep -q 'steps.msrv.outputs.version' ci-proposals/rust.yml || { echo "  msrv job does not use the manifest value"; msrv_ok=0; }
-  grep -q 'cargo +.*check --workspace --all-targets' ci-proposals/rust.yml || { echo "  msrv job does not run cargo check --workspace --all-targets"; msrv_ok=0; }
-  if (( msrv_ok )); then ok "ci-proposals/rust.yml MSRV job (rust-version -> cargo check --workspace --all-targets)"; else bad "ci-proposals/rust.yml missing an MSRV check job"; fi
+  grep -q '^  msrv:' "$rust_file" || { echo "  no msrv job"; msrv_ok=0; }
+  grep -q 'rust-version' "$rust_file" || { echo "  msrv job does not read rust-version"; msrv_ok=0; }
+  grep -q 'steps.msrv.outputs.version' "$rust_file" || { echo "  msrv job does not use the manifest value"; msrv_ok=0; }
+  grep -q 'cargo +.*check --workspace --all-targets' "$rust_file" || { echo "  msrv job does not run cargo check --workspace --all-targets"; msrv_ok=0; }
+  if (( msrv_ok )); then ok "$rust_file MSRV job (rust-version -> cargo check --workspace --all-targets)"; else bad "$rust_file missing an MSRV check job"; fi
 fi
 
 # 7. CI replaces the old zsh syntax step with a guard that the compatibility
 #    shim stays removed. Check the proposal until a human applies it, then the
 #    active workflow.
-ci_file=""
-if [[ -f ci-proposals/ci.yml ]]; then
-  ci_file="ci-proposals/ci.yml"
-elif [[ -f .github/workflows/ci.yml ]]; then
-  ci_file=".github/workflows/ci.yml"
-fi
+ci_file="$(workflow_path ci)"
 if [[ -n "$ci_file" ]]; then
   ci_ok=1
   grep -q 'test ! -e update-all.sh' "$ci_file" || { echo "  no shim-removal guard"; ci_ok=0; }
@@ -125,6 +136,18 @@ if [[ -n "$ci_file" ]]; then
   if (( ci_ok )); then ok "$ci_file checks that the update-all.sh shim is gone"; else bad "$ci_file does not replace the zsh syntax step with a shim check"; fi
 else
   bad "no CI workflow proposal or active workflow found"
+fi
+
+# 8. The real-tools workflow is optional until its job is proposed, but once it
+#    exists it is accepted either as a proposal or after being applied.
+if real_tools_file="$(workflow_path real-tools)"; then
+  ok "real-tools workflow found at $real_tools_file"
+fi
+
+# 9. Prove the layout rules above: run this script against a fixture with every
+#    workflow in ci-proposals/ and again with them in .github/workflows/.
+if [[ "${RUN_TESTS_SKIP_WORKFLOW_LAYOUTS:-}" != "1" && -f tests/workflow-layouts.sh ]]; then
+  bash tests/workflow-layouts.sh || fail=1
 fi
 
 exit "$fail"
