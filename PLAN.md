@@ -194,6 +194,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Detect running processes whose executables live under the install location of an outdated winget, Chocolatey or Scoop package and apply the quit/force-kill policy before upgrading it, covered by tests with injected process and package facts
 - [ ] Run PowerShell-based steps with a process-scoped execution policy (`-NoProfile -ExecutionPolicy Bypass` only for freshen's own invocation) and never change the machine policy, covered by tests of the generated command line
 - [ ] Add Docker Desktop on Windows (WSL2 backend) and Podman Desktop to the container runtime abstraction, including the interaction with `wsl --update`, covered by stub-based tests
+- [ ] Port the stub-based integration tests that do not need Unix-only facilities (signals, shell scripts, POSIX paths) off `#![cfg(unix)]` and run them against the Windows `.cmd` stubs, so the Windows matrix leg executes the package-manager transcripts instead of compiling empty test crates
 
 ## Milestone 7: Language and Developer Tooling
 

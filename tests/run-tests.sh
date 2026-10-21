@@ -144,8 +144,30 @@ if real_tools_file="$(workflow_path real-tools)"; then
   ok "real-tools workflow found at $real_tools_file"
 fi
 
-# 9. Prove the layout rules above: run this script against a fixture with every
-#    workflow in ci-proposals/ and again with them in .github/workflows/.
+# 9. CI matrix: lint, unit tests and the stub-based integration tests must run
+#    on macOS, Ubuntu and Windows, so platform-specific process, signal and
+#    lock behaviour is exercised instead of only the Linux code path.
+rust_file="$(workflow_path rust)"
+if [[ -f Cargo.toml && -n "$rust_file" ]]; then
+  matrix_ok=1
+  grep -qF 'matrix:' "$rust_file" || { echo "  no CI matrix"; matrix_ok=0; }
+  for runner in ubuntu-latest macos-latest windows-latest; do
+    grep -qF "$runner" "$rust_file" || { echo "  matrix does not include $runner"; matrix_ok=0; }
+  done
+  grep -qF 'runs-on: ${{ matrix.os }}' "$rust_file" || { echo "  job does not run on the matrix OS"; matrix_ok=0; }
+  grep -qF 'cargo fmt --all -- --check' "$rust_file" || { echo "  no fmt lint step"; matrix_ok=0; }
+  grep -qF 'cargo clippy --all-targets --all-features -- -D warnings' "$rust_file" || { echo "  no clippy lint step"; matrix_ok=0; }
+  grep -qF 'cargo test --all-features --lib --bins' "$rust_file" || { echo "  no unit test step"; matrix_ok=0; }
+  grep -qF 'cargo test --all-features --tests' "$rust_file" || { echo "  no stub-based integration test step"; matrix_ok=0; }
+  if (( matrix_ok )); then
+    ok "$rust_file CI matrix (macOS, Ubuntu, Windows: lint, unit and integration tests)"
+  else
+    bad "$rust_file does not run lint, unit and stub-based integration tests on all three runners"
+  fi
+fi
+
+# 10. Prove the layout rules above: run this script against a fixture with every
+#     workflow in ci-proposals/ and again with them in .github/workflows/.
 if [[ "${RUN_TESTS_SKIP_WORKFLOW_LAYOUTS:-}" != "1" && -f tests/workflow-layouts.sh ]]; then
   bash tests/workflow-layouts.sh || fail=1
 fi
