@@ -3,12 +3,16 @@
 //! The host process table is scripted through the test harness, so these tests
 //! never look for a real `brew`, `apt`, `dpkg` or `winget` process.
 
-#![cfg(all(feature = "test-harness", unix))]
+#![cfg(feature = "test-harness")]
 
 mod support;
 
-use std::process::{Child, Command, Output, Stdio};
+use std::process::Output;
+#[cfg(unix)]
+use std::process::{Child, Command, Stdio};
+#[cfg(unix)]
 use std::thread;
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 use support::StubTools;
@@ -17,6 +21,7 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+#[cfg(unix)]
 fn send_signal(child: &Child, signal: &str) {
     let status = Command::new("kill")
         .args([signal, &child.id().to_string()])
@@ -25,6 +30,7 @@ fn send_signal(child: &Child, signal: &str) {
     assert!(status.success(), "kill {signal} failed with {status}");
 }
 
+#[cfg(unix)]
 fn wait_for_run_lock(tools: &StubTools) {
     let pid_file = tools.home().join("lock").join("freshen.lock.pid");
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -122,6 +128,7 @@ fn dry_run_and_check_do_not_look_for_package_managers() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn sigint_during_the_package_manager_wait_returns_promptly() {
     let tools = StubTools::new(&["probe"]);

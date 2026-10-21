@@ -3,7 +3,7 @@
 //! The lock is held by the test process itself, so a real second run can be
 //! started while it is held without spawning a long-running first update.
 
-#![cfg(all(feature = "test-harness", unix))]
+#![cfg(feature = "test-harness")]
 
 mod support;
 

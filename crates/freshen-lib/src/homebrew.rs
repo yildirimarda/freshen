@@ -175,27 +175,11 @@ pub fn installed_app_paths(apps: &[String], roots: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 fn detect_brew() -> Detection {
-    let Some(path) = env::var_os("PATH") else {
-        return Detection::NotInstalled;
-    };
-    if env::split_paths(&path).any(|directory| is_executable(&directory.join("brew"))) {
+    if crate::executable::command_exists("brew") {
         Detection::Installed
     } else {
         Detection::NotInstalled
     }
-}
-
-#[cfg(unix)]
-fn is_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-
-    path.metadata()
-        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-}
-
-#[cfg(not(unix))]
-fn is_executable(path: &Path) -> bool {
-    path.is_file()
 }
 
 fn run_brew(step: StepId, spec: CommandSpec) -> Result<ProcessOutput, StepError> {
