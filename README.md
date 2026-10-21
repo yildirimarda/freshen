@@ -15,7 +15,7 @@ The implementation is the Rust workspace under `crates/`: `freshen-lib` holds al
 | Homebrew | `brew update` → `brew upgrade --formula` → quit running apps → `brew upgrade --cask --greedy` → `brew autoremove` → `brew cleanup --prune=all` → reopen the apps it quit |
 | Colima / Docker | If `colima`/`lima` itself is about to be upgraded: bring compose projects down, stop standalone containers, stop Colima, upgrade, start Colima, bring everything back up. Afterwards: `docker compose pull` + `up -d` for running compose projects (only changed containers are recreated) and `docker image prune -f` |
 | uv | `uv tool upgrade --all` → `uv cache prune` |
-| mise | `mise self-update` (only if mise was not installed via brew) → `mise upgrade` → `mise prune -y`, plus a warning for processes still running on an old Node version |
+| mise | `mise self-update` (only if mise was not installed via brew) → `mise upgrade` → `mise prune -y`, plus a warning for processes still running on an old Node, Python, Java or Go version, naming the app that started them |
 
 A failing step never aborts the run. Failures are collected and listed at the end (exit code 1).
 

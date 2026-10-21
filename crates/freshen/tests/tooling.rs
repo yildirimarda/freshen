@@ -125,6 +125,9 @@ fn mise_self_updates_upgrades_and_prunes_when_not_installed_with_brew() {
             "mise upgrade",
             "mise prune -y",
             "mise where node",
+            "mise where python",
+            "mise where java",
+            "mise where go",
         ]
     );
 }
@@ -150,6 +153,9 @@ fn mise_installed_with_brew_is_not_self_updated() {
             "mise upgrade",
             "mise prune -y",
             "mise where node",
+            "mise where python",
+            "mise where java",
+            "mise where go",
         ]
     );
 }
@@ -168,7 +174,10 @@ fn mise_self_updates_when_brew_is_not_installed() {
             "mise self-update -y",
             "mise upgrade",
             "mise prune -y",
-            "mise where node"
+            "mise where node",
+            "mise where python",
+            "mise where java",
+            "mise where go"
         ]
     );
 }
@@ -192,7 +201,10 @@ fn a_failing_mise_self_update_is_only_a_warning() {
             "mise self-update -y",
             "mise upgrade",
             "mise prune -y",
-            "mise where node"
+            "mise where node",
+            "mise where python",
+            "mise where java",
+            "mise where go"
         ]
     );
     assert!(
@@ -221,7 +233,10 @@ fn a_failing_mise_upgrade_still_prunes_and_fails_the_step() {
             "mise self-update -y",
             "mise upgrade",
             "mise prune -y",
-            "mise where node"
+            "mise where node",
+            "mise where python",
+            "mise where java",
+            "mise where go"
         ]
     );
     assert!(
@@ -303,10 +318,111 @@ fn warns_about_processes_still_running_an_old_node_version() {
             "mise upgrade",
             "mise prune -y",
             "mise where node",
+            "mise where python",
+            "mise where java",
+            "mise where go",
             "ps -axo pid=,ppid=,command=",
             "ps -o comm= -p 1",
         ]
     );
+}
+
+#[test]
+fn warns_about_old_node_python_java_and_go_processes_with_their_parent_apps() {
+    let tools = StubTools::new(&["mise", "ps"]);
+    tools.set_script(
+        "mise",
+        r#"case "$*" in
+  "where node")
+    printf '/home/user/.local/share/mise/installs/node/22.1.0\n'
+    ;;
+  "where python")
+    printf '/home/user/.local/share/mise/installs/python/3.12.0\n'
+    ;;
+  "where java")
+    printf '/home/user/.local/share/mise/installs/java/21.0.0\n'
+    ;;
+  "where go")
+    printf '/home/user/.local/share/mise/installs/go/1.22.0\n'
+    ;;
+esac"#,
+    );
+    tools.set_script(
+        "ps",
+        r#"case "$*" in
+  "-axo pid=,ppid=,command=")
+    printf '%s\n' \
+      '  100    10 /home/user/.local/share/mise/installs/node/20.0.0/bin/node /path/old.js' \
+      '  101    10 /home/user/.local/share/mise/installs/node/22.1.0/bin/node /path/current.js' \
+      '  200    20 /home/user/.local/share/mise/installs/python/3.10.0/bin/python3 /path/old.py' \
+      '  201    20 /home/user/.local/share/mise/installs/python/3.12.0/bin/python3 /path/current.py' \
+      '  300    30 /home/user/.local/share/mise/installs/java/17.0.0/bin/java -jar old.jar' \
+      '  301    30 /home/user/.local/share/mise/installs/java/21.0.0/bin/java -jar current.jar' \
+      '  400    40 /home/user/.local/share/mise/installs/go/1.21.0/bin/go run main.go' \
+      '  401    40 /home/user/.local/share/mise/installs/go/1.22.0/bin/go run main.go'
+    ;;
+  "-o comm= -p 10")
+    printf '/Applications/LM Studio.app/Contents/MacOS/LM Studio\n'
+    ;;
+  "-o comm= -p 20")
+    printf '/Applications/Code.app/Contents/MacOS/Electron\n'
+    ;;
+  "-o comm= -p 30")
+    printf '/Applications/IntelliJ IDEA.app/Contents/MacOS/idea\n'
+    ;;
+  "-o comm= -p 40")
+    printf '/usr/local/bin/zsh\n'
+    ;;
+esac"#,
+    );
+
+    let output = run(&tools, "mise");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    for (tool, pid, parent, command) in [
+        (
+            "node",
+            "100",
+            "LM Studio",
+            "/home/user/.local/share/mise/installs/node/20.0.0/bin/node /path/old.js",
+        ),
+        (
+            "python",
+            "200",
+            "Electron",
+            "/home/user/.local/share/mise/installs/python/3.10.0/bin/python3 /path/old.py",
+        ),
+        (
+            "java",
+            "300",
+            "idea",
+            "/home/user/.local/share/mise/installs/java/17.0.0/bin/java -jar old.jar",
+        ),
+        (
+            "go",
+            "400",
+            "zsh",
+            "/home/user/.local/share/mise/installs/go/1.21.0/bin/go run main.go",
+        ),
+    ] {
+        assert!(
+            text.contains(&format!(
+                "warning: Processes still running on an old {tool} version (restart the app that started them so mise can prune it):"
+            )),
+            "missing {tool} warning: {text}"
+        );
+        assert!(
+            text.contains(&format!("   - pid {pid} (started by: {parent}): {command}")),
+            "missing {tool} process line: {text}"
+        );
+    }
+    for pid in ["101", "201", "301", "401"] {
+        assert!(
+            !text.contains(&format!("pid {pid}")),
+            "the active version must not be reported: {text}"
+        );
+    }
 }
 
 #[test]
