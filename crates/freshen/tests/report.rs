@@ -50,6 +50,21 @@ fn run(tools: &StubTools, args: &[&str]) -> Output {
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
 }
 
+fn install_brew_cleanup(tools: &StubTools) {
+    tools.set_script(
+        "brew",
+        r#"case "$*" in
+  "cleanup --dry-run --prune=all")
+    printf 'Would remove: /tmp/foo (2.5MB)\n'
+    ;;
+  "cleanup --prune=all")
+    printf 'Removing: /tmp/foo (2.5MB)\n'
+    printf '==> This operation has freed approximately 2.5MB of disk space.\n'
+    ;;
+esac"#,
+    );
+}
+
 #[test]
 fn json_report_contains_the_before_and_after_versions() {
     let tools = StubTools::new(&["brew"]);
@@ -120,6 +135,95 @@ fn markdown_report_contains_a_table_with_the_before_and_after_versions() {
     assert!(text.contains("jq 1.7.1 -> 1.8.0"), "report: {text}");
     assert!(text.contains("## Rollback hints"), "report: {text}");
     assert!(text.contains("brew install jq@1.7.1"), "report: {text}");
+}
+
+#[test]
+fn json_report_contains_cleanup_removals_and_reclaimed_space() {
+    let tools = StubTools::new(&["brew"]);
+    install_brew_cleanup(&tools);
+
+    let output = run(&tools, &["--only", "brew-cleanup", "--cleanup", "--json"]);
+
+    assert!(
+        output.status.success(),
+        "stdout: {} stderr: {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    let text = stdout(&output);
+    let json = text
+        .lines()
+        .skip_while(|line| *line != "{")
+        .collect::<Vec<_>>()
+        .join("\n");
+    let report: serde_json::Value = match serde_json::from_str(&json) {
+        Ok(report) => report,
+        Err(error) => panic!("invalid JSON report: {error}: {text}"),
+    };
+
+    assert_eq!(report["steps"][0]["id"], "brew-cleanup");
+    assert_eq!(
+        report["steps"][0]["cleanup"][0]["removed"][0],
+        "Removing: /tmp/foo (2.5MB)"
+    );
+    assert_eq!(report["steps"][0]["cleanup"][0]["reclaimed"], "2.5MB");
+}
+
+#[test]
+fn markdown_report_contains_cleanup_removals_and_reclaimed_space() {
+    let tools = StubTools::new(&["brew"]);
+    install_brew_cleanup(&tools);
+
+    let output = run(
+        &tools,
+        &["--only", "brew-cleanup", "--cleanup", "--markdown"],
+    );
+
+    assert!(
+        output.status.success(),
+        "stdout: {} stderr: {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    let text = stdout(&output);
+
+    assert!(text.contains("## Cleanup"), "report: {text}");
+    assert!(
+        text.contains("### Homebrew cleanup (`brew-cleanup`)"),
+        "report: {text}"
+    );
+    assert!(text.contains("Reclaimed space: `2.5MB`"), "report: {text}");
+    assert!(
+        text.contains("- Removing: /tmp/foo (2.5MB)"),
+        "report: {text}"
+    );
+}
+
+#[test]
+fn reports_without_cleanup_keep_an_empty_cleanup_list() {
+    let tools = StubTools::new(&["brew"]);
+    install_brew(&tools);
+
+    let output = run(&tools, &["--only", "brew-formulae", "--json"]);
+
+    assert!(
+        output.status.success(),
+        "stdout: {} stderr: {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    let report: serde_json::Value = match serde_json::from_str(&stdout(&output)) {
+        Ok(report) => report,
+        Err(error) => panic!("invalid JSON report: {error}"),
+    };
+    assert_eq!(report["steps"][0]["cleanup"], serde_json::json!([]));
+
+    let markdown = run(&tools, &["--only", "brew-formulae", "--markdown"]);
+    assert!(
+        !stdout(&markdown).contains("## Cleanup"),
+        "markdown: {}",
+        stdout(&markdown)
+    );
 }
 
 #[test]

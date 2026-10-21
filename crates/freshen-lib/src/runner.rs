@@ -17,6 +17,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use crate::check::{CheckResult, CheckSummary};
+use crate::cleanup::{self, CleanupReport};
 use crate::containers::{COLIMA_STOP, DOCKER};
 use crate::deadline::{self, Deadline};
 use crate::options::{RunOptions, SelectionFlag};
@@ -166,8 +167,8 @@ impl fmt::Display for VersionChange {
     }
 }
 
-/// The collected result of one step: status, duration, version changes and
-/// failure detail.
+/// The collected result of one step: status, duration, version changes,
+/// cleanup reports and failure detail.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StepResult {
     id: StepId,
@@ -175,6 +176,7 @@ pub struct StepResult {
     status: StepStatus,
     duration: Duration,
     changes: Vec<VersionChange>,
+    cleanups: Vec<CleanupReport>,
     skip_reason: Option<SkipReason>,
     error: Option<StepError>,
 }
@@ -187,6 +189,7 @@ impl StepResult {
             status,
             duration,
             changes: Vec::new(),
+            cleanups: Vec::new(),
             skip_reason: None,
             error: None,
         }
@@ -194,6 +197,11 @@ impl StepResult {
 
     fn with_changes(mut self, changes: Vec<VersionChange>) -> Self {
         self.changes = changes;
+        self
+    }
+
+    fn with_cleanups(mut self, cleanups: Vec<CleanupReport>) -> Self {
+        self.cleanups = cleanups;
         self
     }
 
@@ -272,6 +280,12 @@ impl StepResult {
     #[must_use]
     pub fn has_changes(&self) -> bool {
         !self.changes.is_empty()
+    }
+
+    /// Destructive cleanup results produced by the step, in run order.
+    #[must_use]
+    pub fn cleanups(&self) -> &[CleanupReport] {
+        &self.cleanups
     }
 
     /// Why the step was skipped, when it was.
@@ -833,6 +847,7 @@ fn run_step(
                 return StepResult::interrupted(step, started.elapsed());
             }
 
+            let recorder = cleanup::Recorder::start();
             let result = match step.run_with_options(options) {
                 Ok(()) if interrupt() => StepResult::interrupted(step, started.elapsed()),
                 Ok(()) => match step.cleanup() {
@@ -849,6 +864,7 @@ fn run_step(
                 ),
                 Err(error) => StepResult::failed(step, started.elapsed(), error),
             };
+            let cleanups = recorder.finish();
 
             let changes =
                 if result.status() == StepStatus::Interrupted || result.skip_reason().is_some() {
@@ -863,7 +879,7 @@ fn run_step(
                     }
                 };
 
-            result.with_changes(changes)
+            result.with_changes(changes).with_cleanups(cleanups)
         }
         Err(_error) if interrupt() => StepResult::interrupted(step, started.elapsed()),
         Err(error) if error.is_registry_unreachable() => {

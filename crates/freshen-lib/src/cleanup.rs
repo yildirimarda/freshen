@@ -5,6 +5,8 @@
 //! [`ENABLE_FLAG`]. When they do run, every line the command prints is echoed
 //! and the reclaimed space is reported when the tool tells us about it.
 
+use std::cell::RefCell;
+
 use crate::options::RunOptions;
 use crate::process::CommandSpec;
 use crate::step::{StepError, StepId};
@@ -31,6 +33,46 @@ impl CleanupReport {
     pub fn reclaimed(&self) -> Option<&str> {
         self.reclaimed.as_deref()
     }
+}
+
+thread_local! {
+    static RECORDED: RefCell<Option<Vec<CleanupReport>>> = const { RefCell::new(None) };
+}
+
+/// Collects the cleanup reports produced on the current thread until it is
+/// finished.
+///
+/// The runner installs a recorder around every step so the reports can be
+/// attached to the step result. Outside a recorder, [`run`] still prints its
+/// output but does not store anything. Keeping the recorder in a thread-local
+/// means parallel runners (and parallel tests) never share one.
+pub(crate) struct Recorder {
+    previous: Option<Vec<CleanupReport>>,
+}
+
+impl Recorder {
+    /// Starts recording cleanup reports on the current thread.
+    pub(crate) fn start() -> Self {
+        let previous = RECORDED.with(|recorded| recorded.replace(Some(Vec::new())));
+        Self { previous }
+    }
+
+    /// Stops recording and returns the reports collected since [`start`].
+    ///
+    /// [`start`]: Recorder::start
+    pub(crate) fn finish(self) -> Vec<CleanupReport> {
+        RECORDED
+            .with(|recorded| recorded.replace(self.previous))
+            .unwrap_or_default()
+    }
+}
+
+fn record(report: &CleanupReport) {
+    RECORDED.with(|recorded| {
+        if let Some(reports) = recorded.borrow_mut().as_mut() {
+            reports.push(report.clone());
+        }
+    });
 }
 
 /// Runs a destructive cleanup command when cleanup is enabled.
@@ -122,7 +164,10 @@ fn run_enabled(
         None => println!("{label}: reclaimed space: not reported by the tool"),
     }
 
-    Ok(Some(CleanupReport { removed, reclaimed }))
+    let report = CleanupReport { removed, reclaimed };
+    record(&report);
+
+    Ok(Some(report))
 }
 
 /// Returns whether a dry-run cleanup listing shows work to do.
@@ -212,7 +257,29 @@ fn parenthesized_size(line: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{listing_reports_removals, parse_reclaimed_space};
+    use super::{listing_reports_removals, parse_reclaimed_space, record, CleanupReport, Recorder};
+
+    #[test]
+    fn the_recorder_collects_reports_until_it_finishes() {
+        let recorder = Recorder::start();
+        record(&CleanupReport {
+            removed: vec!["Removing: /tmp/foo (2.5MB)".to_owned()],
+            reclaimed: Some("2.5MB".to_owned()),
+        });
+
+        let reports = recorder.finish();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].removed(), ["Removing: /tmp/foo (2.5MB)"]);
+        assert_eq!(reports[0].reclaimed(), Some("2.5MB"));
+    }
+
+    #[test]
+    fn recording_outside_a_recorder_is_harmless() {
+        record(&CleanupReport::default());
+
+        let recorder = Recorder::start();
+        assert!(recorder.finish().is_empty());
+    }
 
     #[test]
     fn parses_docker_total_reclaimed_space() {

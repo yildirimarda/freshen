@@ -26,12 +26,24 @@ pub(crate) fn run_json(summary: &RunSummary) -> String {
                 })
                 .collect();
 
+            let cleanup: Vec<Value> = result
+                .cleanups()
+                .iter()
+                .map(|report| {
+                    json!({
+                        "removed": report.removed(),
+                        "reclaimed": report.reclaimed(),
+                    })
+                })
+                .collect();
+
             json!({
                 "id": result.id(),
                 "name": result.name(),
                 "status": result.status().as_str(),
                 "duration_ms": result.duration().as_millis(),
                 "changes": changes,
+                "cleanup": cleanup,
                 "skip_reason": result.skip_reason().map(|reason| reason.to_string()),
                 "error": result.error().map(|error| error.to_string()),
             })
@@ -113,6 +125,37 @@ pub(crate) fn run_markdown(summary: &RunSummary) -> String {
             format_duration(result.duration()),
             escape_cell(&changes)
         ));
+    }
+
+    if summary
+        .steps()
+        .iter()
+        .any(|result| !result.cleanups().is_empty())
+    {
+        out.push_str("\n## Cleanup\n\n");
+        for result in summary
+            .steps()
+            .iter()
+            .filter(|result| !result.cleanups().is_empty())
+        {
+            out.push_str(&format!(
+                "### {} (`{}`)\n\n",
+                escape_cell(result.name()),
+                result.id()
+            ));
+            for report in result.cleanups() {
+                match report.reclaimed() {
+                    Some(space) => out.push_str(&format!("Reclaimed space: `{space}`\n\n")),
+                    None => out.push_str("Reclaimed space: not reported by the tool\n\n"),
+                }
+                for line in report.removed() {
+                    out.push_str("- ");
+                    out.push_str(line);
+                    out.push('\n');
+                }
+                out.push('\n');
+            }
+        }
     }
 
     if !summary.restore_failures().is_empty() {
