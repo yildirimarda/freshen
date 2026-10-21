@@ -104,6 +104,10 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Honour `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` and custom CA bundles in the network preflight check and document how every step inherits them, covered by tests with injected environment
 - [x] Report the specific network preflight failure (invalid proxy URL, unreadable CA bundle, TLS handshake failure) instead of the generic "network is unreachable", covered by tests with injected environment
 - [x] Support CIDR ranges such as `10.0.0.0/8` in `NO_PROXY` matching so private networks are bypassed without listing every address, covered by tests with injected environment
+- [ ] Turn the zellij, tmux and SSH session warnings into one table-driven session guard (entry per tool: package names, server process pattern, in-session environment variable such as `TMUX` or `ZELLIJ`), keeping today's behaviour so that adding a tool is one table row, covered by the existing tests
+- [ ] Add GNU screen (`STY`, `screen -ls`), byobu, dtach/abduco and mosh-server to the session guard so an upgrade warns about every terminal session it would break, covered by tests with injected process tables
+- [ ] Extend terminal emulator detection with iTerm2, Apple Terminal, Rio, Termius, Zed, Cursor, Windsurf and JetBrains IDE terminals (bundle ids and `TERM_PROGRAM` values) so freshen never quits the terminal that runs it, covered by tests
+- [ ] Generalise the README wording: replace the zellij-only bullet and the Ghostty/iTerm2 examples with the list of supported terminals and session managers, generated from the same tables where possible
 
 ## Milestone 4: macOS Depth
 
@@ -149,6 +153,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Add a Linux container integration test matrix (Ubuntu, Fedora, Arch) in CI
 - [ ] Make the Homebrew steps work with Homebrew on Linux (`/home/linuxbrew/.linuxbrew`, no casks), covered by tests with injected paths
 - [ ] Add image-based distributions: `rpm-ostree upgrade` (Fedora Silverblue/Kinoite) and `bootc upgrade` as staged upgrades that announce the pending reboot, covered by recorded transcripts
+- [ ] (Optional, low priority) Detect Termux on Android (`TERMUX_VERSION`, `PREFIX` under `/data/data/com.termux`) and treat it as a Linux variant that upgrades with `pkg update` and `pkg upgrade` without root, covered by tests with injected environment
 
 ## Milestone 6: Windows
 
