@@ -64,9 +64,10 @@ pub use snapshot::{
 };
 pub use step::{CheckReport, Detection, Operation, OutdatedItem, Step, StepError, StepId};
 pub use system::{
-    Arch, Distro, Environment, HostProbe, OsInfo, Privilege, ProcessInfo, SystemInfo, SystemProbe,
-    Terminal, TerminalApp,
+    supported_terminals, Arch, Distro, Environment, HostProbe, OsInfo, Privilege, ProcessInfo,
+    SystemInfo, SystemProbe, Terminal, TerminalApp,
 };
+pub use warnings::supported_session_managers;
 
 /// Major and minor feature release this binary implements, e.g. `"0.1"`.
 ///
