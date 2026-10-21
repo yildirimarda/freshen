@@ -707,6 +707,33 @@ fn check_skips_a_missing_tool_and_never_calls_it() {
 }
 
 #[test]
+fn check_reports_a_hung_query_as_timed_out_with_exit_1() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_script(
+        "brew",
+        r#"case "$*" in
+  "outdated --formula")
+    /bin/sleep 5
+    ;;
+esac"#,
+    );
+
+    let output = run(
+        &tools,
+        &["--check", "--only", "brew-formulae", "--step-timeout", "1"],
+    );
+
+    assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
+    assert_eq!(tools.step_calls(), ["brew outdated --formula"]);
+    let text = stdout(&output);
+    assert!(
+        text.contains("Homebrew formulae: timed out"),
+        "output: {text}"
+    );
+    assert!(!text.contains("failed during check"), "output: {text}");
+}
+
+#[test]
 fn check_reports_a_failed_query_with_exit_1() {
     let tools = StubTools::new(&["brew"]);
     tools.set_script(
