@@ -251,8 +251,8 @@ mod tests {
     use crate::registry::Registry;
     use crate::runner::{Runner, SkipReason};
     use crate::step::{CheckReport, Detection, Step, StepError, StepId};
-    use std::cell::Cell;
-    use std::rc::Rc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     struct TestStep {
         id: StepId,
@@ -262,7 +262,7 @@ mod tests {
         fail_detect: bool,
         prerequisites: &'static [StepId],
         conflicts: &'static [StepId],
-        detect_calls: Rc<Cell<usize>>,
+        detect_calls: Arc<AtomicUsize>,
     }
 
     impl TestStep {
@@ -275,7 +275,7 @@ mod tests {
                 fail_detect: false,
                 prerequisites: &[],
                 conflicts: &[],
-                detect_calls: Rc::new(Cell::new(0)),
+                detect_calls: Arc::new(AtomicUsize::new(0)),
             }
         }
 
@@ -299,8 +299,8 @@ mod tests {
             self
         }
 
-        fn detect_calls(&self) -> Rc<Cell<usize>> {
-            Rc::clone(&self.detect_calls)
+        fn detect_calls(&self) -> Arc<AtomicUsize> {
+            Arc::clone(&self.detect_calls)
         }
     }
 
@@ -314,7 +314,7 @@ mod tests {
         }
 
         fn detect(&self) -> Result<Detection, StepError> {
-            self.detect_calls.set(self.detect_calls.get() + 1);
+            self.detect_calls.fetch_add(1, Ordering::SeqCst);
             if self.fail_detect {
                 return Err(StepError::detect(self.id, "cannot detect"));
             }
@@ -407,7 +407,7 @@ mod tests {
             listed.steps()[0].skip_reason(),
             Some(SkipReason::UnsupportedPlatform)
         );
-        assert_eq!(calls.get(), 0);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]

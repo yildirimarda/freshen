@@ -12,10 +12,9 @@
 //! steps, exactly like `colima_was_running`, `compose_projects` and
 //! `standalone_containers` in `update-all.sh`.
 
-use std::cell::RefCell;
 use std::env;
 use std::path::Path;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
@@ -185,19 +184,26 @@ struct Snapshot {
 }
 
 #[derive(Clone, Default)]
-struct ContainerSnapshot(Rc<RefCell<Option<Snapshot>>>);
+struct ContainerSnapshot(Arc<Mutex<Option<Snapshot>>>);
 
 impl ContainerSnapshot {
     fn store(&self, snapshot: Snapshot) {
-        *self.0.borrow_mut() = Some(snapshot);
+        *lock(&self.0) = Some(snapshot);
     }
 
     fn get(&self) -> Option<Snapshot> {
-        self.0.borrow().clone()
+        lock(&self.0).clone()
     }
 
     fn clear(&self) {
-        *self.0.borrow_mut() = None;
+        *lock(&self.0) = None;
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
     }
 }
 

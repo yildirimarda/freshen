@@ -293,12 +293,12 @@ mod tests {
     use crate::platform::Platform;
     use crate::runner::Runner;
     use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
-    use std::cell::Cell;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     struct ReportStep {
         report: CheckReport,
         after: CheckReport,
-        ran: Cell<bool>,
+        ran: AtomicBool,
     }
 
     impl ReportStep {
@@ -306,7 +306,7 @@ mod tests {
             Self {
                 report: before,
                 after,
-                ran: Cell::new(false),
+                ran: AtomicBool::new(false),
             }
         }
     }
@@ -325,7 +325,7 @@ mod tests {
         }
 
         fn check(&self) -> Result<CheckReport, StepError> {
-            if self.ran.get() {
+            if self.ran.load(Ordering::SeqCst) {
                 Ok(self.after.clone())
             } else {
                 Ok(self.report.clone())
@@ -333,7 +333,7 @@ mod tests {
         }
 
         fn run(&self) -> Result<(), StepError> {
-            self.ran.set(true);
+            self.ran.store(true, Ordering::SeqCst);
             Ok(())
         }
 

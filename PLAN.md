@@ -109,7 +109,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Extend terminal emulator detection with iTerm2, Apple Terminal, Rio, Termius, Zed, Cursor, Windsurf and JetBrains IDE terminals (bundle ids and `TERM_PROGRAM` values) so freshen never quits the terminal that runs it, covered by tests
 - [x] Generalise the README wording: replace the zellij-only bullet and the Ghostty/iTerm2 examples with the list of supported terminals and session managers, generated from the same tables where possible
 - [x] Implement read-only `check()` for the uv and mise steps (`uv tool list --outdated`, `mise outdated`) so `--check` reports pending tool updates instead of always reporting them up to date, covered by recorded transcripts
-- [ ] Run independent read-only `check()` queries concurrently with bounded concurrency (`--jobs N`, default 4) while keeping the printed order and the summary deterministic, covered by tests with slow stubs
+- [x] Run independent read-only `check()` queries concurrently with bounded concurrency (`--jobs N`, default 4) while keeping the printed order and the summary deterministic, covered by tests with slow stubs
 - [ ] Fall back to the detected terminal app's bundle id when `__CFBundleIdentifier` is absent, so the cask quit protection also covers hosts identified only through `TERM_PROGRAM` or environment markers, covered by tests
 
 ## Milestone 4: CI, Configuration and macOS Depth
@@ -303,5 +303,6 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Add the Cargo workspace checks promised by `tests/README.md` to `tests/run-tests.sh`: the workspace sets an MSRV (`rust-version`), `rust-toolchain.toml` pins an exact channel with `rustfmt`/`clippy`, and every crate under `crates/` inherits the workspace MSRV and lints
 - [ ] Probe both IPv4 and IPv6 (and allow overriding the endpoint) in the network preflight check so IPv6-only or filtered networks are not reported as unreachable, covered by tests with injected endpoints
 - [ ] Detect user-marked metered networks on macOS instead of only hotspot SSIDs, so the metered preflight check matches the system setting, covered by tests with injected command output
+- [ ] Make `StubTools` append each invocation to the stub log atomically, so integration tests can assert the calls of concurrently executed `--check` steps without interleaved lines, covered by a test that runs two stubs at once
 
 <!-- The agent appends newly found work here. -->

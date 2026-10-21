@@ -14,6 +14,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::check::{CheckResult, CheckSummary};
@@ -732,51 +734,82 @@ impl<'a> Runner<'a> {
     /// without running or cleaning up anything. The configured step and global
     /// timeouts bound detection and the read-only query too, so a hung query
     /// cannot hang the report.
+    ///
+    /// Up to [`RunOptions::jobs`] queries run at the same time. Results keep
+    /// the run order regardless of which query finishes first, so the printed
+    /// report and its summary stay deterministic.
     #[must_use]
     pub fn check(&self) -> CheckSummary {
+        if self.steps.is_empty() {
+            return CheckSummary::from_results(Vec::new());
+        }
+
         let run_started = Instant::now();
         let global_deadline = self
             .options
             .global_timeout()
             .map(|limit| Deadline::after(run_started, limit));
-        let mut results = Vec::with_capacity(self.steps.len());
+        let step_timeout = self.options.step_timeout();
+        let jobs = self.options.jobs().min(self.steps.len());
+        let next = AtomicUsize::new(0);
+        let results = Mutex::new(vec![None; self.steps.len()]);
 
-        for planned in self.steps.iter().copied() {
-            let now = Instant::now();
-            if global_deadline.is_some_and(|deadline| now >= deadline.at()) {
-                match planned {
-                    PlannedStep::Run(step) => {
-                        results.push(CheckResult::timed_out(step, Duration::ZERO));
+        std::thread::scope(|scope| {
+            for _ in 0..jobs {
+                scope.spawn(|| loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(planned) = self.steps.get(index).copied() else {
+                        break;
+                    };
+                    let result = check_planned(planned, step_timeout, global_deadline);
+                    let mut slots = match results.lock() {
+                        Ok(slots) => slots,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    if let Some(slot) = slots.get_mut(index) {
+                        *slot = Some(result);
                     }
-                    PlannedStep::Skip { step, reason } => {
-                        results.push(CheckResult::skipped(step, reason, Duration::ZERO));
-                    }
-                }
-                continue;
+                });
             }
+        });
 
-            let result = match planned {
-                PlannedStep::Run(step) => {
-                    let deadline =
-                        effective_deadline(now, self.options.step_timeout(), global_deadline);
-                    let guard = deadline::enter(deadline);
-                    let result = check_step(step);
-                    drop(guard);
+        let results = match results.into_inner() {
+            Ok(slots) => slots,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        CheckSummary::from_results(results.into_iter().flatten().collect())
+    }
+}
 
-                    if deadline.is_some_and(|deadline| deadline.expired()) {
-                        result.into_timed_out()
-                    } else {
-                        result
-                    }
-                }
-                PlannedStep::Skip { step, reason } => {
-                    CheckResult::skipped(step, reason, Duration::ZERO)
-                }
-            };
-            results.push(result);
+fn check_planned(
+    planned: PlannedStep<'_>,
+    step_timeout: Option<Duration>,
+    global_deadline: Option<Deadline>,
+) -> CheckResult {
+    let now = Instant::now();
+    if global_deadline.is_some_and(|deadline| now >= deadline.at()) {
+        return match planned {
+            PlannedStep::Run(step) => CheckResult::timed_out(step, Duration::ZERO),
+            PlannedStep::Skip { step, reason } => {
+                CheckResult::skipped(step, reason, Duration::ZERO)
+            }
+        };
+    }
+
+    match planned {
+        PlannedStep::Run(step) => {
+            let deadline = effective_deadline(now, step_timeout, global_deadline);
+            let guard = deadline::enter(deadline);
+            let result = check_step(step);
+            drop(guard);
+
+            if deadline.is_some_and(|deadline| deadline.expired()) {
+                result.into_timed_out()
+            } else {
+                result
+            }
         }
-
-        CheckSummary::from_results(results)
+        PlannedStep::Skip { step, reason } => CheckResult::skipped(step, reason, Duration::ZERO),
     }
 }
 
@@ -961,10 +994,9 @@ mod tests {
     use crate::options::{RunOptions, StepSelection};
     use crate::platform::Platform;
     use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
-    use std::cell::Cell;
     use std::process::ExitCode;
-    use std::rc::Rc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
 
     static INTERRUPT: AtomicBool = AtomicBool::new(false);
@@ -975,11 +1007,13 @@ mod tests {
 
     #[derive(Default)]
     struct Calls {
-        detect: Cell<usize>,
-        check: Cell<usize>,
-        run: Cell<usize>,
-        cleanup: Cell<usize>,
-        restore: Cell<usize>,
+        detect: AtomicUsize,
+        check: AtomicUsize,
+        run: AtomicUsize,
+        cleanup: AtomicUsize,
+        restore: AtomicUsize,
+        check_active: AtomicUsize,
+        check_max_active: AtomicUsize,
     }
 
     struct FakeStep {
@@ -997,7 +1031,7 @@ mod tests {
         sleep: Duration,
         check_sleep: Duration,
         interrupt_on_run: bool,
-        calls: Rc<Calls>,
+        calls: Arc<Calls>,
     }
 
     impl FakeStep {
@@ -1017,7 +1051,7 @@ mod tests {
                 sleep: Duration::ZERO,
                 check_sleep: Duration::ZERO,
                 interrupt_on_run: false,
-                calls: Rc::new(Calls::default()),
+                calls: Arc::new(Calls::default()),
             }
         }
 
@@ -1078,13 +1112,18 @@ mod tests {
             self
         }
 
+        fn sharing_calls(mut self, calls: Arc<Calls>) -> Self {
+            self.calls = calls;
+            self
+        }
+
         fn interrupt_on_run(mut self) -> Self {
             self.interrupt_on_run = true;
             self
         }
 
-        fn calls(&self) -> Rc<Calls> {
-            Rc::clone(&self.calls)
+        fn calls(&self) -> Arc<Calls> {
+            Arc::clone(&self.calls)
         }
     }
 
@@ -1098,7 +1137,7 @@ mod tests {
         }
 
         fn detect(&self) -> Result<Detection, StepError> {
-            self.calls.detect.set(self.calls.detect.get() + 1);
+            self.calls.detect.fetch_add(1, Ordering::SeqCst);
             if self.fail_detect {
                 return Err(StepError::detect(self.id, "cannot detect"));
             }
@@ -1106,10 +1145,15 @@ mod tests {
         }
 
         fn check(&self) -> Result<CheckReport, StepError> {
-            self.calls.check.set(self.calls.check.get() + 1);
+            self.calls.check.fetch_add(1, Ordering::SeqCst);
+            let active = self.calls.check_active.fetch_add(1, Ordering::SeqCst) + 1;
+            self.calls
+                .check_max_active
+                .fetch_max(active, Ordering::SeqCst);
             if !self.check_sleep.is_zero() {
                 std::thread::sleep(self.check_sleep);
             }
+            self.calls.check_active.fetch_sub(1, Ordering::SeqCst);
             if self.fail_check {
                 return Err(StepError::check(self.id, self.check_error));
             }
@@ -1117,7 +1161,7 @@ mod tests {
         }
 
         fn run(&self) -> Result<(), StepError> {
-            self.calls.run.set(self.calls.run.get() + 1);
+            self.calls.run.fetch_add(1, Ordering::SeqCst);
             if !self.sleep.is_zero() {
                 std::thread::sleep(self.sleep);
             }
@@ -1131,7 +1175,7 @@ mod tests {
         }
 
         fn cleanup(&self) -> Result<(), StepError> {
-            self.calls.cleanup.set(self.calls.cleanup.get() + 1);
+            self.calls.cleanup.fetch_add(1, Ordering::SeqCst);
             if self.fail_cleanup {
                 return Err(StepError::cleanup(self.id, "cleanup failed"));
             }
@@ -1139,7 +1183,7 @@ mod tests {
         }
 
         fn restore(&self) -> Result<(), StepError> {
-            self.calls.restore.set(self.calls.restore.get() + 1);
+            self.calls.restore.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
 
@@ -1180,11 +1224,11 @@ mod tests {
         assert!(!summary.has_failures());
         assert_exit_code(summary.exit_code(), ExitCode::SUCCESS);
 
-        assert_eq!(first_calls.detect.get(), 1);
-        assert_eq!(first_calls.run.get(), 1);
-        assert_eq!(first_calls.cleanup.get(), 1);
-        assert_eq!(second_calls.run.get(), 1);
-        assert_eq!(second_calls.cleanup.get(), 1);
+        assert_eq!(first_calls.detect.load(Ordering::SeqCst), 1);
+        assert_eq!(first_calls.run.load(Ordering::SeqCst), 1);
+        assert_eq!(first_calls.cleanup.load(Ordering::SeqCst), 1);
+        assert_eq!(second_calls.run.load(Ordering::SeqCst), 1);
+        assert_eq!(second_calls.cleanup.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -1203,9 +1247,9 @@ mod tests {
         assert_eq!(summary.failed_count(), 0);
         assert_exit_code(summary.exit_code(), ExitCode::SUCCESS);
 
-        assert_eq!(calls.detect.get(), 1);
-        assert_eq!(calls.run.get(), 0);
-        assert_eq!(calls.cleanup.get(), 0);
+        assert_eq!(calls.detect.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.run.load(Ordering::SeqCst), 0);
+        assert_eq!(calls.cleanup.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -1226,9 +1270,9 @@ mod tests {
         assert_exit_code(summary.exit_code(), ExitCode::SUCCESS);
         assert!(summary.to_string().contains("1 planned"));
 
-        assert_eq!(calls.detect.get(), 1);
-        assert_eq!(calls.run.get(), 0);
-        assert_eq!(calls.cleanup.get(), 0);
+        assert_eq!(calls.detect.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.run.load(Ordering::SeqCst), 0);
+        assert_eq!(calls.cleanup.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -1265,13 +1309,13 @@ mod tests {
             "Homebrew:\n  jq 1.7.1 -> 1.8.0\n1 update(s) pending across 1 step(s).\n"
         );
 
-        assert_eq!(outdated_calls.detect.get(), 1);
-        assert_eq!(outdated_calls.check.get(), 1);
-        assert_eq!(outdated_calls.run.get(), 0);
-        assert_eq!(outdated_calls.cleanup.get(), 0);
-        assert_eq!(current_calls.check.get(), 1);
-        assert_eq!(current_calls.run.get(), 0);
-        assert_eq!(missing_calls.check.get(), 0);
+        assert_eq!(outdated_calls.detect.load(Ordering::SeqCst), 1);
+        assert_eq!(outdated_calls.check.load(Ordering::SeqCst), 1);
+        assert_eq!(outdated_calls.run.load(Ordering::SeqCst), 0);
+        assert_eq!(outdated_calls.cleanup.load(Ordering::SeqCst), 0);
+        assert_eq!(current_calls.check.load(Ordering::SeqCst), 1);
+        assert_eq!(current_calls.run.load(Ordering::SeqCst), 0);
+        assert_eq!(missing_calls.check.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -1308,7 +1352,7 @@ mod tests {
 
         assert_eq!(summary.steps()[0].status(), CheckStatus::Failed);
         assert_exit_code(summary.exit_code(), ExitCode::FAILURE);
-        assert_eq!(calls.check.get(), 0);
+        assert_eq!(calls.check.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -1333,7 +1377,9 @@ mod tests {
         let slow = FakeStep::new("brew", "Homebrew").check_sleep(Duration::from_millis(200));
         let remaining = FakeStep::new("uv", "uv");
         let remaining_calls = remaining.calls();
-        let options = RunOptions::new().with_global_timeout(Some(Duration::from_millis(20)));
+        let options = RunOptions::new()
+            .with_jobs(1)
+            .with_global_timeout(Some(Duration::from_millis(20)));
         let steps: [&dyn Step; 2] = [&slow, &remaining];
 
         let summary = Runner::with_options(steps, options).check();
@@ -1342,7 +1388,58 @@ mod tests {
         assert_eq!(summary.steps()[1].status(), CheckStatus::TimedOut);
         assert_eq!(summary.timed_out_count(), 2);
         assert_eq!(summary.failed_count(), 0);
-        assert_eq!(remaining_calls.check.get(), 0);
+        assert_eq!(remaining_calls.check.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn check_runs_independent_queries_concurrently_within_the_job_limit() {
+        let slow = Duration::from_millis(100);
+        let calls = Arc::new(Calls::default());
+        let first = FakeStep::new("brew", "Homebrew")
+            .check_sleep(slow)
+            .sharing_calls(Arc::clone(&calls));
+        let second = FakeStep::new("uv", "uv")
+            .check_sleep(slow)
+            .sharing_calls(Arc::clone(&calls));
+        let third = FakeStep::new("mise", "mise")
+            .check_sleep(slow)
+            .sharing_calls(Arc::clone(&calls));
+        let fourth = FakeStep::new("docker", "Docker")
+            .check_sleep(slow)
+            .sharing_calls(Arc::clone(&calls));
+        let steps: [&dyn Step; 4] = [&first, &second, &third, &fourth];
+        let options = RunOptions::new().with_jobs(2);
+
+        let summary = Runner::with_options(steps, options).check();
+
+        assert_eq!(summary.up_to_date_count(), 4);
+        assert_eq!(calls.check.load(Ordering::SeqCst), 4);
+        assert_eq!(calls.check_max_active.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn check_keeps_the_run_order_when_a_later_query_finishes_first() {
+        let slow = FakeStep::new("brew", "Homebrew")
+            .check_sleep(Duration::from_millis(100))
+            .report(CheckReport::from_items([OutdatedItem::new("jq")]));
+        let fast =
+            FakeStep::new("uv", "uv").report(CheckReport::from_items([OutdatedItem::new("ruff")]));
+        let medium = FakeStep::new("mise", "mise")
+            .check_sleep(Duration::from_millis(50))
+            .report(CheckReport::from_items([OutdatedItem::new("node")]));
+        let steps: [&dyn Step; 3] = [&slow, &fast, &medium];
+        let options = RunOptions::new().with_jobs(3);
+
+        let summary = Runner::with_options(steps, options).check();
+
+        let ids: Vec<StepId> = summary.steps().iter().map(|step| step.id()).collect();
+        assert_eq!(ids, ["brew", "uv", "mise"]);
+        assert_eq!(summary.outdated_steps(), 3);
+        assert_eq!(summary.pending(), 3);
+        assert_eq!(
+            summary.to_string(),
+            "Homebrew:\n  jq\nuv:\n  ruff\nmise:\n  node\n3 update(s) pending across 3 step(s).\n"
+        );
     }
 
     #[test]
@@ -1386,10 +1483,10 @@ mod tests {
         assert_exit_code(summary.exit_code(), ExitCode::SUCCESS);
         assert!(summary.to_string().contains("conflicts with `brew`"));
 
-        assert_eq!(earlier_calls.run.get(), 1);
-        assert_eq!(later_calls.detect.get(), 0);
-        assert_eq!(later_calls.run.get(), 0);
-        assert_eq!(later_calls.cleanup.get(), 0);
+        assert_eq!(earlier_calls.run.load(Ordering::SeqCst), 1);
+        assert_eq!(later_calls.detect.load(Ordering::SeqCst), 0);
+        assert_eq!(later_calls.run.load(Ordering::SeqCst), 0);
+        assert_eq!(later_calls.cleanup.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -1475,10 +1572,10 @@ mod tests {
             result.error().map(StepError::operation),
             Some(crate::step::Operation::Run)
         );
-        assert_eq!(failing_calls.cleanup.get(), 0);
+        assert_eq!(failing_calls.cleanup.load(Ordering::SeqCst), 0);
 
-        assert_eq!(healthy_calls.run.get(), 1);
-        assert_eq!(healthy_calls.cleanup.get(), 1);
+        assert_eq!(healthy_calls.run.load(Ordering::SeqCst), 1);
+        assert_eq!(healthy_calls.cleanup.load(Ordering::SeqCst), 1);
         assert_eq!(summary.steps()[1].status(), StepStatus::Ok);
     }
 
@@ -1523,9 +1620,9 @@ mod tests {
             result.error().map(StepError::operation),
             Some(crate::step::Operation::Detect)
         );
-        assert_eq!(calls.detect.get(), 1);
-        assert_eq!(calls.run.get(), 0);
-        assert_eq!(calls.cleanup.get(), 0);
+        assert_eq!(calls.detect.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.run.load(Ordering::SeqCst), 0);
+        assert_eq!(calls.cleanup.load(Ordering::SeqCst), 0);
         assert_exit_code(summary.exit_code(), ExitCode::FAILURE);
     }
 
@@ -1542,8 +1639,8 @@ mod tests {
             result.error().map(StepError::operation),
             Some(crate::step::Operation::Cleanup)
         );
-        assert_eq!(calls.run.get(), 1);
-        assert_eq!(calls.cleanup.get(), 1);
+        assert_eq!(calls.run.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.cleanup.load(Ordering::SeqCst), 1);
         assert_exit_code(summary.exit_code(), ExitCode::FAILURE);
     }
 
@@ -1578,7 +1675,7 @@ mod tests {
         let text = summary.to_string();
         assert!(text.contains("timed out"), "summary: {text}");
         assert!(text.contains("0 failed, 1 timed out"), "summary: {text}");
-        assert_eq!(calls.restore.get(), 1);
+        assert_eq!(calls.restore.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -1595,7 +1692,7 @@ mod tests {
         assert_eq!(summary.steps()[1].status(), StepStatus::Ok);
         assert_eq!(summary.timed_out_count(), 1);
         assert_eq!(summary.ok_count(), 1);
-        assert_eq!(healthy_calls.run.get(), 1);
+        assert_eq!(healthy_calls.run.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -1614,10 +1711,10 @@ mod tests {
         assert_eq!(summary.timed_out_count(), 2);
         assert_eq!(summary.failed_count(), 0);
         assert_exit_code(summary.exit_code(), ExitCode::FAILURE);
-        assert_eq!(slow_calls.restore.get(), 1);
-        assert_eq!(later_calls.restore.get(), 1);
-        assert_eq!(later_calls.detect.get(), 0);
-        assert_eq!(later_calls.run.get(), 0);
+        assert_eq!(slow_calls.restore.load(Ordering::SeqCst), 1);
+        assert_eq!(later_calls.restore.load(Ordering::SeqCst), 1);
+        assert_eq!(later_calls.detect.load(Ordering::SeqCst), 0);
+        assert_eq!(later_calls.run.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -1689,14 +1786,14 @@ mod tests {
         assert_exit_code(summary.exit_code(), ExitCode::from(130));
         assert!(summary.to_string().contains("interrupted"));
 
-        assert_eq!(first_calls.cleanup.get(), 1);
-        assert_eq!(second_calls.cleanup.get(), 0);
-        assert_eq!(third_calls.detect.get(), 0);
-        assert_eq!(third_calls.run.get(), 0);
+        assert_eq!(first_calls.cleanup.load(Ordering::SeqCst), 1);
+        assert_eq!(second_calls.cleanup.load(Ordering::SeqCst), 0);
+        assert_eq!(third_calls.detect.load(Ordering::SeqCst), 0);
+        assert_eq!(third_calls.run.load(Ordering::SeqCst), 0);
 
-        assert_eq!(first_calls.restore.get(), 1);
-        assert_eq!(second_calls.restore.get(), 1);
-        assert_eq!(third_calls.restore.get(), 1);
+        assert_eq!(first_calls.restore.load(Ordering::SeqCst), 1);
+        assert_eq!(second_calls.restore.load(Ordering::SeqCst), 1);
+        assert_eq!(third_calls.restore.load(Ordering::SeqCst), 1);
 
         INTERRUPT.store(false, Ordering::SeqCst);
     }

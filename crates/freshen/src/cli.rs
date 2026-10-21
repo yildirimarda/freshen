@@ -77,6 +77,10 @@ pub struct Cli {
     #[arg(long, value_name = "SECONDS", default_value_t = 0)]
     pub timeout: u64,
 
+    /// How many read-only checks `--check` may query at the same time.
+    #[arg(long, value_name = "N", default_value_t = freshen_lib::DEFAULT_JOBS)]
+    pub jobs: usize,
+
     /// Skip the preflight check that the network is reachable.
     #[arg(long)]
     pub skip_network_check: bool,
@@ -135,6 +139,7 @@ impl Cli {
             .with_step_timeout(timeout(self.step_timeout))
             .with_global_timeout(timeout(self.timeout))
             .with_snapshot_retention(self.snapshot_retention)
+            .with_jobs(self.jobs)
             .with_preflight(preflight)
             .with_package_manager(package_manager)
             .with_selection(
@@ -185,6 +190,7 @@ mod tests {
         );
         assert_eq!(options.step_timeout(), None);
         assert_eq!(options.global_timeout(), None);
+        assert_eq!(options.jobs(), freshen_lib::DEFAULT_JOBS);
         assert!(options.selection().is_empty());
         for check in freshen_lib::PreflightCheck::ALL {
             assert!(options.preflight().is_enabled(check), "{check}");
@@ -221,6 +227,8 @@ mod tests {
             "120",
             "--timeout",
             "3600",
+            "--jobs",
+            "6",
             "--skip-network-check",
             "--skip-disk-check",
             "--skip-battery-check",
@@ -250,6 +258,7 @@ mod tests {
             options.global_timeout(),
             Some(std::time::Duration::from_secs(3600))
         );
+        assert_eq!(options.jobs(), 6);
         assert_eq!(options.selection().only(), ["brew"]);
         assert_eq!(options.selection().skip(), ["casks"]);
         for check in freshen_lib::PreflightCheck::ALL {

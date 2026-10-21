@@ -281,8 +281,11 @@ impl StepError {
 /// One unit of work in a freshen run.
 ///
 /// Implementors are stateless where possible; `&self` lets the registry keep
-/// steps behind `Box<dyn Step>` and call them in any order.
-pub trait Step {
+/// steps behind `Box<dyn Step>` and call them in any order. `--check` queries
+/// independent steps on several threads, so implementations must be `Sync`:
+/// shared mutable state has to use `Arc<Mutex<_>>` or atomics rather than
+/// `Rc`/`Cell`.
+pub trait Step: Sync {
     /// Stable identifier used by prerequisites, conflicts and `--only`/`--skip`.
     fn id(&self) -> StepId;
 
@@ -355,7 +358,7 @@ mod tests {
     use crate::options::RunOptions;
     use crate::platform::Platform;
     use crate::snapshot::{SnapshotCommand, SnapshotSection};
-    use std::cell::Cell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct FakeStep {
         id: StepId,
@@ -366,8 +369,8 @@ mod tests {
         conflicts: &'static [StepId],
         platforms: &'static [Platform],
         snapshot: Option<SnapshotSection>,
-        run_calls: Cell<usize>,
-        cleanup_calls: Cell<usize>,
+        run_calls: AtomicUsize,
+        cleanup_calls: AtomicUsize,
         fail_run: bool,
     }
 
@@ -382,8 +385,8 @@ mod tests {
                 conflicts: &[],
                 platforms: &Platform::ALL,
                 snapshot: None,
-                run_calls: Cell::new(0),
-                cleanup_calls: Cell::new(0),
+                run_calls: AtomicUsize::new(0),
+                cleanup_calls: AtomicUsize::new(0),
                 fail_run: false,
             }
         }
@@ -407,7 +410,7 @@ mod tests {
         }
 
         fn run(&self) -> Result<(), StepError> {
-            self.run_calls.set(self.run_calls.get() + 1);
+            self.run_calls.fetch_add(1, Ordering::SeqCst);
             if self.fail_run {
                 return Err(StepError::run(self.id, "upgrade failed"));
             }
@@ -415,7 +418,7 @@ mod tests {
         }
 
         fn cleanup(&self) -> Result<(), StepError> {
-            self.cleanup_calls.set(self.cleanup_calls.get() + 1);
+            self.cleanup_calls.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
 
@@ -502,7 +505,7 @@ mod tests {
 
         let checked = report(&step);
 
-        assert_eq!(step.run_calls.get(), 0);
+        assert_eq!(step.run_calls.load(Ordering::SeqCst), 0);
         assert!(!checked.is_up_to_date());
         assert_eq!(checked.pending(), 2);
         assert_eq!(checked.items()[0].name(), "jq");
@@ -530,8 +533,8 @@ mod tests {
         assert!(step.run().is_ok());
         assert!(step.cleanup().is_ok());
 
-        assert_eq!(step.run_calls.get(), 1);
-        assert_eq!(step.cleanup_calls.get(), 1);
+        assert_eq!(step.run_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(step.cleanup_calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -540,7 +543,7 @@ mod tests {
 
         assert!(step.run_with_options(&RunOptions::new()).is_ok());
 
-        assert_eq!(step.run_calls.get(), 1);
+        assert_eq!(step.run_calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
