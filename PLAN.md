@@ -93,6 +93,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Record cask versions in the pre-upgrade snapshot (`brew list --cask --versions`) so rollback hints can cover upgraded casks, covered by tests
 - [ ] Guard `brew autoremove` and `brew cleanup` with their dry-run listings so a run with nothing to remove does not invoke the mutating command, covered by tests
 - [ ] Extend the idempotency test to the uv, mise, Docker and Colima steps with stateful stubs, so every mutating step proves a second run changes nothing
+- [ ] Apply per-step and global timeouts to `--check` mode, with a "timed out" check status distinct from "failed", so a hung read-only query cannot hang the report
 
 ## Milestone 4: macOS Depth
 

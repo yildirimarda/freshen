@@ -30,6 +30,7 @@ A failing step never aborts the run. Failures are collected and listed at the en
 - **Every run starts with preflight checks**: the network must be reachable, at least 1 GiB must be free, the battery must be at or above 20% while discharging, and the connection must not be metered or a hotspot. A failed check stops before any step runs (exit code 3) and lists every problem. Each check can be disabled with `--skip-network-check`, `--skip-disk-check`, `--skip-battery-check` or `--skip-metered-check`; `--min-free-disk-gib` and `--battery-threshold` change the thresholds. `--dry-run` and `--check` skip preflight because they change nothing.
 - **Another package manager must not be running.** Before changing anything, freshen checks for Homebrew, apt/dpkg (including a held dpkg or apt lock) and winget. It waits up to 30 seconds for the other process to finish, then stops with exit code 3 and names the process and its PID. Use `--package-manager-wait <SECONDS>` to change the wait (0 aborts immediately) or `--skip-package-manager-check` to bypass the check. `--dry-run` and `--check` skip it because they change nothing.
 - **Every run records a pre-upgrade snapshot** of installed versions (`brew list --versions`, `brew bundle dump`, `uv tool list`, `mise ls`, Docker images) in a timestamped file under the platform state directory (`~/.local/state/freshen/snapshots` on Linux, `~/Library/Application Support/freshen/snapshots` on macOS, `%LOCALAPPDATA%\freshen\snapshots` on Windows). Set `FRESHEN_SNAPSHOT_DIR` to override the location. The summary prints the commands that reinstall the recorded versions.
+- **A hung step cannot hang the whole run.** `--step-timeout <SECONDS>` bounds each step (detection, check, upgrade and cleanup) and `--timeout <SECONDS>` bounds the whole run. A step that runs out of time is stopped, reported as `timed out` rather than `failed`, and anything it stopped is restored; `0` disables a timeout.
 - **Only one update runs at a time.** A second run stops with an error naming the PID that holds the lock. The lock lives under the platform state directory (`FRESHEN_LOCK_DIR` overrides it), and `--dry-run`/`--check` do not take it.
 
 ## Requirements
@@ -51,6 +52,7 @@ freshen --json                # print the report as JSON (before/after versions 
 freshen --markdown            # print the report as Markdown
 freshen --list-steps          # show every step, its detection and skip reason
 freshen --only brew,uv --skip brew-casks   # select steps
+freshen --step-timeout 600 --timeout 3600  # stop hung steps or a long run
 freshen --skip-metered-check  # run even on a phone hotspot
 freshen --min-free-disk-gib 5 --battery-threshold 30   # custom preflight thresholds
 freshen --package-manager-wait 0                      # abort instead of waiting for another package manager
@@ -103,6 +105,7 @@ cargo run -p freshen -- --markdown                   # Markdown report with vers
 cargo run -p freshen -- --list-steps                 # detect every step and explain skips
 cargo run -p freshen -- --only brew,uv --skip casks  # select steps
 cargo run -p freshen -- --yes --force-kill           # no prompts, kill stubborn apps
+cargo run -p freshen -- --step-timeout 600 --timeout 3600  # bound each step and the whole run
 cargo run -p freshen -- --skip-network-check         # bypass one preflight check
 cargo run -p freshen -- --package-manager-wait 0     # do not wait for another package manager
 ```

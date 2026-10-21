@@ -39,6 +39,8 @@ fn help_lists_every_flag() {
         "--skip",
         "--yes",
         "--force-kill",
+        "--step-timeout",
+        "--timeout",
         "--skip-network-check",
         "--skip-disk-check",
         "--skip-battery-check",

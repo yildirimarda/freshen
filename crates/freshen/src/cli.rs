@@ -52,6 +52,14 @@ pub struct Cli {
     #[arg(long)]
     pub force_kill: bool,
 
+    /// Stop a single step after this many seconds (0 disables the timeout).
+    #[arg(long, value_name = "SECONDS", default_value_t = 0)]
+    pub step_timeout: u64,
+
+    /// Stop the whole run after this many seconds (0 disables the timeout).
+    #[arg(long, value_name = "SECONDS", default_value_t = 0)]
+    pub timeout: u64,
+
     /// Skip the preflight check that the network is reachable.
     #[arg(long)]
     pub skip_network_check: bool,
@@ -106,6 +114,8 @@ impl Cli {
             .with_dry_run(self.dry_run)
             .with_assume_yes(self.yes)
             .with_force_kill(self.force_kill)
+            .with_step_timeout(timeout(self.step_timeout))
+            .with_global_timeout(timeout(self.timeout))
             .with_preflight(preflight)
             .with_package_manager(package_manager)
             .with_selection(
@@ -114,6 +124,10 @@ impl Cli {
                     .with_skip(self.skip.clone()),
             )
     }
+}
+
+fn timeout(seconds: u64) -> Option<Duration> {
+    (seconds > 0).then(|| Duration::from_secs(seconds))
 }
 
 #[cfg(test)]
@@ -145,6 +159,8 @@ mod tests {
         assert!(!options.is_dry_run());
         assert!(!options.assume_yes());
         assert!(!options.force_kill());
+        assert_eq!(options.step_timeout(), None);
+        assert_eq!(options.global_timeout(), None);
         assert!(options.selection().is_empty());
         for check in freshen_lib::PreflightCheck::ALL {
             assert!(options.preflight().is_enabled(check), "{check}");
@@ -174,6 +190,10 @@ mod tests {
             "casks",
             "--yes",
             "--force-kill",
+            "--step-timeout",
+            "120",
+            "--timeout",
+            "3600",
             "--skip-network-check",
             "--skip-disk-check",
             "--skip-battery-check",
@@ -193,6 +213,14 @@ mod tests {
         assert!(options.is_dry_run());
         assert!(options.assume_yes());
         assert!(options.force_kill());
+        assert_eq!(
+            options.step_timeout(),
+            Some(std::time::Duration::from_secs(120))
+        );
+        assert_eq!(
+            options.global_timeout(),
+            Some(std::time::Duration::from_secs(3600))
+        );
         assert_eq!(options.selection().only(), ["brew"]);
         assert_eq!(options.selection().skip(), ["casks"]);
         for check in freshen_lib::PreflightCheck::ALL {
@@ -273,6 +301,8 @@ mod tests {
             "--skip",
             "--yes",
             "--force-kill",
+            "--step-timeout",
+            "--timeout",
             "--skip-network-check",
             "--skip-disk-check",
             "--skip-battery-check",

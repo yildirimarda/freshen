@@ -54,6 +54,7 @@ pub(crate) fn run_json(summary: &RunSummary) -> String {
         "planned": summary.planned_count(),
         "skipped": summary.skipped_count(),
         "failed": summary.failed_count(),
+        "timed_out": summary.timed_out_count(),
         "interrupted": summary.interrupted_count(),
         "was_interrupted": summary.was_interrupted(),
         "restore_failures": summary.restore_failures(),
@@ -70,11 +71,12 @@ pub(crate) fn run_markdown(summary: &RunSummary) -> String {
     let mut out = String::new();
     out.push_str("# freshen report\n\n");
     out.push_str(&format!(
-        "**Summary:** {} ok, {} planned, {} skipped, {} failed, {} interrupted ({})\n\n",
+        "**Summary:** {} ok, {} planned, {} skipped, {} failed, {} timed out, {} interrupted ({})\n\n",
         summary.ok_count(),
         summary.planned_count(),
         summary.skipped_count(),
         summary.failed_count(),
+        summary.timed_out_count(),
         summary.interrupted_count(),
         format_duration(summary.total_duration())
     ));

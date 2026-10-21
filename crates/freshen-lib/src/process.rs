@@ -9,6 +9,8 @@
 //!   CLI stream progress while the command is still running;
 //! * the same bytes are captured and returned for the run log;
 //! * a per-command timeout kills a hung child instead of hanging the whole run;
+//! * the runner's per-step and global deadlines stop the same child even when
+//!   the command itself has no timeout;
 //! * the environment is inherited by default and can be extended, reduced or
 //!   cleared;
 //! * a command can be retried with exponential backoff.
@@ -23,7 +25,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::signals;
+use crate::{deadline, signals};
 
 /// How often the parent checks whether the child exited or timed out.
 ///
@@ -308,11 +310,29 @@ impl CommandSpec {
         let started = Instant::now();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        let mut attempt = 1;
+        let mut attempt: u32 = 1;
 
         loop {
             if signals::requested() {
                 return Err(ProcessError::Interrupted { program });
+            }
+
+            if deadline::expired() {
+                let timeout = deadline::current().map_or_else(
+                    || self.timeout.unwrap_or_default(),
+                    deadline::Deadline::limit,
+                );
+                return Err(ProcessError::TimedOut {
+                    program,
+                    timeout,
+                    output: Box::new(ProcessOutput {
+                        stdout: String::from_utf8_lossy(&stdout).into_owned(),
+                        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+                        status: None,
+                        attempts: attempt.saturating_sub(1),
+                        duration: started.elapsed(),
+                    }),
+                });
             }
 
             if attempt > 1 {
@@ -364,7 +384,12 @@ impl CommandSpec {
                     },
                     AttemptOutcome::TimedOut => ProcessError::TimedOut {
                         program,
-                        timeout: self.timeout.unwrap_or_default(),
+                        timeout: deadline::current()
+                            .filter(|deadline| deadline.expired())
+                            .map_or_else(
+                                || self.timeout.unwrap_or_default(),
+                                deadline::Deadline::limit,
+                            ),
                         output,
                     },
                     AttemptOutcome::Interrupted => ProcessError::Interrupted { program },
@@ -446,7 +471,8 @@ impl CommandSpec {
 
             let timed_out = self
                 .timeout
-                .is_some_and(|limit| attempt_started.elapsed() >= limit);
+                .is_some_and(|limit| attempt_started.elapsed() >= limit)
+                || deadline::expired();
             if timed_out {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -757,7 +783,7 @@ impl ProcessError {
 #[cfg(test)]
 mod tests {
     use super::{Backoff, CommandSpec, OutputStream, ProcessError};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     fn backoff() -> Backoff {
         Backoff::new(Duration::from_millis(10), Duration::from_millis(100))
@@ -876,6 +902,27 @@ mod tests {
             }) => {
                 assert_eq!(timeout, Duration::from_millis(50));
                 assert_eq!(output.attempts(), 1);
+                assert!(!output.success());
+                assert_eq!(output.status(), None);
+            }
+            other => panic!("expected a timeout, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_step_deadline_stops_a_command_even_without_a_command_timeout() {
+        let _guard = crate::deadline::enter(Some(crate::deadline::Deadline::after(
+            Instant::now(),
+            Duration::from_millis(50),
+        )));
+        let spec = shell("sleep 5");
+
+        match spec.run() {
+            Err(ProcessError::TimedOut {
+                timeout, output, ..
+            }) => {
+                assert_eq!(timeout, Duration::from_millis(50));
                 assert!(!output.success());
                 assert_eq!(output.status(), None);
             }

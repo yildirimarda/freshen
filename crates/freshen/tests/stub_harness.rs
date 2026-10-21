@@ -181,6 +181,21 @@ fn list_steps_reports_detection_without_calling_any_stub() {
     assert!(text.contains("excluded by --skip"), "listing: {text}");
 }
 
+#[cfg(unix)]
+#[test]
+fn a_step_that_exceeds_the_step_timeout_is_reported_as_timed_out() {
+    let tools = StubTools::new(&["slow"]);
+    tools.set_script("slow", "/bin/sleep 5");
+
+    let output = tools.run("slow", &["--step-timeout", "1"]);
+
+    assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
+    assert_eq!(tools.step_calls(), ["slow"]);
+    let text = stdout(&output);
+    assert!(text.contains("0 failed, 1 timed out"), "summary: {text}");
+    assert!(text.contains("timed out"), "summary: {text}");
+}
+
 #[test]
 fn dry_run_detects_steps_without_calling_any_stub() {
     let tools = StubTools::new(&["brew", "uv", "mise", "docker", "colima"]);
