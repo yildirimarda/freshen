@@ -14,7 +14,7 @@ git commit -m "ci: apply <name> proposal" && git push
 Pending proposals:
 
 - [ ] `ci-proposals/rust.yml` (separate Rust job, MSRV check, cargo-deny). Apply after the plan item "Make `tests/run-tests.sh` accept each proposed workflow..." has merged.
-- [ ] `ci-proposals/real-tools.yml` (read-only checks against real Homebrew, Chocolatey, winget and apt), once the agent has proposed it.
+- [ ] `ci-proposals/real-tools.yml` (read-only checks against real Homebrew, Chocolatey, winget and apt), once the agent has proposed it and the apt (Milestone 5) and winget/Chocolatey (Milestone 6) steps exist. The new jobs fail closed on a missing or skipped step, so applying the proposal before those steps land turns the workflow red by design.
 
 ## Accounts and credentials for Milestone 11 (distribution)
 
