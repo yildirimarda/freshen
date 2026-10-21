@@ -310,5 +310,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Make `StubTools` append each invocation to the stub log atomically, so integration tests can assert the calls of concurrently executed `--check` steps without interleaved lines, covered by a test that runs two stubs at once
 - [ ] Run every Windows command that needs a shell through `cmd.exe /C` with `cmd`-compatible quoting: the C runtime escapes a quote inside an argument with a backslash, which `cmd.exe` does not understand, so a quoted path arrives mangled
 - [ ] Verify the stub-based integration tests on `windows-latest`: while the Windows unit tests failed, the job stopped before that step, so the `.cmd` stubs have never been exercised in CI
+- [ ] Split `SSL_CERT_DIR` on the platform path delimiter when collecting CA bundle paths, the way OpenSSL and `rustls-native-certs` do, so a list of certificate directories is not treated as one bogus path that fails the network check, covered by tests
+- [ ] Report the native trust store load errors from the network preflight even when only some certificates were loaded, so a partly broken system trust store is not silently ignored, covered by tests with an injected trust store result
 
 <!-- The agent appends newly found work here. -->
