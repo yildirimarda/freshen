@@ -10,7 +10,7 @@ mod support;
 
 use std::process::Output;
 
-use support::{StubOutput, StubTools};
+use support::{output_with_retry, StubOutput, StubTools};
 
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
@@ -21,11 +21,52 @@ fn stdout(output: &Output) -> String {
 }
 
 fn run_stub(tools: &StubTools, tool: &str, args: &[&str]) -> Output {
-    tools
-        .stub_command(tool)
-        .args(args)
-        .output()
-        .unwrap_or_else(|error| panic!("failed to run stub {tool}: {error}"))
+    let mut command = tools.stub_command(tool);
+    command.args(args);
+    output_with_retry(command).unwrap_or_else(|error| panic!("failed to run stub {tool}: {error}"))
+}
+
+#[cfg(unix)]
+#[test]
+fn text_file_busy_is_retried_until_the_stub_is_runnable() {
+    use std::io;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    let attempts = AtomicU32::new(0);
+    let result = support::retry_text_file_busy(|| {
+        let attempt = attempts.fetch_add(1, Ordering::Relaxed) + 1;
+        if attempt < 3 {
+            Err(io::Error::from_raw_os_error(libc::ETXTBSY))
+        } else {
+            Ok(attempt)
+        }
+    });
+
+    assert_eq!(
+        result.unwrap_or_else(|error| panic!("retry failed: {error}")),
+        3
+    );
+    assert_eq!(attempts.load(Ordering::Relaxed), 3);
+}
+
+#[cfg(unix)]
+#[test]
+fn other_execution_errors_are_not_retried() {
+    use std::io;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    let attempts = AtomicU32::new(0);
+    let result = support::retry_text_file_busy(|| {
+        attempts.fetch_add(1, Ordering::Relaxed);
+        Err::<(), _>(io::Error::from_raw_os_error(libc::ENOENT))
+    });
+
+    let error = match result {
+        Ok(()) => panic!("expected the missing executable error"),
+        Err(error) => error,
+    };
+    assert_eq!(error.raw_os_error(), Some(libc::ENOENT));
+    assert_eq!(attempts.load(Ordering::Relaxed), 1);
 }
 
 #[test]
