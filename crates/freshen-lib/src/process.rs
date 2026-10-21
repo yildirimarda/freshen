@@ -127,6 +127,46 @@ impl Default for Backoff {
     }
 }
 
+/// Why a retry backoff wait ended.
+enum RetryWait {
+    Completed,
+    Interrupted,
+    TimedOut,
+}
+
+/// Waits `delay` before a retry without ignoring an interrupt or a deadline.
+///
+/// The wait is split into short slices so an interrupt stops the run promptly,
+/// and it is capped by the step's deadline so a long backoff can never run
+/// past the time the step is allowed to take.
+fn wait_before_retry(delay: Duration) -> RetryWait {
+    let started = Instant::now();
+
+    loop {
+        if signals::requested() {
+            return RetryWait::Interrupted;
+        }
+
+        let deadline = deadline::current();
+        if deadline.is_some_and(deadline::Deadline::expired) {
+            return RetryWait::TimedOut;
+        }
+
+        let remaining = delay.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            return RetryWait::Completed;
+        }
+
+        let until_deadline = deadline.map_or(remaining, |deadline| {
+            deadline.at().saturating_duration_since(Instant::now())
+        });
+        let slice = remaining.min(until_deadline).min(POLL_INTERVAL);
+        if !slice.is_zero() {
+            thread::sleep(slice);
+        }
+    }
+}
+
 /// How many times a network command is retried after its first attempt.
 pub const NETWORK_RETRIES: u32 = 2;
 
@@ -466,11 +506,11 @@ impl CommandSpec {
 
             if attempt > 1 {
                 let delay = self.backoff.delay_before(attempt);
-                if !delay.is_zero() {
-                    thread::sleep(delay);
-                }
-                if signals::requested() {
-                    return Err(ProcessError::Interrupted { program });
+                if matches!(
+                    wait_before_retry(delay),
+                    RetryWait::Interrupted | RetryWait::TimedOut
+                ) {
+                    continue;
                 }
             }
 
@@ -1306,6 +1346,37 @@ mod tests {
             }
             other => panic!("expected a timeout, got {other:?}"),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retry_backoff_stops_at_the_step_deadline_instead_of_overshooting_it() {
+        let _guard = crate::deadline::enter(Some(crate::deadline::Deadline::after(
+            Instant::now(),
+            Duration::from_millis(100),
+        )));
+        let spec = shell("exit 1").retries(5).backoff(Backoff::new(
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+        ));
+        let started = Instant::now();
+
+        let result = spec.run();
+        let elapsed = started.elapsed();
+
+        match result {
+            Err(ProcessError::TimedOut {
+                timeout, output, ..
+            }) => {
+                assert_eq!(timeout, Duration::from_millis(100));
+                assert_eq!(output.attempts(), 1);
+            }
+            other => panic!("expected a timeout, got {other:?}"),
+        }
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "the retry backoff overshot the deadline: {elapsed:?}"
+        );
     }
 
     #[cfg(unix)]

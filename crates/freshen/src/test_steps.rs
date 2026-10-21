@@ -6,15 +6,23 @@
 //! report themselves as installed and run their command during `run()`, which
 //! lets an integration test assert the exact call order against stubs on
 //! `PATH`.
+//!
+//! `FRESHEN_TEST_STEP_RETRIES` and `FRESHEN_TEST_STEP_BACKOFF_MS` optionally
+//! configure every probe command to retry failures with a fixed backoff, so an
+//! integration test can exercise interrupt and deadline handling while a
+//! command is waiting to retry.
 
 use freshen_lib::{
-    BatteryStatus, CheckReport, CommandSpec, Detection, PackageManagerProbe, PackageManagerProcess,
-    Platform, PreflightProbe, Registry, Step, StepError, StepId,
+    Backoff, BatteryStatus, CheckReport, CommandSpec, Detection, PackageManagerProbe,
+    PackageManagerProcess, Platform, PreflightProbe, Registry, Step, StepError, StepId,
 };
+use std::time::Duration;
 
 const ENV_VAR: &str = "FRESHEN_TEST_STEPS";
 const PREFLIGHT_ENV_VAR: &str = "FRESHEN_TEST_PREFLIGHT";
 const PACKAGE_MANAGER_ENV_VAR: &str = "FRESHEN_TEST_PACKAGE_MANAGERS";
+const RETRIES_ENV_VAR: &str = "FRESHEN_TEST_STEP_RETRIES";
+const BACKOFF_ENV_VAR: &str = "FRESHEN_TEST_STEP_BACKOFF_MS";
 
 const IDS: [StepId; 16] = [
     "probe-0", "probe-1", "probe-2", "probe-3", "probe-4", "probe-5", "probe-6", "probe-7",
@@ -177,7 +185,15 @@ impl ProbeStep {
         let id = *IDS.get(index)?;
         let mut words = entry.split_whitespace();
         let program = words.next()?;
-        let command = CommandSpec::new(program).args(words);
+        let mut command = CommandSpec::new(program).args(words);
+
+        if let Some(retries) = env_u32(RETRIES_ENV_VAR) {
+            command = command.retries(retries);
+        }
+        if let Some(millis) = env_u64(BACKOFF_ENV_VAR) {
+            let backoff = Duration::from_millis(millis);
+            command = command.backoff(Backoff::new(backoff, backoff));
+        }
 
         Some(Self {
             id,
@@ -185,6 +201,18 @@ impl ProbeStep {
             command,
         })
     }
+}
+
+fn env_u32(name: &str) -> Option<u32> {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
+}
+
+fn env_u64(name: &str) -> Option<u64> {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
 }
 
 impl Step for ProbeStep {
