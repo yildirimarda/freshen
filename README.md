@@ -23,6 +23,7 @@ A failing step never aborts the run. Failures are collected and listed at the en
 
 - **Formulae are upgraded before apps are closed**, so apps stay open during the slow part.
 - **Apps are only quit when a cask upgrade will replace them.** Quit is graceful (AppleScript, 3 s timeout so a "Save changes?" dialog cannot hang the run). Apps that do not quit within `QUIT_TIMEOUT` are left alone unless `--force-kill` is given.
+- **A denied Automation permission is explained, not ignored.** When macOS refuses to send Apple events (error -1743), freshen names the System Settings pane to allow: System Settings > Privacy & Security > Automation.
 - **The terminal running freshen is never quit.** Detection uses `__CFBundleIdentifier`, `TERM_PROGRAM`, environment markers and, on Linux and Windows, the parent process chain. See [supported terminals](#supported-terminals-and-session-managers).
 - **Reopening uses `open -g`**, so apps do not steal focus.
 - **`mise upgrade` is used without `--bump`** on purpose: with `node@lts` in your config, `--bump` would pin `lts` to a fixed version.

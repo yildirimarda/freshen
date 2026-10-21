@@ -35,8 +35,8 @@ pub mod tooling;
 pub mod warnings;
 
 pub use apps::{
-    find_running_apps, quit_apps, quit_choice, reopen_apps, AppScan, AppSystem, MacAppSystem,
-    QuitChoice, QuitPolicy, RunningApp,
+    automation_denied_message, find_running_apps, is_automation_denied, quit_apps, quit_choice,
+    reopen_apps, AppScan, AppSystem, MacAppSystem, QuitChoice, QuitOutcome, QuitPolicy, RunningApp,
 };
 pub use check::{CheckResult, CheckStatus, CheckSummary};
 pub use cleanup::{CleanupReport, ENABLE_FLAG as CLEANUP_FLAG};

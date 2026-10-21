@@ -800,7 +800,7 @@ mod tests {
         cask_app_artifacts, installed_app_paths, own_bundle_id, parse_outdated, quit_plan,
         register, CaskError, CasksStep, ReopenQueue, ReopenStep, CASKS, FORMULAE, REOPEN,
     };
-    use crate::apps::{AppScan, AppSystem, RunningApp};
+    use crate::apps::{AppScan, AppSystem, QuitOutcome, RunningApp};
     use crate::platform::Platform;
     use crate::policy::AppLists;
     use crate::registry::Registry;
@@ -826,7 +826,9 @@ mod tests {
             Vec::new()
         }
 
-        fn quit(&self, _bundle_id: &str) {}
+        fn quit(&self, _bundle_id: &str) -> QuitOutcome {
+            QuitOutcome::Quit
+        }
 
         fn force_kill(&self, _pids: &[u32]) {}
 
