@@ -71,6 +71,32 @@ freshen --package-manager-wait 0                      # abort instead of waiting
 
 `--yes` and `--force-kill` replace the old `ASSUME_YES`/`FORCE_KILL` environment variables.
 
+### Proxies and custom certificates
+
+The network preflight and every update step use the same environment, so one
+configuration covers the whole run:
+
+| Variable | Meaning |
+|---|---|
+| `HTTPS_PROXY` / `https_proxy` | Proxy for the HTTPS preflight. Takes precedence over `HTTP_PROXY`. |
+| `HTTP_PROXY` / `http_proxy` | Fallback proxy when `HTTPS_PROXY` is unset. |
+| `NO_PROXY` / `no_proxy` | Comma- or space-separated hosts, domains (`.example.com`), wildcards (`*.example.com`) and optional `:port` values that bypass the proxy. `*` disables proxying. |
+| `SSL_CERT_FILE`, `SSL_CERT_DIR` | Custom CA file or OpenSSL-style directory trusted by the preflight and by tools that use the platform TLS stack. |
+| `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `NIX_SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS` | Additional CA bundles trusted by the preflight. |
+
+The preflight opens a `CONNECT` tunnel through an `http://` or `https://`
+proxy and validates the target's TLS certificate; credentials in the proxy URL
+are sent as `Proxy-Authorization`. A configured CA bundle that cannot be read
+or parsed fails the network check instead of being ignored. Without a proxy,
+or when `NO_PROXY` matches the target, the check connects directly.
+
+Every step inherits the process environment. freshen never clears it: it only
+adds the variables a tool needs (for example `HOMEBREW_NO_AUTO_UPDATE`) and
+removes the few it must override, so `brew`, `uv`, `mise`, `docker`, `colima`
+and the `curl`/`git` processes they start see the same proxy and certificate
+variables. Export them in your shell or service manager before running
+`freshen`.
+
 ## Exit codes
 
 The exit codes are part of the command-line contract and are stable across releases:
