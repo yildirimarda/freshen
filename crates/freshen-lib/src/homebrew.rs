@@ -27,7 +27,7 @@ use crate::process::{CommandSpec, ProcessOutput, NETWORK_RETRIES};
 use crate::registry::Registry;
 use crate::snapshot::{self, SnapshotSection};
 use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
-use crate::warnings::warn_if_zellij_upgrade;
+use crate::warnings::warn_about_breakable_sessions;
 
 pub(crate) const BREW: StepId = "brew";
 pub(crate) const FORMULAE: StepId = "brew-formulae";
@@ -324,7 +324,7 @@ impl Step for FormulaeStep {
             .run()
         {
             Ok(outdated) => {
-                warn_if_zellij_upgrade(outdated.stdout());
+                warn_about_breakable_sessions(outdated.stdout());
                 Some(lines(outdated.stdout()))
             }
             Err(error) => {

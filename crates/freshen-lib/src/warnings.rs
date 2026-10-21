@@ -1,11 +1,16 @@
 //! Non-fatal warnings ported from `update-all.sh`.
 //!
-//! Both situations here deserve a warning, not a failure: the upgrade goes
-//! ahead, but the user has to restart something afterwards for the cleanup to
-//! take effect.
+//! These situations deserve a warning, not a failure: the upgrade goes ahead,
+//! but the user has to restart something afterwards or may lose work.
 //!
-//! * Upgrading zellij from inside a zellij session leaves the running client
-//!   unable to attach to sessions created by the old server.
+//! * Upgrading zellij from inside a zellij session (or while a zellij server is
+//!   running) leaves the running client unable to attach to sessions created
+//!   by the old server.
+//! * Upgrading tmux while its server is running leaves the old server binary in
+//!   place, so new clients and existing sessions disagree on the version.
+//! * Upgrading OpenSSH while SSH sessions are active keeps those sessions on
+//!   the old server until they reconnect.
+//! * Stopping Colima while a Docker build is running interrupts the build.
 //! * `mise prune` cannot remove an old toolchain version while a process
 //!   started by another application (an MCP server, for example) still runs
 //!   from it. Node, Python, Java and Go are checked.
@@ -18,6 +23,23 @@ use crate::process::CommandSpec;
 /// Warning shown before zellij is upgraded from inside a zellij session.
 pub const ZELLIJ_WARNING: &str =
     "zellij will be upgraded while you are inside a zellij session. Close and recreate your sessions afterwards.";
+
+/// Warning shown before zellij is upgraded while a server is running outside
+/// the current session.
+pub const ZELLIJ_SERVER_WARNING: &str =
+    "zellij will be upgraded while a zellij server is running. Close and recreate your sessions afterwards.";
+
+/// Warning shown before tmux is upgraded while a server is running.
+pub const TMUX_WARNING: &str =
+    "tmux will be upgraded while a tmux server is running. Restart the server and recreate your sessions afterwards.";
+
+/// Warning shown before OpenSSH is upgraded while SSH sessions are active.
+pub const SSH_WARNING: &str =
+    "OpenSSH will be upgraded while SSH sessions are active. Existing sessions keep the old server; reconnect afterwards.";
+
+/// Warning shown before Colima is stopped while Docker builds are running.
+pub const DOCKER_BUILD_WARNING: &str =
+    "Colima/lima is about to be upgraded while Docker builds are running. The running builds will be interrupted.";
 
 /// Toolchains whose unused versions `mise prune` removes.
 const TOOLCHAINS: [&str; 4] = ["node", "python", "java", "go"];
@@ -77,6 +99,152 @@ fn inside_zellij_session() -> bool {
     env::var_os("ZELLIJ").is_some_and(|value| !value.is_empty())
 }
 
+fn inside_tmux_session() -> bool {
+    env::var_os("TMUX").is_some_and(|value| !value.is_empty())
+}
+
+/// Warns when an upgrade of zellij, tmux or OpenSSH would break a running
+/// interactive session.
+///
+/// The probe is best effort: a missing `ps` or an empty result still allows
+/// the environment-based zellij and SSH checks to warn, and never fails the
+/// step. Only sessions that belong to a package in `outdated_formulae` are
+/// reported, so a run that upgrades something unrelated stays quiet.
+pub fn warn_about_breakable_sessions(outdated_formulae: &str) {
+    let inside_zellij = inside_zellij_session();
+    let inside_tmux = inside_tmux_session();
+    let over_ssh = ssh_environment_session();
+    let zellij_outdated = is_outdated(outdated_formulae, &["zellij"]);
+    let tmux_outdated = is_outdated(outdated_formulae, &["tmux"]);
+    let ssh_outdated = is_outdated(
+        outdated_formulae,
+        &["openssh", "openssh-server", "dropbear"],
+    );
+    let needs_processes = (!inside_zellij && zellij_outdated)
+        || (tmux_outdated && !inside_tmux)
+        || (ssh_outdated && !over_ssh);
+    let processes = if needs_processes {
+        running_processes()
+    } else {
+        Vec::new()
+    };
+
+    if zellij_warning_applies(outdated_formulae, inside_zellij) {
+        println!("warning: {ZELLIJ_WARNING}");
+    } else if zellij_outdated
+        && processes
+            .iter()
+            .any(|process| is_zellij_process(&process.command))
+    {
+        println!("warning: {ZELLIJ_SERVER_WARNING}");
+    }
+
+    if tmux_outdated
+        && (inside_tmux
+            || processes
+                .iter()
+                .any(|process| is_tmux_process(&process.command)))
+    {
+        println!("warning: {TMUX_WARNING}");
+    }
+
+    if ssh_outdated
+        && (over_ssh
+            || processes
+                .iter()
+                .any(|process| is_ssh_process(&process.command)))
+    {
+        println!("warning: {SSH_WARNING}");
+    }
+}
+
+/// Warns when Docker builds are running and stopping Colima would interrupt
+/// them.
+///
+/// Called once at the start of a run that includes a container step, so the
+/// warning is printed before anything is stopped.
+pub fn warn_about_running_docker_builds() {
+    let builds: Vec<ProcessEntry> = running_processes()
+        .into_iter()
+        .filter(|process| is_docker_build(&process.command))
+        .collect();
+    if builds.is_empty() {
+        return;
+    }
+
+    println!("warning: {DOCKER_BUILD_WARNING}");
+    for process in builds {
+        println!(
+            "   - pid {}: {}",
+            process.pid,
+            truncate_chars(&process.command, 80)
+        );
+    }
+}
+
+fn is_outdated(outdated_formulae: &str, names: &[&str]) -> bool {
+    outdated_formulae
+        .lines()
+        .any(|line| names.contains(&line.trim()))
+}
+
+fn ssh_environment_session() -> bool {
+    ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"]
+        .iter()
+        .any(|name| env::var_os(name).is_some_and(|value| !value.is_empty()))
+}
+
+fn running_processes() -> Vec<ProcessEntry> {
+    let Ok(output) = CommandSpec::new("ps")
+        .args(["-axo", "pid=,ppid=,command="])
+        .run()
+    else {
+        return Vec::new();
+    };
+    parse_process_table(output.stdout())
+}
+
+fn is_zellij_process(command: &str) -> bool {
+    program_name(command) == "zellij"
+}
+
+fn is_tmux_process(command: &str) -> bool {
+    program_name(command) == "tmux"
+}
+
+fn is_ssh_process(command: &str) -> bool {
+    match program_name(command) {
+        "ssh" => true,
+        "sshd" | "sshd-session" => ["@pts", "@tty", "@notty", "sshd-session", "[priv]"]
+            .iter()
+            .any(|marker| command.contains(marker)),
+        _ => false,
+    }
+}
+
+fn is_docker_build(command: &str) -> bool {
+    let mut arguments = command.split_whitespace().skip(1);
+    match program_name(command) {
+        "docker" | "podman" => {
+            let Some(subcommand) = arguments.find(|argument| !argument.starts_with('-')) else {
+                return false;
+            };
+            match subcommand {
+                "build" => true,
+                "buildx" | "compose" => arguments.any(|argument| argument == "build"),
+                _ => false,
+            }
+        }
+        "docker-compose" | "podman-compose" => arguments.any(|argument| argument == "build"),
+        _ => false,
+    }
+}
+
+fn program_name(command: &str) -> &str {
+    let program = command.split_whitespace().next().unwrap_or("");
+    basename(program).trim_end_matches(':')
+}
+
 /// Warns about processes still running from an old toolchain install under mise.
 ///
 /// The probe is best effort: a missing `mise`, a failed `ps` or an empty result
@@ -87,13 +255,7 @@ pub fn warn_about_stale_tool_processes() {
     if active_toolchains.is_empty() {
         return;
     }
-    let Ok(output) = CommandSpec::new("ps")
-        .args(["-axo", "pid=,ppid=,command="])
-        .run()
-    else {
-        return;
-    };
-    let processes = parse_process_table(output.stdout());
+    let processes = running_processes();
 
     for (tool, active_path) in active_toolchains {
         let entries = stale_tool_entries(&processes, &active_path);
@@ -195,8 +357,9 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        basename, parse_process_table, stale_tool_entries, stale_tool_warning,
-        zellij_warning_applies, StaleToolProcess,
+        basename, is_docker_build, is_outdated, is_ssh_process, is_tmux_process, is_zellij_process,
+        parse_process_table, stale_tool_entries, stale_tool_warning, zellij_warning_applies,
+        StaleToolProcess,
     };
 
     const ACTIVE_NODE: &str = "/home/user/.local/share/mise/installs/node/22.1.0";
@@ -209,6 +372,46 @@ mod tests {
         assert!(!zellij_warning_applies("zellij\n", false));
         assert!(!zellij_warning_applies("zellij-utils\nnode\n", true));
         assert!(!zellij_warning_applies("", true));
+    }
+
+    #[test]
+    fn only_outdated_packages_trigger_session_warnings() {
+        assert!(is_outdated("tmux\nnode\n", &["tmux"]));
+        assert!(is_outdated("  openssh  \n", &["openssh", "dropbear"]));
+        assert!(!is_outdated("openssh-utils\n", &["openssh"]));
+        assert!(!is_outdated("", &["tmux"]));
+    }
+
+    #[test]
+    fn tmux_and_zellij_servers_are_detected_from_the_process_table() {
+        assert!(is_tmux_process(
+            "/opt/homebrew/bin/tmux new-session -d -s work"
+        ));
+        assert!(is_tmux_process("tmux: server"));
+        assert!(!is_tmux_process("/usr/bin/git tmux"));
+
+        assert!(is_zellij_process("zellij --server /tmp/zellij-1000"));
+        assert!(!is_zellij_process("zellij-utils"));
+    }
+
+    #[test]
+    fn ssh_sessions_are_detected_without_treating_the_daemon_as_a_session() {
+        assert!(is_ssh_process("sshd: user@pts/0"));
+        assert!(is_ssh_process("sshd-session: user [priv]"));
+        assert!(is_ssh_process("ssh user@example.com"));
+        assert!(!is_ssh_process("/usr/sbin/sshd -D"));
+        assert!(!is_ssh_process("ssh-agent"));
+    }
+
+    #[test]
+    fn docker_builds_are_detected_but_other_docker_commands_are_not() {
+        assert!(is_docker_build("docker build -t app ."));
+        assert!(is_docker_build("/usr/bin/docker buildx build --push ."));
+        assert!(is_docker_build("docker compose build web"));
+        assert!(is_docker_build("docker-compose build"));
+        assert!(!is_docker_build("docker ps"));
+        assert!(!is_docker_build("docker run --name build alpine"));
+        assert!(!is_docker_build("docker compose up -d"));
     }
 
     #[test]
