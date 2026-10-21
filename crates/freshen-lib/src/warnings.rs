@@ -195,6 +195,54 @@ fn ssh_environment_session() -> bool {
 }
 
 fn running_processes() -> Vec<ProcessEntry> {
+    HostProcessProbe.processes()
+}
+
+/// Source of the process facts the warnings use.
+///
+/// The host reads the real process table; tests inject a fixed one so they
+/// never depend on the machine they run on.
+trait ProcessProbe {
+    /// A snapshot of the host process table.
+    fn processes(&self) -> Vec<ProcessEntry>;
+
+    /// Name of the process with `pid`, when the table contains it.
+    fn parent_name(&self, pid: u32, processes: &[ProcessEntry]) -> String {
+        processes
+            .iter()
+            .find(|process| process.pid == pid)
+            .map(|process| program_name(&process.command).to_owned())
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct HostProcessProbe;
+
+impl ProcessProbe for HostProcessProbe {
+    fn processes(&self) -> Vec<ProcessEntry> {
+        #[cfg(unix)]
+        {
+            ps_processes()
+        }
+        #[cfg(windows)]
+        {
+            windows_processes()
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            Vec::new()
+        }
+    }
+
+    #[cfg(unix)]
+    fn parent_name(&self, pid: u32, _processes: &[ProcessEntry]) -> String {
+        ps_parent_name(pid)
+    }
+}
+
+#[cfg(unix)]
+fn ps_processes() -> Vec<ProcessEntry> {
     let Ok(output) = CommandSpec::new("ps")
         .args(["-axo", "pid=,ppid=,command="])
         .run()
@@ -202,6 +250,36 @@ fn running_processes() -> Vec<ProcessEntry> {
         return Vec::new();
     };
     parse_process_table(output.stdout())
+}
+
+#[cfg(unix)]
+fn ps_parent_name(pid: u32) -> String {
+    CommandSpec::new("ps")
+        .args(["-o", "comm=", "-p"])
+        .arg(pid.to_string())
+        .run()
+        .ok()
+        .map(|output| basename(output.stdout().trim()).to_owned())
+        .unwrap_or_default()
+}
+
+/// Reads the process table through CIM on Windows.
+///
+/// `CommandLine` is the only CIM field that keeps the full command line, which
+/// stale-toolchain detection needs to match the install directory. Fields are
+/// separated by the ASCII unit separator so spaces and tabs in a command line
+/// stay intact.
+#[cfg(windows)]
+fn windows_processes() -> Vec<ProcessEntry> {
+    let script = "Get-CimInstance Win32_Process | ForEach-Object { \
+                  \"$($_.ProcessId)$([char]31)$($_.ParentProcessId)$([char]31)$($_.CommandLine)\" }";
+    let Ok(output) = CommandSpec::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .run()
+    else {
+        return Vec::new();
+    };
+    parse_windows_process_table(output.stdout())
 }
 
 fn is_zellij_process(command: &str) -> bool {
@@ -241,21 +319,32 @@ fn is_docker_build(command: &str) -> bool {
 }
 
 fn program_name(command: &str) -> &str {
-    let program = command.split_whitespace().next().unwrap_or("");
-    basename(program).trim_end_matches(':')
+    let command = command.trim_start();
+    let program = if let Some(quoted) = command.strip_prefix('"') {
+        quoted.split('"').next().unwrap_or("")
+    } else {
+        command.split_whitespace().next().unwrap_or("")
+    };
+    let name = basename(program).trim_end_matches(':');
+    name.strip_suffix(".exe").unwrap_or(name)
 }
 
 /// Warns about processes still running from an old toolchain install under mise.
 ///
-/// The probe is best effort: a missing `mise`, a failed `ps` or an empty result
-/// prints nothing and never fails the step. Only toolchains that mise reports
-/// an active version for are checked.
+/// The probe is best effort: a missing `mise`, a failed process-table query or
+/// an empty result prints nothing and never fails the step. Only toolchains
+/// that mise reports an active version for are checked. Windows reads the table
+/// through CIM; Unix uses `ps`.
 pub fn warn_about_stale_tool_processes() {
+    warn_about_stale_tool_processes_with(&HostProcessProbe);
+}
+
+fn warn_about_stale_tool_processes_with(probe: &dyn ProcessProbe) {
     let active_toolchains = active_toolchain_paths();
     if active_toolchains.is_empty() {
         return;
     }
-    let processes = running_processes();
+    let processes = probe.processes();
 
     for (tool, active_path) in active_toolchains {
         let entries = stale_tool_entries(&processes, &active_path);
@@ -267,7 +356,7 @@ pub fn warn_about_stale_tool_processes() {
         for entry in entries {
             let process = StaleToolProcess {
                 pid: entry.pid,
-                parent: parent_name(entry.ppid),
+                parent: probe.parent_name(entry.ppid, &processes),
                 command: entry.command,
             };
             println!("{}", process.display_line());
@@ -300,36 +389,46 @@ struct ProcessEntry {
 }
 
 fn stale_tool_entries(processes: &[ProcessEntry], active_tool: &Path) -> Vec<ProcessEntry> {
-    let Some(install_dir) = active_tool.parent() else {
+    let Some(install_dir) = parent_directory(active_tool) else {
         return Vec::new();
     };
-    let install_prefix = format!("{}/", install_dir.display());
-    let active_prefix = format!("{}/", active_tool.display());
+    let install_prefix = format!("{install_dir}/");
+    let active_prefix = format!("{}/", normalized_path(active_tool));
 
     processes
         .iter()
         .filter(|process| {
-            process.command.contains(&install_prefix) && !process.command.contains(&active_prefix)
+            let command = normalize_path(&process.command);
+            command.contains(&install_prefix) && !command.contains(&active_prefix)
         })
         .cloned()
         .collect()
 }
 
-fn parent_name(ppid: u32) -> String {
-    CommandSpec::new("ps")
-        .args(["-o", "comm=", "-p"])
-        .arg(ppid.to_string())
-        .run()
-        .ok()
-        .map(|output| basename(output.stdout().trim()).to_owned())
-        .unwrap_or_default()
+/// Parent directory of `path`, using both `/` and `\` as separators.
+///
+/// Process command lines on Windows use backslashes, while `Path` on the test
+/// host may use different semantics. Normalising first keeps the check
+/// portable and testable on every platform.
+fn parent_directory(path: &Path) -> Option<String> {
+    let path = normalized_path(path);
+    let (parent, _) = path.rsplit_once('/')?;
+    Some(parent.to_owned())
+}
+
+fn normalized_path(path: &Path) -> String {
+    normalize_path(&path.to_string_lossy())
+        .trim_end_matches('/')
+        .to_owned()
+}
+
+fn normalize_path(path: &str) -> String {
+    path.replace('\\', "/")
 }
 
 fn basename(path: &str) -> &str {
-    Path::new(path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(path)
+    let path = path.trim_matches('"');
+    path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
 fn parse_process_table(table: &str) -> Vec<ProcessEntry> {
@@ -348,6 +447,27 @@ fn parse_process_line(line: &str) -> Option<ProcessEntry> {
     Some(ProcessEntry { pid, ppid, command })
 }
 
+#[cfg(any(test, windows))]
+fn parse_windows_process_table(table: &str) -> Vec<ProcessEntry> {
+    table
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.trim_end_matches('\r').split('\u{1f}');
+            let pid = fields.next()?.trim().parse().ok()?;
+            let ppid = fields.next()?.trim().parse().ok()?;
+            let command = fields.next().unwrap_or_default().trim();
+            if command.is_empty() {
+                return None;
+            }
+            Some(ProcessEntry {
+                pid,
+                ppid,
+                command: command.to_owned(),
+            })
+        })
+        .collect()
+}
+
 fn truncate_chars(text: &str, limit: usize) -> String {
     text.chars().take(limit).collect()
 }
@@ -358,8 +478,8 @@ mod tests {
 
     use super::{
         basename, is_docker_build, is_outdated, is_ssh_process, is_tmux_process, is_zellij_process,
-        parse_process_table, stale_tool_entries, stale_tool_warning, zellij_warning_applies,
-        StaleToolProcess,
+        parse_process_table, parse_windows_process_table, program_name, stale_tool_entries,
+        stale_tool_warning, zellij_warning_applies, ProcessEntry, ProcessProbe, StaleToolProcess,
     };
 
     const ACTIVE_NODE: &str = "/home/user/.local/share/mise/installs/node/22.1.0";
@@ -445,6 +565,92 @@ not a process
 
         assert_eq!(processes.len(), 1);
         assert_eq!(processes[0].pid, 201);
+    }
+
+    #[test]
+    fn windows_process_table_keeps_parent_pid_and_the_full_command_line() {
+        let separator = '\u{1f}';
+        let table = format!(
+            "100{separator}1{separator}C:\\Users\\me\\AppData\\Local\\mise\\installs\\node\\20.0.0\\node.exe C:\\path with spaces\\server.js\r\n\
+             101{separator}100{separator}\"C:\\Program Files\\LM Studio\\LM Studio.exe\" --serve\r\n\
+             102{separator}1{separator}\r\n"
+        );
+
+        let processes = parse_windows_process_table(&table);
+
+        assert_eq!(processes.len(), 2);
+        assert_eq!(processes[0].pid, 100);
+        assert_eq!(processes[0].ppid, 1);
+        assert_eq!(
+            processes[0].command,
+            r"C:\Users\me\AppData\Local\mise\installs\node\20.0.0\node.exe C:\path with spaces\server.js"
+        );
+        assert_eq!(processes[1].ppid, 100);
+        assert_eq!(
+            processes[1].command,
+            r#""C:\Program Files\LM Studio\LM Studio.exe" --serve"#
+        );
+    }
+
+    #[test]
+    fn windows_install_paths_are_matched_with_either_separator() {
+        let separator = '\u{1f}';
+        let active = r"C:\Users\me\AppData\Local\mise\installs\node\22.1.0";
+        let table = format!(
+            "100{separator}1{separator}{active}\\node.exe C:\\current\\server.js\r\n\
+             101{separator}1{separator}C:\\Users\\me\\AppData\\Local\\mise\\installs\\node\\20.0.0\\node.exe C:\\old\\server.js\r\n\
+             102{separator}1{separator}C:\\Program Files\\nodejs\\node.exe C:\\system\\server.js\r\n\
+             103{separator}1{separator}C:/Users/me/AppData/Local/mise/installs/node/20.0.0/node.exe C:/old/forward.js\r\n"
+        );
+        let processes = parse_windows_process_table(&table);
+
+        let stale = stale_tool_entries(&processes, Path::new(active));
+
+        assert_eq!(stale.len(), 2);
+        assert_eq!(stale[0].pid, 101);
+        assert_eq!(stale[1].pid, 103);
+    }
+
+    struct FakeProcessProbe {
+        processes: Vec<ProcessEntry>,
+    }
+
+    impl ProcessProbe for FakeProcessProbe {
+        fn processes(&self) -> Vec<ProcessEntry> {
+            self.processes.clone()
+        }
+    }
+
+    #[test]
+    fn parent_names_are_read_from_the_injected_process_table() {
+        let probe = FakeProcessProbe {
+            processes: vec![
+                ProcessEntry {
+                    pid: 1,
+                    ppid: 0,
+                    command: r#""C:\Program Files\LM Studio\LM Studio.exe" --serve"#.to_owned(),
+                },
+                ProcessEntry {
+                    pid: 100,
+                    ppid: 1,
+                    command: r"C:\Users\me\AppData\Local\mise\installs\node\20.0.0\node.exe C:\old\server.js".to_owned(),
+                },
+            ],
+        };
+        let processes = probe.processes();
+
+        assert_eq!(probe.parent_name(1, &processes), "LM Studio");
+        assert_eq!(probe.parent_name(999, &processes), "");
+    }
+
+    #[test]
+    fn program_names_handle_windows_paths_and_quotes() {
+        assert_eq!(
+            program_name(r#""C:\Program Files\nodejs\node.exe" script.js"#),
+            "node"
+        );
+        assert_eq!(program_name(r"C:\tools\zellij.exe --server"), "zellij");
+        assert_eq!(program_name(r"D:\Docker\docker.exe build ."), "docker");
     }
 
     #[test]
