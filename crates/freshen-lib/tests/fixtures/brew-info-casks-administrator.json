@@ -1,0 +1,25 @@
+{
+  "formulae": [],
+  "casks": [
+    {
+      "token": "firefox",
+      "artifacts": [
+        {
+          "app": [
+            "Firefox.app"
+          ]
+        }
+      ]
+    },
+    {
+      "token": "1password",
+      "artifacts": [
+        {
+          "pkg": [
+            "1Password.pkg"
+          ]
+        }
+      ]
+    }
+  ]
+}
