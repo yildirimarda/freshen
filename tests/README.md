@@ -19,11 +19,18 @@
   with `rustfmt`/`clippy`, and every crate under `crates/` inherits the
   workspace MSRV and lints
 - `deny.toml` (cargo-deny) is valid TOML with a `licenses` allow-list and an
-  `advisories` section, and the `cargo-deny` job in `ci-proposals/rust.yml`
-  runs both `cargo deny check licenses` and `cargo deny check advisories`
-- the `msrv` job in `ci-proposals/rust.yml` reads the workspace
-  `rust-version` and runs `cargo check --workspace --all-targets` with that
-  toolchain, so a newer language feature fails before release
+  `advisories` section, and the `cargo-deny` job in the rust workflow
+  (`ci-proposals/rust.yml`, or `.github/workflows/rust.yml` once a human
+  applies it) runs both `cargo deny check licenses` and
+  `cargo deny check advisories`
+- the `msrv` job in the rust workflow reads the workspace `rust-version` and
+  runs `cargo check --workspace --all-targets` with that toolchain, so a newer
+  language feature fails before release
+- every CI workflow is accepted either as a proposal in `ci-proposals/` or
+  after being applied to `.github/workflows/`, including the optional
+  `real-tools.yml`; `tests/workflow-layouts.sh` runs the repository checks
+  against a fixture in both layouts to prove that applying a proposal cannot
+  break them
 
 Unit and integration tests for the Rust implementation live in the Cargo
 workspace (`cargo test --all-features`); this script keeps only the
