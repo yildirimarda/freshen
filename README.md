@@ -12,7 +12,7 @@ The implementation is the Rust workspace under `crates/`: `freshen-lib` holds al
 
 | Step | Commands |
 |---|---|
-| Homebrew | `brew update` → `brew upgrade --formula` → quit running apps → `brew upgrade --cask --greedy` → reopen the apps it quit. With `--cleanup`: `brew autoremove` → `brew cleanup --prune=all` before reopening |
+| Homebrew | `brew update` → `brew upgrade --formula` → quit running apps → `brew upgrade --cask` (with `--greedy` only for casks that need it) → reopen the apps it quit. With `--cleanup`: `brew autoremove` → `brew cleanup --prune=all` before reopening |
 | Colima / Docker | If `colima`/`lima` itself is about to be upgraded: bring compose projects down, stop standalone containers, stop Colima, upgrade, start Colima, bring everything back up. Afterwards: `docker compose pull` + `up -d` for running compose projects (only changed containers are recreated). With `--cleanup`: `docker image prune -f` |
 | uv | `uv tool upgrade --all`. With `--cleanup`: `uv cache prune` |
 | mise | `mise self-update` (only if mise was not installed via brew) → `mise upgrade`, plus a warning for processes still running on an old Node, Python, Java or Go version, naming the app that started them. With `--cleanup`: `mise prune -y` |
@@ -179,7 +179,7 @@ The zsh implementation and its deprecated POSIX `sh` compatibility wrapper have 
 ## Safety notes
 
 - Run it while you are at the machine: it closes and reopens GUI apps.
-- `--greedy` upgrades casks that auto-update themselves too. Casks with `version :latest` show up as outdated every time — that is Homebrew behaviour, not a bug here.
+- **`--greedy` is only used for the casks that need it.** Casks with `auto_updates true` or `version :latest` are the ones Homebrew hides without it; `--check` names the reason next to the cask. Casks with `version :latest` still show up as outdated every time — that is Homebrew behaviour, not a bug here.
 - Global npm packages do not follow a Node upgrade. List them in `~/.default-npm-packages` and mise reinstalls them for every new Node version.
 
 ## Development

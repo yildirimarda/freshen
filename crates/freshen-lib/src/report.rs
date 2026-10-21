@@ -198,6 +198,7 @@ pub(crate) fn check_json(summary: &CheckSummary) -> String {
                         "name": item.name(),
                         "current": item.current(),
                         "latest": item.latest(),
+                        "reason": item.reason(),
                     })
                 })
                 .collect();
@@ -412,6 +413,34 @@ mod tests {
         let markdown = check_markdown(&summary);
         assert!(markdown.contains("# freshen check"));
         assert!(markdown.contains("jq 1.7.1 -> 1.8.0"));
+    }
+
+    #[test]
+    fn check_reports_include_the_reason_an_item_needs_greedy() {
+        let step = ReportStep::new(
+            CheckReport::from_items([OutdatedItem::new("nightly")
+                .with_current("1.0")
+                .with_latest("latest")
+                .with_reason("version :latest; needs --greedy")]),
+            CheckReport::up_to_date(),
+        );
+        let summary: CheckSummary =
+            Runner::with_options([&step as &dyn Step], RunOptions::new()).check();
+
+        let value: serde_json::Value = match serde_json::from_str(&check_json(&summary)) {
+            Ok(value) => value,
+            Err(error) => panic!("invalid JSON report: {error}"),
+        };
+        assert_eq!(
+            value["steps"][0]["items"][0]["reason"],
+            "version :latest; needs --greedy"
+        );
+
+        let markdown = check_markdown(&summary);
+        assert!(
+            markdown.contains("nightly 1.0 -> latest (version :latest; needs --greedy)"),
+            "markdown: {markdown}"
+        );
     }
 
     #[test]

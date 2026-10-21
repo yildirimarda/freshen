@@ -128,7 +128,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Run every command whose output is parsed with a neutral locale (`LC_ALL=C`, `LANG=C`; UTF-8 console and `--disable-interactivity` on Windows) so localized output such as Turkish and progress spinners cannot break parsers, covered by tests that run the parsers on non-English fixtures
 - [x] Detect an Automation (TCC) denial when quitting apps through AppleScript (error -1743) and print an actionable message naming the System Settings pane instead of treating the app as unquittable, covered by tests with injected osascript output
 - [x] Detect casks whose installer needs an administrator password (pkg installers, `sudo` prompts) and skip them with a clear reason in non-interactive runs instead of hanging, covered by tests
-- [ ] Handle `version :latest` casks and `auto_updates true` casks correctly: decide per cask whether `--greedy` is needed, and show the reason in the check output
+- [x] Handle `version :latest` casks and `auto_updates true` casks correctly: decide per cask whether `--greedy` is needed, and show the reason in the check output
 - [ ] Respect pinned formulae (`brew pin`) and report them as "held back" instead of failing
 - [ ] Restart Homebrew services (`brew services`) whose formulae were upgraded, and report which ones were restarted
 - [ ] Support casks whose artifacts are not `.app` (pkg installers, menu-bar helpers, `uninstall quit:` bundle ids) by reading the cask's `uninstall` stanza for the bundle ids to quit

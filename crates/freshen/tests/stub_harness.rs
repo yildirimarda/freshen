@@ -181,7 +181,7 @@ fn a_ported_step_replays_a_recorded_command_transcript() {
             "brew outdated --cask --greedy",
             "brew outdated --cask --greedy --quiet",
             "brew info --cask --json=v2 firefox",
-            "brew upgrade --cask --greedy",
+            "brew upgrade --cask",
             "brew autoremove --dry-run",
             "brew autoremove",
             "brew cleanup --dry-run --prune=all",
