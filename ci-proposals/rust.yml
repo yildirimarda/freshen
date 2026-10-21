@@ -13,8 +13,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Lint, unit tests and the stub-based integration tests run on every
+  # supported operating system. The stubs are shell scripts on Unix and batch
+  # files on Windows (see crates/freshen/tests/support), so the same Cargo
+  # test targets exercise the platform-specific process, signal and lock
+  # behaviour instead of only the Linux code path.
   rust:
-    runs-on: ubuntu-latest
+    name: rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -29,8 +39,14 @@ jobs:
       - name: Rust clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Rust tests
-        run: cargo test --all-features
+      - name: Rust unit tests
+        run: cargo test --all-features --lib --bins
+
+      # The integration tests in crates/freshen/tests run the built binary with
+      # temporary stub package managers on PATH; none of them touch the host's
+      # real brew, uv, mise, docker or colima.
+      - name: Stub-based integration tests
+        run: cargo test --all-features --tests
 
   # The MSRV job is deliberately separate from the main `rust` job: the pinned
   # toolchain in rust-toolchain.toml is much newer than the workspace

@@ -26,6 +26,10 @@
 - the `msrv` job in the rust workflow reads the workspace `rust-version` and
   runs `cargo check --workspace --all-targets` with that toolchain, so a newer
   language feature fails before release
+- the rust workflow's lint, unit test and stub-based integration test steps run
+  in a matrix on `ubuntu-latest`, `macos-latest` and `windows-latest`, so the
+  platform-specific process, signal and lock behaviour is exercised on every
+  supported operating system
 - every CI workflow is accepted either as a proposal in `ci-proposals/` or
   after being applied to `.github/workflows/`, including the optional
   `real-tools.yml`; `tests/workflow-layouts.sh` runs the repository checks
