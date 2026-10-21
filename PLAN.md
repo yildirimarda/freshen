@@ -83,7 +83,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Graceful handling of SIGINT/SIGTERM on every OS: stop the running step, restore everything that was stopped (apps, containers, VMs), print a partial summary
 - [x] Idempotency guarantee: running the tool twice in a row must be a no-op the second time; add a test asserting it
 - [x] Per-step and global timeouts with a clear "timed out" status distinct from "failed"
-- [ ] Network failure handling: retry transient download errors with exponential backoff, skip the step if the registry is unreachable
+- [x] Network failure handling: retry transient download errors with exponential backoff, skip the step if the registry is unreachable
 - [ ] Detect processes running from a tool version that is about to be removed (old Node, Python, Java, Go toolchains) and report them with the parent application that started them
 - [ ] Detect long-running interactive sessions that an upgrade would break (zellij, tmux server, SSH sessions, running docker builds) and warn or defer
 - [ ] Never run destructive cleanup (volume prune, cache wipe) unless explicitly enabled; log everything a cleanup removed and the space reclaimed
@@ -94,6 +94,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Guard `brew autoremove` and `brew cleanup` with their dry-run listings so a run with nothing to remove does not invoke the mutating command, covered by tests
 - [ ] Extend the idempotency test to the uv, mise, Docker and Colima steps with stateful stubs, so every mutating step proves a second run changes nothing
 - [ ] Apply per-step and global timeouts to `--check` mode, with a "timed out" check status distinct from "failed", so a hung read-only query cannot hang the report
+- [ ] Make retry backoff sleeps respect the step and global deadlines and SIGINT, so a long retry wait cannot overshoot a timeout or delay interrupt handling, covered by tests
 
 ## Milestone 4: macOS Depth
 

@@ -23,7 +23,7 @@ use crate::apps::{
 };
 use crate::options::RunOptions;
 use crate::platform::Platform;
-use crate::process::{CommandSpec, ProcessOutput};
+use crate::process::{CommandSpec, ProcessOutput, NETWORK_RETRIES};
 use crate::registry::Registry;
 use crate::snapshot::{self, SnapshotSection};
 use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
@@ -190,8 +190,9 @@ fn is_executable(path: &Path) -> bool {
 }
 
 fn run_brew(step: StepId, spec: CommandSpec) -> Result<ProcessOutput, StepError> {
-    spec.run()
-        .map_err(|error| StepError::run(step, error.to_string()))
+    spec.retry_transient_network(NETWORK_RETRIES)
+        .run()
+        .map_err(|error| StepError::run_from_process(step, &error))
 }
 
 fn lines(output: &str) -> Vec<String> {
@@ -207,8 +208,9 @@ fn outdated(step: StepId, args: &[&str]) -> Result<CheckReport, StepError> {
     let output = CommandSpec::new("brew")
         .args(["outdated"])
         .args(args)
+        .retry_transient_network(NETWORK_RETRIES)
         .run()
-        .map_err(|error| StepError::check(step, error.to_string()))?;
+        .map_err(|error| StepError::check_from_process(step, &error))?;
     Ok(CheckReport::from_items(
         lines(output.stdout())
             .iter()
@@ -318,6 +320,7 @@ impl Step for FormulaeStep {
     fn run(&self) -> Result<(), StepError> {
         let outdated = match CommandSpec::new("brew")
             .args(["outdated", "--formula", "--quiet"])
+            .retry_transient_network(NETWORK_RETRIES)
             .run()
         {
             Ok(outdated) => {
@@ -461,7 +464,9 @@ impl Step for CasksStep {
 
         println!("Casks to upgrade: {}", casks.join(" "));
 
-        let mut info = CommandSpec::new("brew").args(["info", "--cask", "--json=v2"]);
+        let mut info = CommandSpec::new("brew")
+            .args(["info", "--cask", "--json=v2"])
+            .retry_transient_network(NETWORK_RETRIES);
         for cask in &casks {
             info = info.arg(cask);
         }

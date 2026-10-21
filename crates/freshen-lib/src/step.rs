@@ -18,6 +18,7 @@ use std::fmt;
 
 use crate::options::RunOptions;
 use crate::platform::Platform;
+use crate::process::{network_failure, ProcessError};
 use crate::snapshot::SnapshotSection;
 
 /// Stable identifier of a step, e.g. `"brew"` or `"uv"`.
@@ -186,17 +187,45 @@ pub struct StepError {
     step: StepId,
     operation: Operation,
     message: String,
+    registry_unreachable: bool,
 }
 
 impl StepError {
     /// Creates an error for `step` that failed during `operation`.
     #[must_use]
     pub fn new(step: StepId, operation: Operation, message: impl Into<String>) -> Self {
+        let message = message.into();
+        let registry_unreachable = network_failure(&message).is_some();
         Self {
             step,
             operation,
-            message: message.into(),
+            message,
+            registry_unreachable,
         }
+    }
+
+    /// Creates an error from a failed process, preserving a network failure
+    /// found in the command's captured output.
+    #[must_use]
+    pub fn from_process(step: StepId, operation: Operation, error: &ProcessError) -> Self {
+        Self {
+            step,
+            operation,
+            message: error.to_string(),
+            registry_unreachable: error.is_network_failure(),
+        }
+    }
+
+    /// Creates a run error from a failed process.
+    #[must_use]
+    pub fn run_from_process(step: StepId, error: &ProcessError) -> Self {
+        Self::from_process(step, Operation::Run, error)
+    }
+
+    /// Creates a check error from a failed process.
+    #[must_use]
+    pub fn check_from_process(step: StepId, error: &ProcessError) -> Self {
+        Self::from_process(step, Operation::Check, error)
     }
 
     /// Creates an error from [`Step::detect`].
@@ -239,6 +268,13 @@ impl StepError {
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    /// Returns `true` when the failure means the package registry could not
+    /// be reached, so the runner should skip the step instead of failing it.
+    #[must_use]
+    pub fn is_registry_unreachable(&self) -> bool {
+        self.registry_unreachable
     }
 }
 
@@ -581,10 +617,18 @@ mod tests {
         assert_eq!(error.step(), "brew");
         assert_eq!(error.operation(), Operation::Run);
         assert_eq!(error.message(), "upgrade failed");
+        assert!(!error.is_registry_unreachable());
         assert_eq!(
             error.to_string(),
             "step `brew` failed during run: upgrade failed"
         );
+    }
+
+    #[test]
+    fn network_errors_are_marked_as_an_unreachable_registry() {
+        let error = StepError::check("brew", "curl: (6) Could not resolve host: formulae.brew.sh");
+
+        assert!(error.is_registry_unreachable());
     }
 
     #[test]
