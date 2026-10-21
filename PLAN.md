@@ -118,7 +118,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Retry stub execution when the kernel returns `ETXTBSY` (text file busy), so parallel test threads that write and execute a stub cannot fail spuriously, with a test for the retry helper
 - [x] Make `preflight::tests::tcp_reachability_detects_open_and_closed_ports` robust against another process reusing the just-released port, so the suite does not fail spuriously on shared CI runners
 - [x] CI matrix: macOS, Ubuntu and Windows runners for lint, unit tests and the stub-based integration tests
-- [ ] Propose a CI job (as `ci-proposals/real-tools.yml`) that runs `freshen --check` and `freshen --dry-run` read-only against the real Homebrew on `macos-latest` and fails on parser errors, so the recorded transcripts are verified against real output
+- [x] Propose a CI job (as `ci-proposals/real-tools.yml`) that runs `freshen --check` and `freshen --dry-run` read-only against the real Homebrew on `macos-latest` and fails on parser errors, so the recorded transcripts are verified against real output
 - [ ] Extend the proposed real-tool job to `windows-latest` (real Chocolatey and winget, read-only) and `ubuntu-latest` (real apt, read-only), with the same failure rule
 - [ ] Port the stub-based integration tests that do not need Unix-only facilities (signals, shell scripts, POSIX paths) off `#![cfg(unix)]` and run them against the Windows `.cmd` stubs, so the Windows matrix leg executes the package-manager transcripts instead of compiling empty test crates
 - [ ] Add a config file (TOML) at the OS-appropriate location (`~/.config/<name>/config.toml`, `%APPDATA%`) with a documented schema and validation errors that point at the offending line
@@ -148,6 +148,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Detect the compose command in use (`docker compose`, `docker-compose`, `podman compose`) and use it consistently for pull, up and down, covered by tests with injected command lookups
 - [ ] Add native Docker Engine on Linux to the runtime abstraction (restart through `systemctl restart docker` with a warning about running containers when `live-restore` is off), covered by tests with injected facts
 - [ ] Update the README and docs to describe the supported container runtimes and replace the Colima-only wording, once the runtime abstraction exists
+- [ ] Add a read-only Homebrew cask metadata probe to `--check` (or a dedicated command) so the real-tools job verifies the recorded `brew info --cask --json=v2` transcript and fails on cask JSON parser drift, covered by tests
 
 ## Milestone 5: Linux
 

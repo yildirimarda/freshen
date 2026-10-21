@@ -138,10 +138,18 @@ else
   bad "no CI workflow proposal or active workflow found"
 fi
 
-# 8. The real-tools workflow is optional until its job is proposed, but once it
-#    exists it is accepted either as a proposal or after being applied.
+# 8. The real-tools workflow runs freshen's read-only modes against the real
+#    Homebrew on macOS and fails on parser drift, not just on command errors.
+#    It is accepted either as a proposal or after a human applies it.
 if real_tools_file="$(workflow_path real-tools)"; then
   ok "real-tools workflow found at $real_tools_file"
+  if [[ -f tests/real-tools-workflow.sh ]]; then
+    bash tests/real-tools-workflow.sh || fail=1
+  else
+    bad "tests/real-tools-workflow.sh is missing"
+  fi
+else
+  bad "no real-tools workflow in ci-proposals/ or .github/workflows/"
 fi
 
 # 9. CI matrix: lint, unit tests and the stub-based integration tests must run

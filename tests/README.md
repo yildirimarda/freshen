@@ -30,11 +30,16 @@
   in a matrix on `ubuntu-latest`, `macos-latest` and `windows-latest`, so the
   platform-specific process, signal and lock behaviour is exercised on every
   supported operating system
+- the `real-tools.yml` workflow runs `freshen --check` and `freshen --dry-run`
+  read-only against the real Homebrew on `macos-latest`, validates both JSON
+  reports with `tests/real-tools-check.py`, and fails when a Homebrew parser
+  reports an error, skips a step or turns an unrecognised line into a bogus
+  package name; `tests/real-tools-workflow.sh` proves the validator accepts
+  clean reports and rejects each of those failures
 - every CI workflow is accepted either as a proposal in `ci-proposals/` or
-  after being applied to `.github/workflows/`, including the optional
-  `real-tools.yml`; `tests/workflow-layouts.sh` runs the repository checks
-  against a fixture in both layouts to prove that applying a proposal cannot
-  break them
+  after being applied to `.github/workflows/`, including `real-tools.yml`;
+  `tests/workflow-layouts.sh` runs the repository checks against a fixture in
+  both layouts to prove that applying a proposal cannot break them
 
 Unit and integration tests for the Rust implementation live in the Cargo
 workspace (`cargo test --all-features`); this script keeps only the

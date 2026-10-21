@@ -1,0 +1,84 @@
+name: real-tools
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: real-tools-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The stub-based tests prove the command transcripts; this job proves that
+  # the same parsers still understand what a real Homebrew prints today. It is
+  # deliberately read-only: `--check` and `--dry-run` never upgrade, install,
+  # remove or clean up anything, and the job itself does not run `brew update`.
+  homebrew-read-only:
+    name: real Homebrew (macOS, read-only)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      BREW_STEPS: brew,brew-formulae,brew-casks,brew-autoremove,brew-cleanup,brew-reopen
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain
+
+      - name: Build freshen
+        run: cargo build --locked --bin freshen
+
+      - name: Real Homebrew is available
+        run: |
+          command -v brew
+          brew --version
+
+      # Exit code 2 is success here: it means Homebrew has updates pending,
+      # which is exactly what the read-only check is supposed to report.
+      - name: freshen --check against the real Homebrew
+        run: |
+          set -euo pipefail
+          status=0
+          ./target/debug/freshen --check --json --jobs 1 --step-timeout 600 \
+            --only "$BREW_STEPS" > check.json 2> check.log || status=$?
+          cat check.log
+          cat check.json
+          case "$status" in
+            0|2) ;;
+            *)
+              echo "::error::freshen --check exited $status"
+              exit 1
+              ;;
+          esac
+
+      - name: freshen --dry-run against the real Homebrew
+        run: |
+          set -euo pipefail
+          status=0
+          ./target/debug/freshen --dry-run --json --jobs 1 \
+            --only "$BREW_STEPS" > dry-run.json 2> dry-run.log || status=$?
+          cat dry-run.log
+          cat dry-run.json
+          if [ "$status" -ne 0 ]; then
+            echo "::error::freshen --dry-run exited $status"
+            exit 1
+          fi
+
+      # A failed step is not the only way a parser can break: the lenient
+      # `brew outdated` parser turns an unrecognised line into a bogus package
+      # name instead of returning an error. The validator rejects those lines,
+      # skipped Homebrew steps (so an undetected brew cannot pass silently) and
+      # any explicit parser error in the JSON report.
+      - name: Fail on Homebrew parser errors
+        run: |
+          set -euo pipefail
+          python3 tests/real-tools-check.py check check.json
+          python3 tests/real-tools-check.py dry-run dry-run.json
+          if grep -E 'invalid Homebrew cask JSON|could not read cask metadata|could not inspect casks|failed during (detect|check|run|cleanup)' check.log dry-run.log; then
+            echo "::error::freshen reported a Homebrew parser error"
+            exit 1
+          fi
