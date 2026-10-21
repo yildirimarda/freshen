@@ -131,7 +131,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Handle `version :latest` casks and `auto_updates true` casks correctly: decide per cask whether `--greedy` is needed, and show the reason in the check output
 - [x] Respect pinned formulae (`brew pin`) and report them as "held back" instead of failing
 - [x] Restart Homebrew services (`brew services`) whose formulae were upgraded, and report which ones were restarted
-- [ ] Support casks whose artifacts are not `.app` (pkg installers, menu-bar helpers, `uninstall quit:` bundle ids) by reading the cask's `uninstall` stanza for the bundle ids to quit
+- [x] Support casks whose artifacts are not `.app` (pkg installers, menu-bar helpers, `uninstall quit:` bundle ids) by reading the cask's `uninstall` stanza for the bundle ids to quit
 - [ ] Detect apps that update themselves (Sparkle, Electron auto-update) and are mid-update, and wait instead of quitting them
 - [ ] Preserve window/session state where possible: reopen apps in the same Space/display, hidden state preserved (`open -g -j`)
 - [ ] Handle apps that were running as login items or menu-bar-only agents without a Dock icon
