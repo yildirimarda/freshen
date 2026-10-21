@@ -110,6 +110,8 @@ pub struct CaskInfo {
     token: Option<String>,
     apps: Vec<String>,
     administrator: bool,
+    version: Option<String>,
+    auto_updates: bool,
 }
 
 impl CaskInfo {
@@ -129,6 +131,43 @@ impl CaskInfo {
     #[must_use]
     pub fn needs_administrator(&self) -> bool {
         self.administrator
+    }
+
+    /// The version the cask declares, when the metadata names it.
+    #[must_use]
+    pub fn version(&self) -> Option<&str> {
+        self.version.as_deref()
+    }
+
+    /// Returns `true` when the cask updates itself.
+    #[must_use]
+    pub fn auto_updates(&self) -> bool {
+        self.auto_updates
+    }
+
+    /// Returns `true` when the cask is only listed by `brew outdated` with
+    /// `--greedy`.
+    ///
+    /// A cask with `version :latest` has no fixed version to compare, and an
+    /// `auto_updates true` cask manages its own updates. Homebrew hides both
+    /// unless `--greedy` is given.
+    #[must_use]
+    pub fn needs_greedy(&self) -> bool {
+        self.version.as_deref() == Some("latest") || self.auto_updates
+    }
+
+    /// Why the cask needs `--greedy`, when it does.
+    #[must_use]
+    pub fn greedy_reason(&self) -> Option<String> {
+        let latest = self.version.as_deref() == Some("latest");
+        match (latest, self.auto_updates) {
+            (true, true) => {
+                Some("version :latest and auto_updates true; needs --greedy".to_owned())
+            }
+            (true, false) => Some("version :latest; needs --greedy".to_owned()),
+            (false, true) => Some("auto_updates true; needs --greedy".to_owned()),
+            (false, false) => None,
+        }
     }
 }
 
@@ -164,10 +203,25 @@ impl CaskMetadata {
     /// A cask the metadata does not describe never asks for one.
     #[must_use]
     pub fn needs_administrator(&self, token: &str) -> bool {
-        self.casks
-            .iter()
-            .find(|cask| cask.token() == Some(token))
-            .is_some_and(CaskInfo::needs_administrator)
+        self.cask(token).is_some_and(CaskInfo::needs_administrator)
+    }
+
+    /// Returns `true` when upgrading the cask `token` needs `--greedy`.
+    ///
+    /// A cask the metadata does not describe never needs it.
+    #[must_use]
+    pub fn needs_greedy(&self, token: &str) -> bool {
+        self.cask(token).is_some_and(CaskInfo::needs_greedy)
+    }
+
+    /// Why upgrading the cask `token` needs `--greedy`, when it does.
+    #[must_use]
+    pub fn greedy_reason(&self, token: &str) -> Option<String> {
+        self.cask(token).and_then(CaskInfo::greedy_reason)
+    }
+
+    fn cask(&self, token: &str) -> Option<&CaskInfo> {
+        self.casks.iter().find(|cask| cask.token() == Some(token))
     }
 }
 
@@ -198,6 +252,14 @@ fn cask_info(cask: &Value) -> CaskInfo {
         apps: artifacts.map_or_else(Vec::new, |artifacts| app_artifacts(artifacts)),
         administrator: artifacts
             .is_some_and(|artifacts| artifacts.iter().any(artifact_needs_administrator)),
+        version: cask
+            .get("version")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        auto_updates: cask
+            .get("auto_updates")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     }
 }
 
@@ -597,6 +659,18 @@ fn apps_of(metadata: &CaskMetadata, casks: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// The command that reads the metadata of the given casks.
+fn cask_info_command(casks: &[String]) -> CommandSpec {
+    let mut info = CommandSpec::new("brew")
+        .args(["info", "--cask", "--json=v2"])
+        .neutral_locale()
+        .retry_transient_network(NETWORK_RETRIES);
+    for cask in casks {
+        info = info.arg(cask);
+    }
+    info
+}
+
 impl CasksStep {
     fn new(reopen: ReopenQueue) -> Self {
         Self {
@@ -649,6 +723,44 @@ impl CasksStep {
             .collect();
 
         (selected, skipped)
+    }
+
+    /// Adds the reason each outdated cask needs `--greedy` to its report.
+    ///
+    /// The check output names why a cask only shows up with `--greedy`, so a
+    /// self-updating cask is not mistaken for a normal one. When the metadata
+    /// cannot be read the report is returned unchanged; the check itself still
+    /// succeeds.
+    fn with_greedy_reasons(&self, report: CheckReport) -> CheckReport {
+        let casks: Vec<String> = report
+            .items()
+            .iter()
+            .map(|item| item.name().to_owned())
+            .collect();
+        if casks.is_empty() {
+            return report;
+        }
+
+        let metadata = match cask_info_command(&casks).run() {
+            Ok(output) => match cask_metadata(output.stdout()) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    eprintln!("freshen: could not read cask metadata: {error}");
+                    return report;
+                }
+            },
+            Err(error) => {
+                eprintln!("freshen: could not inspect casks: {error}");
+                return report;
+            }
+        };
+
+        CheckReport::from_items(report.items().iter().map(|item| {
+            match metadata.greedy_reason(item.name()) {
+                Some(reason) => item.clone().with_reason(reason),
+                None => item.clone(),
+            }
+        }))
     }
 
     fn quit_running_apps(&self, apps: &[String], options: &RunOptions) -> QuitChoice {
@@ -736,8 +848,9 @@ impl Step for CasksStep {
     }
 
     fn check_with_options(&self, options: &RunOptions) -> Result<CheckReport, StepError> {
-        let report = outdated(CASKS, &["--cask", "--greedy"])?;
-        Ok(report.filtered(|name| options.filters().casks().includes(name)))
+        let report = outdated(CASKS, &["--cask", "--greedy"])?
+            .filtered(|name| options.filters().casks().includes(name));
+        Ok(self.with_greedy_reasons(report))
     }
 
     fn run(&self) -> Result<(), StepError> {
@@ -764,16 +877,10 @@ impl Step for CasksStep {
 
         human!("Casks to upgrade: {}", casks.join(" "));
 
-        let mut info = CommandSpec::new("brew")
-            .args(["info", "--cask", "--json=v2"])
-            .neutral_locale()
-            .retry_transient_network(NETWORK_RETRIES);
-        for cask in &casks {
-            info = info.arg(cask);
-        }
         let mut choice = QuitChoice::Quit;
         let mut selected = casks.clone();
-        match info.run() {
+        let mut needs_greedy = true;
+        match cask_info_command(&casks).run() {
             Ok(output) => match cask_metadata(output.stdout()) {
                 Ok(metadata) => {
                     let (upgraded, skipped) = self.select_casks(&casks, &metadata);
@@ -781,6 +888,7 @@ impl Step for CasksStep {
                         human!("warning: {}", administrator_skip_message(cask));
                     }
                     selected = upgraded;
+                    needs_greedy = selected.iter().any(|cask| metadata.needs_greedy(cask));
 
                     let apps = apps_of(&metadata, &selected);
                     report_cask_apps(&apps);
@@ -801,7 +909,10 @@ impl Step for CasksStep {
             return Ok(());
         }
 
-        let mut spec = CommandSpec::new("brew").args(["upgrade", "--cask", "--greedy"]);
+        let mut spec = CommandSpec::new("brew").args(["upgrade", "--cask"]);
+        if needs_greedy {
+            spec = spec.arg("--greedy");
+        }
         if !filter.is_empty() || selected.len() != casks.len() {
             for cask in &selected {
                 spec = spec.arg(cask);
@@ -1288,6 +1399,64 @@ mod tests {
             .unwrap_or_else(|error| panic!("transcript should parse: {error}"));
 
         assert!(!metadata.needs_administrator("unknown-cask"));
+    }
+
+    const CASKS_WITH_GREEDY: &str = r#"{
+        "casks": [
+            {"token": "firefox", "version": "134.0", "artifacts": [{"app": ["Firefox.app"]}]},
+            {"token": "spotify", "version": "1.2.60", "auto_updates": true,
+             "artifacts": [{"app": ["Spotify.app"]}]},
+            {"token": "nightly", "version": "latest",
+             "artifacts": [{"app": ["Nightly.app"]}]},
+            {"token": "both", "version": "latest", "auto_updates": true,
+             "artifacts": [{"app": ["Both.app"]}]}
+        ]
+    }"#;
+
+    #[test]
+    fn parses_the_version_and_auto_updates_flag() {
+        let metadata = cask_metadata(CASKS_WITH_GREEDY)
+            .unwrap_or_else(|error| panic!("transcript should parse: {error}"));
+
+        let firefox = &metadata.casks()[0];
+        assert_eq!(firefox.version(), Some("134.0"));
+        assert!(!firefox.auto_updates());
+
+        let spotify = &metadata.casks()[1];
+        assert_eq!(spotify.version(), Some("1.2.60"));
+        assert!(spotify.auto_updates());
+    }
+
+    #[test]
+    fn only_latest_and_auto_updating_casks_need_greedy() {
+        let metadata = cask_metadata(CASKS_WITH_GREEDY)
+            .unwrap_or_else(|error| panic!("transcript should parse: {error}"));
+
+        assert!(!metadata.needs_greedy("firefox"));
+        assert!(metadata.needs_greedy("spotify"));
+        assert!(metadata.needs_greedy("nightly"));
+        assert!(metadata.needs_greedy("both"));
+        assert!(!metadata.needs_greedy("unknown-cask"));
+    }
+
+    #[test]
+    fn the_greedy_reason_names_the_property_that_needs_it() {
+        let metadata = cask_metadata(CASKS_WITH_GREEDY)
+            .unwrap_or_else(|error| panic!("transcript should parse: {error}"));
+
+        assert_eq!(metadata.greedy_reason("firefox"), None);
+        assert_eq!(
+            metadata.greedy_reason("spotify").as_deref(),
+            Some("auto_updates true; needs --greedy")
+        );
+        assert_eq!(
+            metadata.greedy_reason("nightly").as_deref(),
+            Some("version :latest; needs --greedy")
+        );
+        assert_eq!(
+            metadata.greedy_reason("both").as_deref(),
+            Some("version :latest and auto_updates true; needs --greedy")
+        );
     }
 
     #[test]

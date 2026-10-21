@@ -47,6 +47,7 @@ pub struct OutdatedItem {
     name: String,
     current: Option<String>,
     latest: Option<String>,
+    reason: Option<String>,
 }
 
 impl OutdatedItem {
@@ -57,6 +58,7 @@ impl OutdatedItem {
             name: name.into(),
             current: None,
             latest: None,
+            reason: None,
         }
     }
 
@@ -71,6 +73,13 @@ impl OutdatedItem {
     #[must_use]
     pub fn with_latest(mut self, version: impl Into<String>) -> Self {
         self.latest = Some(version.into());
+        self
+    }
+
+    /// Explains why the item is outdated or needs special handling.
+    #[must_use]
+    pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
+        self.reason = Some(reason.into());
         self
     }
 
@@ -91,6 +100,12 @@ impl OutdatedItem {
     pub fn latest(&self) -> Option<&str> {
         self.latest.as_deref()
     }
+
+    /// Why the item needs special handling, when known.
+    #[must_use]
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
 }
 
 impl fmt::Display for OutdatedItem {
@@ -101,6 +116,9 @@ impl fmt::Display for OutdatedItem {
         }
         if let Some(latest) = &self.latest {
             write!(f, " -> {latest}")?;
+        }
+        if let Some(reason) = &self.reason {
+            write!(f, " ({reason})")?;
         }
         Ok(())
     }
@@ -686,5 +704,19 @@ mod tests {
         .collect();
 
         assert_eq!(report.pending(), 2);
+    }
+
+    #[test]
+    fn an_outdated_item_shows_its_reason() {
+        let item = OutdatedItem::new("nightly")
+            .with_current("1.0")
+            .with_latest("latest")
+            .with_reason("version :latest; needs --greedy");
+
+        assert_eq!(item.reason(), Some("version :latest; needs --greedy"));
+        assert_eq!(
+            item.to_string(),
+            "nightly 1.0 -> latest (version :latest; needs --greedy)"
+        );
     }
 }

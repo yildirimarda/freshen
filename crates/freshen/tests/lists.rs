@@ -207,10 +207,12 @@ fn the_cask_exclude_list_limits_the_cask_upgrade() {
             "brew outdated --formula",
             "brew outdated --formula --quiet",
             "brew outdated --cask --greedy",
+            "brew info --cask --json=v2 firefox",
             "brew outdated --cask --greedy --quiet",
             "brew info --cask --json=v2 firefox",
-            "brew upgrade --cask --greedy firefox",
+            "brew upgrade --cask firefox",
             "brew outdated --cask --greedy",
+            "brew info --cask --json=v2 firefox",
         ]
     );
     assert!(
@@ -240,14 +242,14 @@ fn the_cask_include_list_keeps_every_other_cask_out_of_the_upgrade() {
     assert!(
         tools
             .step_calls()
-            .contains(&"brew upgrade --cask --greedy google-chrome".to_owned()),
+            .contains(&"brew upgrade --cask google-chrome".to_owned()),
         "calls: {:?}",
         tools.step_calls()
     );
     assert!(
         !tools
             .step_calls()
-            .contains(&"brew upgrade --cask --greedy firefox".to_owned()),
+            .contains(&"brew upgrade --cask firefox".to_owned()),
         "calls: {:?}",
         tools.step_calls()
     );

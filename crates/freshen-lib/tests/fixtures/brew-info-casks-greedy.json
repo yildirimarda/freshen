@@ -1,0 +1,51 @@
+{
+  "formulae": [],
+  "casks": [
+    {
+      "token": "firefox",
+      "version": "134.0",
+      "artifacts": [
+        {
+          "app": [
+            "Firefox.app"
+          ]
+        }
+      ]
+    },
+    {
+      "token": "spotify",
+      "version": "1.2.60",
+      "auto_updates": true,
+      "artifacts": [
+        {
+          "app": [
+            "Spotify.app"
+          ]
+        }
+      ]
+    },
+    {
+      "token": "nightly",
+      "version": "latest",
+      "artifacts": [
+        {
+          "app": [
+            "Nightly.app"
+          ]
+        }
+      ]
+    },
+    {
+      "token": "both",
+      "version": "latest",
+      "auto_updates": true,
+      "artifacts": [
+        {
+          "app": [
+            "Both.app"
+          ]
+        }
+      ]
+    }
+  ]
+}
