@@ -136,10 +136,36 @@ mod tests {
     #[test]
     fn a_windows_candidate_is_found_through_its_extension() {
         let dir = temp_dir("windows");
-        let path = dir.join("tool.cmd");
+
+        // The file is written in lower case with the extension `PATHEXT` names
+        // first, so the test does not depend on the extensions the machine
+        // happens to have.
+        let extensions = super::executable_extensions();
+        let extension = extensions
+            .iter()
+            .find(|extension| extension.eq_ignore_ascii_case(".cmd"))
+            .or_else(|| extensions.first())
+            .map(|extension| extension.to_lowercase())
+            .unwrap_or_else(|| ".cmd".to_owned());
+        let path = dir.join(format!("tool{extension}"));
         fs::write(&path, "@echo off\r\n").unwrap_or_else(|error| panic!("{error}"));
 
-        assert_eq!(candidate(&dir, OsStr::new("tool")), Some(path));
+        let resolved = candidate(&dir, OsStr::new("tool"))
+            .unwrap_or_else(|| panic!("the candidate was not found through {extension}"));
+
+        // `PATHEXT` spells the extension in upper case, so the resolved path
+        // can differ from the file on disk in case only.
+        assert_eq!(resolved.parent(), Some(dir.as_path()));
+        assert_eq!(
+            resolved
+                .file_name()
+                .map(|name| name.to_string_lossy().to_lowercase()),
+            Some(
+                path.file_name()
+                    .map(|name| name.to_string_lossy().to_lowercase())
+                    .unwrap_or_default()
+            )
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

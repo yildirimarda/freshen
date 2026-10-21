@@ -13,7 +13,13 @@ git commit -m "ci: apply <name> proposal" && git push
 
 Pending proposals:
 
-- [ ] `ci-proposals/rust.yml` (separate Rust job, MSRV check, cargo-deny). Apply after the plan item "Make `tests/run-tests.sh` accept each proposed workflow..." has merged.
+- [ ] `ci-proposals/rust.yml` — the `rust` workflow with the Windows leg blocking again. The `continue-on-error` workaround for the Windows unit tests is gone now that they pass, so the proposal drops the line. The workflow is already applied as `.github/workflows/rust.yml`, so replace it instead of moving it:
+
+  ```bash
+  git mv -f ci-proposals/rust.yml .github/workflows/rust.yml
+  git commit -m "ci: make the windows leg of the rust workflow block again" && git push
+  ```
+
 - [ ] `ci-proposals/real-tools.yml` (read-only checks against real Homebrew, Chocolatey, winget and apt), once the agent has proposed it and the apt (Milestone 5) and winget/Chocolatey (Milestone 6) steps exist. The new jobs fail closed on a missing or skipped step, so applying the proposal before those steps land turns the workflow red by design.
 
 ## Accounts and credentials for Milestone 11 (distribution)
