@@ -242,6 +242,19 @@ fn latest_version(rest: &str) -> Option<&str> {
     (!latest.is_empty()).then_some(latest)
 }
 
+/// Directories searched for installed cask apps. `FRESHEN_APP_ROOTS` (a
+/// PATH-style list) replaces the defaults so tests never see the real machine.
+fn app_roots() -> Vec<PathBuf> {
+    if let Some(roots) = env::var_os("FRESHEN_APP_ROOTS") {
+        return env::split_paths(&roots).collect();
+    }
+    let mut roots = vec![PathBuf::from("/Applications")];
+    if let Some(home) = env::var_os("HOME") {
+        roots.push(PathBuf::from(home).join("Applications"));
+    }
+    roots
+}
+
 fn report_cask_apps(apps: &[String]) {
     if apps.is_empty() {
         return;
@@ -249,11 +262,7 @@ fn report_cask_apps(apps: &[String]) {
 
     human!("Cask apps: {}", apps.join(", "));
 
-    let mut roots = vec![PathBuf::from("/Applications")];
-    if let Some(home) = env::var_os("HOME") {
-        roots.push(PathBuf::from(home).join("Applications"));
-    }
-    let installed = installed_app_paths(apps, &roots);
+    let installed = installed_app_paths(apps, &app_roots());
     for path in installed {
         human!("Installed cask app: {}", path.display());
     }
@@ -382,11 +391,7 @@ impl CasksStep {
     }
 
     fn quit_running_apps(&self, apps: &[String], options: &RunOptions) -> QuitChoice {
-        let mut roots = vec![PathBuf::from("/Applications")];
-        if let Some(home) = env::var_os("HOME") {
-            roots.push(PathBuf::from(home).join("Applications"));
-        }
-        let installed = installed_app_paths(apps, &roots);
+        let installed = installed_app_paths(apps, &app_roots());
         let self_bundle_id = own_bundle_id(|key| env::var(key).ok());
         let system = self.system.as_ref();
         let scan = find_running_apps(system, &installed, self_bundle_id.as_deref());

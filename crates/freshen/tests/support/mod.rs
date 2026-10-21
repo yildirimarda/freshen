@@ -120,6 +120,7 @@ impl StubTools {
             .env("FRESHEN_LOCK_DIR", self.dir.join("lock"))
             .env("FRESHEN_SKIP_PREFLIGHT", "1")
             .env("HOME", &self.dir)
+            .env("FRESHEN_APP_ROOTS", self.dir.join("Applications"))
             .env("USERPROFILE", &self.dir);
         command
     }
@@ -334,6 +335,7 @@ impl StubTools {
         command
     }
 
+    #[allow(clippy::needless_return)]
     fn path(&self) -> std::ffi::OsString {
         #[cfg(windows)]
         {
