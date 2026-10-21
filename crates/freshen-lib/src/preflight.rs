@@ -882,6 +882,18 @@ mod tests {
         assert_eq!(format_gib(12 * 1024 * 1024 * 1024), "12 GiB");
     }
 
+    /// Ask the kernel for an ephemeral loopback port and release it again.
+    ///
+    /// Another process can claim the port as soon as the listener is dropped,
+    /// so callers must be prepared for the returned address to be reachable.
+    fn released_loopback_addr() -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .unwrap_or_else(|error| panic!("failed to bind test listener: {error}"));
+        listener
+            .local_addr()
+            .unwrap_or_else(|error| panic!("failed to read test listener address: {error}"))
+    }
+
     #[test]
     fn tcp_reachability_detects_open_and_closed_ports() {
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -892,7 +904,18 @@ mod tests {
         assert!(reachable(&[open], Duration::from_millis(500)));
 
         drop(listener);
-        assert!(!reachable(&[open], Duration::from_millis(500)));
+
+        // A busy CI runner may hand the just-released port to another process
+        // before the probe runs. Retry with fresh ephemeral ports until one is
+        // still closed instead of assuming the first candidate stayed free.
+        let closed = (0..32).find_map(|_| {
+            let candidate = released_loopback_addr();
+            (!reachable(&[candidate], Duration::from_millis(500))).then_some(candidate)
+        });
+        assert!(
+            closed.is_some(),
+            "no closed loopback port found after 32 attempts"
+        );
     }
 
     #[test]
