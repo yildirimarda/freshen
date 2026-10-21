@@ -1153,12 +1153,10 @@ fn parse_proc_stat(stat: &str) -> Option<(u32, String)> {
 /// `/proc` (macOS and the BSDs).
 #[cfg(all(unix, not(target_os = "linux")))]
 fn ps_processes() -> Vec<ProcessInfo> {
-    let Ok(output) = Command::new("ps")
-        .args(["-axo", "pid=,ppid=,comm="])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-    else {
+    let mut command = Command::new("ps");
+    command.args(["-axo", "pid=,ppid=,comm="]);
+    crate::locale::with_neutral_locale(&mut command);
+    let Ok(output) = command.stdin(Stdio::null()).stderr(Stdio::null()).output() else {
         return Vec::new();
     };
     if !output.status.success() {
@@ -1193,12 +1191,10 @@ fn parse_ps_processes(table: &str) -> Vec<ProcessInfo> {
 fn windows_processes() -> Vec<ProcessInfo> {
     let script = "Get-CimInstance Win32_Process | ForEach-Object { \
                   \"$($_.ProcessId) $($_.ParentProcessId) $($_.Name)\" }";
-    let Ok(output) = Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", script])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-    else {
+    let mut command = Command::new("powershell");
+    command.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+    crate::locale::with_neutral_locale(&mut command);
+    let Ok(output) = command.stdin(Stdio::null()).stderr(Stdio::null()).output() else {
         return Vec::new();
     };
     if !output.status.success() {

@@ -14,6 +14,7 @@ mod executable;
 pub mod exit;
 pub mod homebrew;
 pub mod listing;
+pub mod locale;
 pub mod lock;
 mod network;
 pub mod options;

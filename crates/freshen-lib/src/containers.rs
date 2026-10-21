@@ -239,6 +239,7 @@ impl Step for ColimaStopStep {
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
         let outdated = CommandSpec::new("brew")
             .args(["outdated", "--formula", "--quiet"])
+            .neutral_locale()
             .retry_transient_network(NETWORK_RETRIES)
             .run()
             .map_err(|error| StepError::run_from_process(COLIMA_STOP, &error))?;
@@ -469,7 +470,9 @@ impl Step for DockerStep {
         if let Err(error) = cleanup::run(
             DOCKER,
             "Docker: prune dangling images",
-            CommandSpec::new("docker").args(["image", "prune", "-f"]),
+            CommandSpec::new("docker")
+                .args(["image", "prune", "-f"])
+                .neutral_locale(),
             options,
         ) {
             failures.push(error);
@@ -517,6 +520,7 @@ fn colima_is_running() -> bool {
 fn list_compose_projects() -> Vec<ComposeProject> {
     let Ok(output) = CommandSpec::new("docker")
         .args(["compose", "ls", "--format", "json"])
+        .neutral_locale()
         .run()
     else {
         return Vec::new();
@@ -528,6 +532,7 @@ fn list_standalone_containers() -> Vec<StandaloneContainer> {
     let Ok(output) = CommandSpec::new("docker")
         .arg("ps")
         .args(["--format", PS_FORMAT])
+        .neutral_locale()
         .run()
     else {
         return Vec::new();

@@ -58,6 +58,7 @@ impl UvStep {
 
         let output = match CommandSpec::new("uv")
             .args(["tool", "list", "--outdated"])
+            .neutral_locale()
             .retry_transient_network(NETWORK_RETRIES)
             .run()
         {
@@ -113,6 +114,7 @@ impl Step for UvStep {
     fn check_with_options(&self, options: &RunOptions) -> Result<CheckReport, StepError> {
         let output = CommandSpec::new("uv")
             .args(["tool", "list", "--outdated"])
+            .neutral_locale()
             .retry_transient_network(NETWORK_RETRIES)
             .run()
             .map_err(|error| StepError::check_from_process(UV, &error))?;
@@ -132,7 +134,9 @@ impl Step for UvStep {
         if let Err(error) = cleanup::run(
             UV,
             "uv: cache prune",
-            CommandSpec::new("uv").args(["cache", "prune"]),
+            CommandSpec::new("uv")
+                .args(["cache", "prune"])
+                .neutral_locale(),
             options,
         ) {
             failures.push(error);
@@ -175,6 +179,7 @@ impl Step for MiseStep {
     fn check(&self) -> Result<CheckReport, StepError> {
         let output = CommandSpec::new("mise")
             .arg("outdated")
+            .neutral_locale()
             .retry_transient_network(NETWORK_RETRIES)
             .run()
             .map_err(|error| StepError::check_from_process(MISE, &error))?;
@@ -215,7 +220,9 @@ impl Step for MiseStep {
         if let Err(error) = cleanup::run(
             MISE,
             "mise: prune (remove unused old versions)",
-            CommandSpec::new("mise").args(["prune", "-y"]),
+            CommandSpec::new("mise")
+                .args(["prune", "-y"])
+                .neutral_locale(),
             options,
         ) {
             failures.push(error);
@@ -262,8 +269,13 @@ fn parse_uv_outdated_line(line: &str) -> Option<OutdatedItem> {
     let line = line.trim();
     let (name, rest) = line.split_once(" v")?;
     let current = rest.split_whitespace().next()?;
-    let (_, latest) = rest.split_once("[latest: ")?;
-    let latest = latest.split(']').next()?;
+
+    // The label inside the brackets is translated, so only the shape of the
+    // bracket is used: the version is what follows the last colon.
+    let (_, bracket) = rest.split_once('[')?;
+    let (bracket, _) = bracket.split_once(']')?;
+    let (_, latest) = bracket.rsplit_once(':')?;
+    let latest = latest.trim();
 
     if name.is_empty() || current.is_empty() || latest.is_empty() {
         return None;
@@ -301,12 +313,30 @@ fn parse_mise_outdated_line(line: &str) -> Option<OutdatedItem> {
         return None;
     }
 
+    // The labels of the table are translated, so the header row is not
+    // recognised by its words but by the version it does not contain.
+    if !looks_like_version(latest) {
+        return None;
+    }
+
     let item = OutdatedItem::new(name).with_latest(latest);
     if current.starts_with('[') || current.eq_ignore_ascii_case("missing") {
         Some(item)
     } else {
         Some(item.with_current(current))
     }
+}
+
+/// Whether `field` can be the version column of `mise outdated`.
+///
+/// A version contains a digit, except for the special values mise prints for
+/// a tool it does not manage itself.
+fn looks_like_version(field: &str) -> bool {
+    field.chars().any(|character| character.is_ascii_digit())
+        || matches!(
+            field.to_ascii_lowercase().as_str(),
+            "latest" | "system" | "missing" | "unknown"
+        )
 }
 
 fn mise_installed_with_brew() -> bool {
@@ -434,6 +464,19 @@ mod tests {
     }
 
     #[test]
+    fn parses_uv_outdated_tools_with_a_translated_label() {
+        let items = parse_uv_outdated(
+            "black v23.1.0 [en son: 26.10.1]\n\
+             - black\n",
+        );
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name(), "black");
+        assert_eq!(items[0].current(), Some("23.1.0"));
+        assert_eq!(items[0].latest(), Some("26.10.1"));
+    }
+
+    #[test]
     fn parses_the_mise_outdated_table_and_skips_its_header() {
         let items = parse_mise_outdated(
             "Plugin  Requested  Current  Latest\n\
@@ -461,5 +504,18 @@ mod tests {
         assert_eq!(items[1].name(), "go");
         assert_eq!(items[1].current(), None);
         assert_eq!(items[1].latest(), Some("1.22.0"));
+    }
+
+    #[test]
+    fn skips_a_translated_mise_header_row() {
+        let items = parse_mise_outdated(
+            "Araç  İstenen  Güncel  En Son\n\
+             node  20         20.0.0   20.1.0\n",
+        );
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name(), "node");
+        assert_eq!(items[0].current(), Some("20.0.0"));
+        assert_eq!(items[0].latest(), Some("20.1.0"));
     }
 }

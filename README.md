@@ -35,6 +35,7 @@ A failing step never aborts the run. Failures are collected and listed at the en
 - **`--check` queries independent steps concurrently.** Up to `--jobs N` read-only queries run at the same time (the default is 4, and `0` is treated as 1). The report keeps the run order and the summary counts are deterministic regardless of which query finishes first.
 - **Transient download errors are retried with exponential backoff.** A connection reset, timeout or temporary HTTP 5xx/429 response is retried up to twice before the step gives up. If the package registry is permanently unreachable (DNS failure, refused connection or no route), the step is reported as `skipped` with the reason `registry unreachable` instead of failing the run.
 - **Only one update runs at a time.** A second run stops with an error naming the PID that holds the lock. The lock lives under the platform state directory (`FRESHEN_LOCK_DIR` overrides it), and `--dry-run`/`--check` do not take it.
+- **Tools are asked for their output in a neutral locale.** Every command whose output freshen parses runs with `LC_ALL=C` and `LANG=C` (and, on Windows, with a UTF-8 console and without interactivity), so a machine set to another language cannot change the columns of a table or the words freshen looks for. The commands whose output is only shown to you keep the language of your machine.
 
 ### Supported terminals and session managers
 
@@ -103,6 +104,10 @@ removes the few it must override, so `brew`, `uv`, `mise`, `docker`, `colima`
 and the `curl`/`git` processes they start see the same proxy and certificate
 variables. Export them in your shell or service manager before running
 `freshen`.
+
+The commands whose output freshen parses are the one exception: they run with
+`LC_ALL=C` and `LANG=C` so that a translated table cannot break a parser (see
+[Details worth knowing](#details-worth-knowing)).
 
 ## Configuration
 

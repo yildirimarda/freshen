@@ -353,6 +353,7 @@ impl ProcessProbe for HostProcessProbe {
 fn ps_processes() -> Vec<ProcessEntry> {
     let Ok(output) = CommandSpec::new("ps")
         .args(["-axo", "pid=,ppid=,command="])
+        .neutral_locale()
         .run()
     else {
         return Vec::new();
@@ -365,6 +366,7 @@ fn ps_parent_name(pid: u32) -> String {
     CommandSpec::new("ps")
         .args(["-o", "comm=", "-p"])
         .arg(pid.to_string())
+        .neutral_locale()
         .run()
         .ok()
         .map(|output| basename(output.stdout().trim()).to_owned())
@@ -383,6 +385,7 @@ fn windows_processes() -> Vec<ProcessEntry> {
                   \"$($_.ProcessId)$([char]31)$($_.ParentProcessId)$([char]31)$($_.CommandLine)\" }";
     let Ok(output) = CommandSpec::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .neutral_locale()
         .run()
     else {
         return Vec::new();
@@ -476,6 +479,7 @@ pub struct PrunableTool {
 pub fn prunable_tool_versions() -> Vec<PrunableTool> {
     let Ok(output) = CommandSpec::new("mise")
         .args(["ls", "--prunable", "--json"])
+        .neutral_locale()
         .run()
     else {
         return Vec::new();

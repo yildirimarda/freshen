@@ -364,14 +364,19 @@ fn bundle_id_command(app: &Path) -> CommandSpec {
         .arg("read")
         .arg(app.join("Contents/Info"))
         .arg("CFBundleIdentifier")
+        .neutral_locale()
 }
 
 fn process_list_command() -> CommandSpec {
-    CommandSpec::new("ps").args(["-axo", "command="])
+    CommandSpec::new("ps")
+        .args(["-axo", "command="])
+        .neutral_locale()
 }
 
 fn pid_list_command() -> CommandSpec {
-    CommandSpec::new("ps").args(["-axo", "pid=,command="])
+    CommandSpec::new("ps")
+        .args(["-axo", "pid=,command="])
+        .neutral_locale()
 }
 
 fn quit_command(bundle_id: &str) -> CommandSpec {

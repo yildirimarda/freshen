@@ -448,7 +448,11 @@ fn parse_proc_locks(table: &str) -> Vec<(u32, u64)> {
 
 #[cfg(all(unix, not(target_os = "linux")))]
 fn ps_processes() -> Vec<PackageManagerProcess> {
-    let Ok(output) = CommandSpec::new("ps").args(["-axo", "pid=,command="]).run() else {
+    let Ok(output) = CommandSpec::new("ps")
+        .args(["-axo", "pid=,command="])
+        .neutral_locale()
+        .run()
+    else {
         return Vec::new();
     };
 
@@ -480,6 +484,7 @@ fn parse_ps_processes(table: &str) -> Vec<PackageManagerProcess> {
 fn tasklist_processes() -> Vec<PackageManagerProcess> {
     let Ok(output) = CommandSpec::new("tasklist")
         .args(["/FO", "CSV", "/NH"])
+        .neutral_locale()
         .run()
     else {
         return Vec::new();
