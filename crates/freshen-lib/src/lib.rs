@@ -13,6 +13,7 @@ pub mod exit;
 pub mod homebrew;
 pub mod listing;
 pub mod lock;
+mod network;
 pub mod options;
 pub mod output;
 pub mod package_manager;

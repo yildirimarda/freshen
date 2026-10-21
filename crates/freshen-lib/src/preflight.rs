@@ -4,7 +4,8 @@
 //! an environment where it is reasonable to start. These checks catch the
 //! common cases before the first package manager changes anything:
 //!
-//! * the network is reachable;
+//! * the network is reachable, honouring the proxy and custom CA variables
+//!   from the environment;
 //! * enough free disk space is available;
 //! * the machine is not running on a low battery;
 //! * the connection is not metered or a phone hotspot.
@@ -16,10 +17,8 @@
 //! fixed facts instead of reading the real machine.
 
 use std::fmt;
-use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::Duration;
 
 /// Default minimum free disk space, in bytes (1 GiB).
 pub const DEFAULT_MIN_FREE_DISK_BYTES: u64 = 1024 * 1024 * 1024;
@@ -339,11 +338,7 @@ pub struct HostPreflightProbe;
 
 impl PreflightProbe for HostPreflightProbe {
     fn network_reachable(&self) -> bool {
-        let endpoints = [
-            SocketAddr::from(([1, 1, 1, 1], 443)),
-            SocketAddr::from(([8, 8, 8, 8], 443)),
-        ];
-        reachable(&endpoints, Duration::from_secs(2))
+        crate::network::reachable()
     }
 
     fn free_disk_bytes(&self) -> Option<u64> {
@@ -393,10 +388,11 @@ impl PreflightProbe for HostPreflightProbe {
     }
 }
 
-fn reachable(endpoints: &[SocketAddr], timeout: Duration) -> bool {
+#[cfg(test)]
+fn reachable(endpoints: &[std::net::SocketAddr], timeout: std::time::Duration) -> bool {
     endpoints
         .iter()
-        .any(|endpoint| TcpStream::connect_timeout(endpoint, timeout).is_ok())
+        .any(|endpoint| std::net::TcpStream::connect_timeout(endpoint, timeout).is_ok())
 }
 
 #[cfg(target_os = "linux")]
