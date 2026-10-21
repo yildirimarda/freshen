@@ -155,6 +155,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Skip the steps whose prerequisite is disabled in the configuration file, so disabling `brew` also skips the Homebrew steps that need it, covered by tests
 - [ ] Name the host terminal application in the Automation denial message (for example `Terminal`), so the user knows which entry to switch on in the System Settings Automation pane, covered by tests
 - [ ] Report why an AppleScript quit failed when the failure is not a denied Automation request (for example error -600 "application isn't running"), instead of the generic "did not quit" message, covered by tests with injected osascript output
+- [ ] Report the casks that were skipped because their installer needs an administrator password in the run summary and in the `--json`/`--markdown` reports, so a structured report names them instead of only printing a human-readable warning
 
 ## Milestone 5: Linux
 
@@ -282,6 +283,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Skip scheduled runs when on battery, on a metered connection, in a meeting/presentation (frontmost full-screen app) or when the user was active in the last N minutes
 - [ ] Catch-up behaviour: run once after wake/login when the scheduled time was missed
 - [ ] Add a `--non-interactive` mode that never prompts and picks the safe default for every decision
+- [ ] Make the `--non-interactive` mode skip the casks whose installer needs an administrator password, so a scheduled run never waits for a password even when a terminal is attached
 
 ## Milestone 11: Distribution and Docs
 

@@ -104,6 +104,103 @@ pub enum CaskError {
     Json(String),
 }
 
+/// One cask from the metadata `brew info --cask --json=v2` returns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaskInfo {
+    token: Option<String>,
+    apps: Vec<String>,
+    administrator: bool,
+}
+
+impl CaskInfo {
+    /// The token of the cask, when the metadata names it.
+    #[must_use]
+    pub fn token(&self) -> Option<&str> {
+        self.token.as_deref()
+    }
+
+    /// The app bundles the cask installs.
+    #[must_use]
+    pub fn apps(&self) -> &[String] {
+        &self.apps
+    }
+
+    /// Returns `true` when the cask asks for an administrator password.
+    #[must_use]
+    pub fn needs_administrator(&self) -> bool {
+        self.administrator
+    }
+}
+
+/// The casks from the metadata `brew info --cask --json=v2` returns.
+///
+/// The metadata says which apps a cask installs and whether its installer asks
+/// for an administrator password, so a run without a terminal can skip the
+/// casks it cannot install.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CaskMetadata {
+    casks: Vec<CaskInfo>,
+}
+
+impl CaskMetadata {
+    /// The casks the metadata describes.
+    #[must_use]
+    pub fn casks(&self) -> &[CaskInfo] {
+        &self.casks
+    }
+
+    /// The app bundles every cask installs.
+    #[must_use]
+    pub fn apps(&self) -> Vec<String> {
+        self.casks
+            .iter()
+            .flat_map(|cask| cask.apps().iter().cloned())
+            .collect()
+    }
+
+    /// Returns `true` when the cask `token` asks for an administrator
+    /// password.
+    ///
+    /// A cask the metadata does not describe never asks for one.
+    #[must_use]
+    pub fn needs_administrator(&self, token: &str) -> bool {
+        self.casks
+            .iter()
+            .find(|cask| cask.token() == Some(token))
+            .is_some_and(CaskInfo::needs_administrator)
+    }
+}
+
+/// Parses the cask metadata from a recorded `brew info --cask --json=v2`
+/// transcript.
+///
+/// # Errors
+///
+/// Returns [`CaskError::Json`] when the transcript is not valid JSON.
+pub fn cask_metadata(json: &str) -> Result<CaskMetadata, CaskError> {
+    let value: Value =
+        serde_json::from_str(json).map_err(|error| CaskError::Json(error.to_string()))?;
+    let Some(casks) = value.get("casks").and_then(Value::as_array) else {
+        return Ok(CaskMetadata::default());
+    };
+
+    Ok(CaskMetadata {
+        casks: casks.iter().map(cask_info).collect(),
+    })
+}
+
+/// Reads one cask from the metadata.
+fn cask_info(cask: &Value) -> CaskInfo {
+    let artifacts = cask.get("artifacts").and_then(Value::as_array);
+
+    CaskInfo {
+        token: cask.get("token").and_then(Value::as_str).map(str::to_owned),
+        apps: artifacts.map_or_else(Vec::new, |artifacts| app_artifacts(artifacts)),
+        administrator: artifacts
+            .is_some_and(|artifacts| artifacts.iter().any(artifact_needs_administrator)),
+    }
+}
+
 /// App artifact names a set of casks will install, from a recorded
 /// `brew info --cask --json=v2` transcript.
 ///
@@ -116,30 +213,24 @@ pub enum CaskError {
 ///
 /// Returns [`CaskError::Json`] when the transcript is not valid JSON.
 pub fn cask_app_artifacts(json: &str) -> Result<Vec<String>, CaskError> {
-    let value: Value =
-        serde_json::from_str(json).map_err(|error| CaskError::Json(error.to_string()))?;
-    let Some(casks) = value.get("casks").and_then(Value::as_array) else {
-        return Ok(Vec::new());
-    };
+    Ok(cask_metadata(json)?.apps())
+}
 
+/// The app bundles the artifacts install.
+fn app_artifacts(artifacts: &[Value]) -> Vec<String> {
     let mut apps = Vec::new();
-    for cask in casks {
-        let Some(artifacts) = cask.get("artifacts").and_then(Value::as_array) else {
+    for artifact in artifacts {
+        let Some(entries) = artifact.get("app").and_then(Value::as_array) else {
             continue;
         };
-        for artifact in artifacts {
-            let Some(entries) = artifact.get("app").and_then(Value::as_array) else {
-                continue;
-            };
-            for entry in entries {
-                if let Some(name) = app_name(entry) {
-                    apps.push(name);
-                }
+        for entry in entries {
+            if let Some(name) = app_name(entry) {
+                apps.push(name);
             }
         }
     }
 
-    Ok(apps)
+    apps
 }
 
 fn app_name(entry: &Value) -> Option<String> {
@@ -153,6 +244,58 @@ fn app_name(entry: &Value) -> Option<String> {
         .file_name()
         .and_then(|name| name.to_str())
         .map(str::to_owned)
+}
+
+/// Whether an artifact needs an administrator password.
+///
+/// Homebrew installs a macOS installer package and a keyboard layout with
+/// `sudo`, and every other artifact that asks for `sudo` in its arguments, or
+/// runs a `sudo` command itself, needs the password as well.
+fn artifact_needs_administrator(artifact: &Value) -> bool {
+    let Some(fields) = artifact.as_object() else {
+        return false;
+    };
+
+    if fields.contains_key("pkg") || fields.contains_key("keyboard_layout") {
+        return true;
+    }
+
+    fields.values().any(mentions_sudo)
+}
+
+/// Whether the value asks for `sudo` anywhere.
+///
+/// An install or uninstall step asks for `sudo` when it says so in its
+/// arguments, and a script asks for it when the command it runs is `sudo`.
+fn mentions_sudo(value: &Value) -> bool {
+    match value {
+        Value::Object(fields) => fields.iter().any(|(key, value)| {
+            (key == "sudo" && !matches!(value, Value::Bool(false))) || mentions_sudo(value)
+        }),
+        Value::Array(items) => items.iter().any(mentions_sudo),
+        Value::String(text) => mentions_sudo_command(text),
+        _ => false,
+    }
+}
+
+/// Whether the text runs `sudo`.
+///
+/// The command is recognized on its own (`sudo`, `/usr/bin/sudo`) and after a
+/// separator (`;`, `&&`), so a word that merely contains it is not a match.
+fn mentions_sudo_command(text: &str) -> bool {
+    text.split(|character: char| character.is_whitespace() || ";&|()\"'`$<>".contains(character))
+        .any(|token| token.rsplit('/').next() == Some("sudo"))
+}
+
+/// The message shown when a cask is skipped because its installer asks for an
+/// administrator password.
+#[must_use]
+pub fn administrator_skip_message(cask: &str) -> String {
+    format!(
+        "skipping cask `{cask}`: its installer needs an administrator password, \
+         but this run has no terminal to type it into. \
+         Upgrade it yourself with `brew upgrade --cask {cask}`."
+    )
 }
 
 /// Existing `.app` bundles for `apps`, searched in `roots` in order.
@@ -396,6 +539,7 @@ impl Step for FormulaeStep {
 struct CasksStep {
     reopen: ReopenQueue,
     system: Arc<dyn AppSystem>,
+    interactive: bool,
 }
 
 /// The bundle id of the terminal running freshen, used to protect it from being
@@ -440,17 +584,71 @@ fn quit_plan(scan: &AppScan, app_lists: &AppLists, assume_yes: bool) -> QuitPlan
     }
 }
 
+/// The app bundles the given casks install.
+fn apps_of(metadata: &CaskMetadata, casks: &[String]) -> Vec<String> {
+    metadata
+        .casks()
+        .iter()
+        .filter(|cask| {
+            cask.token()
+                .is_some_and(|token| casks.iter().any(|name| name == token))
+        })
+        .flat_map(|cask| cask.apps().iter().cloned())
+        .collect()
+}
+
 impl CasksStep {
     fn new(reopen: ReopenQueue) -> Self {
         Self {
             reopen,
             system: Arc::new(MacAppSystem),
+            interactive: crate::system::terminal_is_interactive(),
         }
     }
 
     #[cfg(test)]
     fn with_system(reopen: ReopenQueue, system: Arc<dyn AppSystem>) -> Self {
-        Self { reopen, system }
+        Self {
+            reopen,
+            system,
+            interactive: false,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_interactive(mut self, interactive: bool) -> Self {
+        self.interactive = interactive;
+        self
+    }
+
+    /// The casks to upgrade and the casks to skip.
+    ///
+    /// Homebrew installs a cask that asks for an administrator password with
+    /// `sudo`, which prompts on the terminal. A run without a terminal cannot
+    /// answer that prompt, so the cask is skipped instead of waiting for a
+    /// password that never comes.
+    fn select_casks(
+        &self,
+        casks: &[String],
+        metadata: &CaskMetadata,
+    ) -> (Vec<String>, Vec<String>) {
+        let skipped: Vec<String> = if self.interactive {
+            Vec::new()
+        } else {
+            casks
+                .iter()
+                .filter(|cask| metadata.needs_administrator(cask))
+                .cloned()
+                .collect()
+        };
+
+        let selected = casks
+            .iter()
+            .filter(|cask| !skipped.contains(cask))
+            .cloned()
+            .collect();
+
+        (selected, skipped)
     }
 
     fn quit_running_apps(&self, apps: &[String], options: &RunOptions) -> QuitChoice {
@@ -574,9 +772,17 @@ impl Step for CasksStep {
             info = info.arg(cask);
         }
         let mut choice = QuitChoice::Quit;
+        let mut selected = casks.clone();
         match info.run() {
-            Ok(output) => match cask_app_artifacts(output.stdout()) {
-                Ok(apps) => {
+            Ok(output) => match cask_metadata(output.stdout()) {
+                Ok(metadata) => {
+                    let (upgraded, skipped) = self.select_casks(&casks, &metadata);
+                    for cask in &skipped {
+                        human!("warning: {}", administrator_skip_message(cask));
+                    }
+                    selected = upgraded;
+
+                    let apps = apps_of(&metadata, &selected);
                     report_cask_apps(&apps);
                     choice = self.quit_running_apps(&apps, options);
                 }
@@ -590,9 +796,14 @@ impl Step for CasksStep {
             return Ok(());
         }
 
+        if selected.is_empty() {
+            human!("No casks upgraded: every outdated cask needs an administrator password.");
+            return Ok(());
+        }
+
         let mut spec = CommandSpec::new("brew").args(["upgrade", "--cask", "--greedy"]);
-        if !filter.is_empty() {
-            for cask in &casks {
+        if !filter.is_empty() || selected.len() != casks.len() {
+            for cask in &selected {
                 spec = spec.arg(cask);
             }
         }
@@ -797,8 +1008,9 @@ impl Step for ReopenStep {
 #[cfg(test)]
 mod tests {
     use super::{
-        cask_app_artifacts, installed_app_paths, own_bundle_id, parse_outdated, quit_plan,
-        register, CaskError, CasksStep, ReopenQueue, ReopenStep, CASKS, FORMULAE, REOPEN,
+        administrator_skip_message, apps_of, cask_app_artifacts, cask_metadata,
+        installed_app_paths, own_bundle_id, parse_outdated, quit_plan, register, CaskError,
+        CasksStep, ReopenQueue, ReopenStep, CASKS, FORMULAE, REOPEN,
     };
     use crate::apps::{AppScan, AppSystem, QuitOutcome, RunningApp};
     use crate::platform::Platform;
@@ -836,6 +1048,12 @@ mod tests {
             super::lock(&self.opened).push(bundle_id.to_owned());
             true
         }
+    }
+
+    /// A cask step that runs with or without a terminal.
+    fn casks_step(interactive: bool) -> CasksStep {
+        CasksStep::with_system(ReopenQueue::default(), Arc::new(FakeAppSystem::default()))
+            .with_interactive(interactive)
     }
 
     fn ordered_ids(platform: Platform) -> Vec<StepId> {
@@ -985,6 +1203,137 @@ mod tests {
             Err(CaskError::Json(
                 "expected ident at line 1 column 2".to_owned()
             ))
+        );
+    }
+
+    /// A transcript with a cask that installs a macOS installer package, one
+    /// whose uninstall script calls `sudo`, and one that needs neither.
+    const CASKS_WITH_ADMINISTRATOR: &str = r#"{
+        "casks": [
+            {
+                "token": "1password",
+                "artifacts": [
+                    {"pkg": ["1Password.pkg"]}
+                ]
+            },
+            {
+                "token": "some-tool",
+                "artifacts": [
+                    {"app": ["Some Tool.app"]},
+                    {"uninstall": [{"script": {"executable": "uninstall.sh", "sudo": true}}]}
+                ]
+            },
+            {
+                "token": "firefox",
+                "artifacts": [
+                    {"app": ["Firefox.app"]}
+                ]
+            }
+        ]
+    }"#;
+
+    #[test]
+    fn a_pkg_installer_needs_an_administrator_password() {
+        let metadata = cask_metadata(CASKS_WITH_ADMINISTRATOR)
+            .unwrap_or_else(|error| panic!("transcript should parse: {error}"));
+
+        assert!(metadata.needs_administrator("1password"));
+        assert!(!metadata.needs_administrator("firefox"));
+    }
+
+    #[test]
+    fn a_sudo_script_needs_an_administrator_password() {
+        let metadata = cask_metadata(CASKS_WITH_ADMINISTRATOR)
+            .unwrap_or_else(|error| panic!("transcript should parse: {error}"));
+
+        assert!(metadata.needs_administrator("some-tool"));
+    }
+
+    #[test]
+    fn a_sudo_command_in_a_script_needs_an_administrator_password() {
+        let json = r#"{
+            "casks": [
+                {"token": "tool", "artifacts": [
+                    {"uninstall": [{"script": "sudo rm -rf /usr/local/tool"}]}
+                ]}
+            ]
+        }"#;
+
+        let metadata =
+            cask_metadata(json).unwrap_or_else(|error| panic!("transcript should parse: {error}"));
+
+        assert!(metadata.needs_administrator("tool"));
+    }
+
+    #[test]
+    fn a_word_that_merely_contains_sudo_is_not_a_sudo_command() {
+        let json = r#"{
+            "casks": [
+                {"token": "tool", "artifacts": [
+                    {"binary": [{"target": "sudoku"}]},
+                    {"uninstall": [{"script": {"executable": "clean.sh", "sudo": false}}]}
+                ]}
+            ]
+        }"#;
+
+        let metadata =
+            cask_metadata(json).unwrap_or_else(|error| panic!("transcript should parse: {error}"));
+
+        assert!(!metadata.needs_administrator("tool"));
+    }
+
+    #[test]
+    fn a_cask_the_metadata_does_not_describe_needs_no_administrator_password() {
+        let metadata = cask_metadata(CASKS_WITH_ADMINISTRATOR)
+            .unwrap_or_else(|error| panic!("transcript should parse: {error}"));
+
+        assert!(!metadata.needs_administrator("unknown-cask"));
+    }
+
+    #[test]
+    fn a_non_interactive_run_skips_the_casks_that_need_an_administrator_password() {
+        let metadata = cask_metadata(CASKS_WITH_ADMINISTRATOR)
+            .unwrap_or_else(|error| panic!("transcript should parse: {error}"));
+        let casks = vec!["1password".to_owned(), "firefox".to_owned()];
+        let step = casks_step(false);
+
+        let (selected, skipped) = step.select_casks(&casks, &metadata);
+
+        assert_eq!(skipped, ["1password"]);
+        assert_eq!(selected, ["firefox"]);
+    }
+
+    #[test]
+    fn an_interactive_run_keeps_the_casks_that_need_an_administrator_password() {
+        let metadata = cask_metadata(CASKS_WITH_ADMINISTRATOR)
+            .unwrap_or_else(|error| panic!("transcript should parse: {error}"));
+        let casks = vec!["1password".to_owned(), "firefox".to_owned()];
+        let step = casks_step(true);
+
+        let (selected, skipped) = step.select_casks(&casks, &metadata);
+
+        assert!(skipped.is_empty());
+        assert_eq!(selected, ["1password", "firefox"]);
+    }
+
+    #[test]
+    fn the_apps_of_a_skipped_cask_are_not_quit() {
+        let metadata = cask_metadata(CASKS_WITH_ADMINISTRATOR)
+            .unwrap_or_else(|error| panic!("transcript should parse: {error}"));
+
+        let apps = apps_of(&metadata, &["firefox".to_owned()]);
+
+        assert_eq!(apps, ["Firefox.app"]);
+    }
+
+    #[test]
+    fn the_skip_message_names_the_cask_and_the_reason() {
+        let message = administrator_skip_message("1password");
+
+        assert!(message.contains("1password"), "message: {message}");
+        assert!(
+            message.contains("administrator password"),
+            "message: {message}"
         );
     }
 

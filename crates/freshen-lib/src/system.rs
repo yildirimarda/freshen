@@ -974,6 +974,18 @@ impl SystemInfo {
     }
 }
 
+/// Returns `true` when freshen is attached to a terminal and may prompt the
+/// user.
+///
+/// This is the cheap counterpart of [`SystemInfo::detect`]: it looks at the
+/// standard streams only and does not read the process table or the operating
+/// system release. A step that would otherwise wait for an answer uses this to
+/// decide whether it has to pick a safe default instead.
+#[must_use]
+pub fn terminal_is_interactive() -> bool {
+    std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
+}
+
 /// One entry in a host process table.
 ///
 /// `name` is the executable name or path reported by the operating system.

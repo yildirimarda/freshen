@@ -13,6 +13,8 @@ use std::process::Output;
 use support::{StubOutput, StubTools};
 
 const CASK_INFO: &str = include_str!("../../freshen-lib/tests/fixtures/brew-info-casks.json");
+const CASK_INFO_WITH_ADMINISTRATOR: &str =
+    include_str!("../../freshen-lib/tests/fixtures/brew-info-casks-administrator.json");
 const HOMEBREW_STEPS: &str =
     "brew,brew-formulae,brew-casks,brew-autoremove,brew-cleanup,brew-reopen";
 
@@ -243,6 +245,93 @@ fn a_failing_formula_upgrade_does_not_stop_the_cask_steps() {
         "summary: {text}"
     );
     assert!(text.contains("failed"), "summary: {text}");
+}
+
+#[test]
+fn a_cask_that_needs_an_administrator_password_is_skipped_without_a_terminal() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_responses(
+        "brew",
+        &homebrew_responses(&[
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::stdout("jq\n"),
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::stdout("firefox\n1password\n"),
+            StubOutput::stdout(CASK_INFO_WITH_ADMINISTRATOR),
+            StubOutput::new(),
+            StubOutput::stdout("==> Would autoremove 1 unneeded formula:\nold-dependency\n"),
+            StubOutput::new(),
+            StubOutput::stdout("Would remove: /tmp/old (1.2MB)\n"),
+            StubOutput::new(),
+        ]),
+    );
+
+    let output = run(&tools, &["--only", HOMEBREW_STEPS]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        [
+            "brew update",
+            "brew outdated --formula",
+            "brew outdated --formula --quiet",
+            "brew upgrade --formula",
+            "brew outdated --cask --greedy",
+            "brew outdated --cask --greedy --quiet",
+            "brew info --cask --json=v2 firefox 1password",
+            "brew upgrade --cask --greedy firefox",
+            "brew autoremove --dry-run",
+            "brew autoremove",
+            "brew cleanup --dry-run --prune=all",
+            "brew cleanup --prune=all",
+        ]
+    );
+
+    let text = stdout(&output);
+    assert!(text.contains("skipping cask `1password`"), "output: {text}");
+    assert!(
+        text.contains("needs an administrator password"),
+        "output: {text}"
+    );
+}
+
+#[test]
+fn no_cask_is_upgraded_when_every_cask_needs_an_administrator_password() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_responses(
+        "brew",
+        &homebrew_responses(&[
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::stdout("jq\n"),
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::stdout("1password\n"),
+            StubOutput::stdout(CASK_INFO_WITH_ADMINISTRATOR),
+            StubOutput::stdout("==> Would autoremove 1 unneeded formula:\nold-dependency\n"),
+            StubOutput::new(),
+            StubOutput::stdout("Would remove: /tmp/old (1.2MB)\n"),
+            StubOutput::new(),
+        ]),
+    );
+
+    let output = run(&tools, &["--only", HOMEBREW_STEPS]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        !tools
+            .step_calls()
+            .iter()
+            .any(|call| call.starts_with("brew upgrade --cask")),
+        "calls: {:?}",
+        tools.step_calls()
+    );
+
+    let text = stdout(&output);
+    assert!(text.contains("skipping cask `1password`"), "output: {text}");
+    assert!(text.contains("No casks upgraded"), "output: {text}");
 }
 
 #[cfg(unix)]

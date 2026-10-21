@@ -74,8 +74,8 @@ pub use snapshot::{
 };
 pub use step::{CheckReport, Detection, Operation, OutdatedItem, Step, StepError, StepId};
 pub use system::{
-    supported_terminals, Arch, Distro, Environment, HostProbe, OsInfo, Privilege, ProcessInfo,
-    SystemInfo, SystemProbe, Terminal, TerminalApp,
+    supported_terminals, terminal_is_interactive, Arch, Distro, Environment, HostProbe, OsInfo,
+    Privilege, ProcessInfo, SystemInfo, SystemProbe, Terminal, TerminalApp,
 };
 pub use warnings::supported_session_managers;
 
