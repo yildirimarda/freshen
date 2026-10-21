@@ -16,8 +16,8 @@ use support::StubTools;
 
 const CASK_INFO: &str = include_str!("../../freshen-lib/tests/fixtures/brew-info-casks.json");
 const HOMEBREW_STEPS: &str =
-    "brew,brew-formulae,brew-casks,brew-autoremove,brew-cleanup,brew-reopen";
-const CONTAINER_STEPS: &str = "brew,brew-formulae,brew-casks,brew-autoremove,brew-cleanup,brew-reopen,colima-stop,colima-start,docker";
+    "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-reopen";
+const CONTAINER_STEPS: &str = "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-reopen,colima-stop,colima-start,docker";
 
 const COMPOSE_JSON: &str = r#"[
     {"Name":"web","ConfigFiles":"/srv/web/compose.yml,/srv/web/override.yml"},
