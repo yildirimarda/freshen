@@ -8,3 +8,5 @@ graphify-out/
 *.log
 .env
 /target/
+__pycache__/
+*.pyc
