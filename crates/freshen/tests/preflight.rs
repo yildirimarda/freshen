@@ -45,6 +45,62 @@ fn an_unreachable_network_blocks_the_run_with_exit_code_three() {
 }
 
 #[test]
+fn network_configuration_failures_are_reported_specifically() {
+    let cases = [
+        (
+            "HTTPS_PROXY",
+            "socks5://proxy.example:1080",
+            "invalid proxy URL",
+        ),
+        (
+            "SSL_CERT_FILE",
+            "/freshen/definitely/not/a/certificate.pem",
+            "cannot read CA bundle",
+        ),
+    ];
+
+    for (key, value, message) in cases {
+        let tools = StubTools::new(&["probe"]);
+        let mut command = tools.command();
+        let output = command
+            .env_remove("FRESHEN_SKIP_PREFLIGHT")
+            .env_remove("FRESHEN_TEST_PREFLIGHT")
+            .env_remove("HTTP_PROXY")
+            .env_remove("http_proxy")
+            .env_remove("HTTPS_PROXY")
+            .env_remove("https_proxy")
+            .env_remove("NO_PROXY")
+            .env_remove("no_proxy")
+            .env_remove("SSL_CERT_FILE")
+            .env_remove("SSL_CERT_DIR")
+            .env_remove("CURL_CA_BUNDLE")
+            .env_remove("REQUESTS_CA_BUNDLE")
+            .env_remove("NIX_SSL_CERT_FILE")
+            .env_remove("NODE_EXTRA_CA_CERTS")
+            .env(key, value)
+            .env("FRESHEN_TEST_STEPS", "probe run")
+            .args([
+                "--skip-disk-check",
+                "--skip-battery-check",
+                "--skip-metered-check",
+            ])
+            .output()
+            .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+        assert_eq!(
+            output.status.code(),
+            Some(3),
+            "{key}: stderr: {}",
+            stderr(&output)
+        );
+        let text = stderr(&output);
+        assert!(text.contains(message), "{key}: {text}");
+        assert!(!text.contains("network is unreachable"), "{key}: {text}");
+        assert!(tools.calls().is_empty(), "{key}");
+    }
+}
+
+#[test]
 fn skipping_the_network_check_lets_the_run_proceed() {
     let tools = StubTools::new(&["probe"]);
 

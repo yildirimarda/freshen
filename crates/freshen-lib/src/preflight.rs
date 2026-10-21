@@ -189,6 +189,18 @@ pub trait PreflightProbe {
     /// Whether a known host on the internet can be reached.
     fn network_reachable(&self) -> bool;
 
+    /// Why the network check failed, or `Ok(())` when it passed.
+    ///
+    /// Probes that can explain the failure override this; the default keeps
+    /// the generic message for scripted facts.
+    fn network_status(&self) -> Result<(), String> {
+        if self.network_reachable() {
+            Ok(())
+        } else {
+            Err("network is unreachable".to_owned())
+        }
+    }
+
     /// Free space on the volume freshen writes to, in bytes.
     fn free_disk_bytes(&self) -> Option<u64>;
 
@@ -246,11 +258,10 @@ impl PreflightReport {
     pub fn run(probe: &dyn PreflightProbe, config: &PreflightConfig) -> Self {
         let mut issues = Vec::new();
 
-        if config.is_enabled(PreflightCheck::Network) && !probe.network_reachable() {
-            issues.push(PreflightIssue::new(
-                PreflightCheck::Network,
-                "network is unreachable",
-            ));
+        if config.is_enabled(PreflightCheck::Network) {
+            if let Err(message) = probe.network_status() {
+                issues.push(PreflightIssue::new(PreflightCheck::Network, message));
+            }
         }
 
         if config.is_enabled(PreflightCheck::DiskSpace) {
@@ -338,7 +349,11 @@ pub struct HostPreflightProbe;
 
 impl PreflightProbe for HostPreflightProbe {
     fn network_reachable(&self) -> bool {
-        crate::network::reachable()
+        crate::network::check().is_ok()
+    }
+
+    fn network_status(&self) -> Result<(), String> {
+        crate::network::check().map_err(|error| error.to_string())
     }
 
     fn free_disk_bytes(&self) -> Option<u64> {
@@ -618,6 +633,7 @@ mod tests {
 
     struct FakeProbe {
         network: bool,
+        network_error: Option<String>,
         disk: Option<u64>,
         battery: Option<BatteryStatus>,
         metered: Option<bool>,
@@ -627,6 +643,7 @@ mod tests {
         fn default() -> Self {
             Self {
                 network: true,
+                network_error: None,
                 disk: None,
                 battery: None,
                 metered: None,
@@ -637,6 +654,17 @@ mod tests {
     impl PreflightProbe for FakeProbe {
         fn network_reachable(&self) -> bool {
             self.network
+        }
+
+        fn network_status(&self) -> Result<(), String> {
+            if let Some(error) = &self.network_error {
+                return Err(error.clone());
+            }
+            if self.network {
+                Ok(())
+            } else {
+                Err("network is unreachable".to_owned())
+            }
         }
 
         fn free_disk_bytes(&self) -> Option<u64> {
@@ -688,6 +716,24 @@ mod tests {
         assert!(!report.is_ok());
         assert_eq!(issue_checks(&report), [PreflightCheck::Network]);
         assert!(report.to_string().contains("network is unreachable"));
+    }
+
+    #[test]
+    fn a_specific_network_failure_is_reported() {
+        let probe = FakeProbe {
+            network: false,
+            network_error: Some("invalid proxy URL: unsupported proxy scheme 'socks5'".to_owned()),
+            ..FakeProbe::default()
+        };
+
+        let report = PreflightReport::run(&probe, &PreflightConfig::new());
+
+        assert!(!report.is_ok());
+        assert_eq!(issue_checks(&report), [PreflightCheck::Network]);
+        assert!(report
+            .to_string()
+            .contains("invalid proxy URL: unsupported proxy scheme 'socks5'"));
+        assert!(!report.to_string().contains("network is unreachable"));
     }
 
     #[test]
@@ -779,6 +825,7 @@ mod tests {
     fn each_check_can_be_disabled_independently() {
         let probe = FakeProbe {
             network: false,
+            network_error: None,
             disk: Some(0),
             battery: Some(BatteryStatus::new(1, false)),
             metered: Some(true),
@@ -816,6 +863,7 @@ mod tests {
     fn every_failure_is_reported_together_in_order() {
         let probe = FakeProbe {
             network: false,
+            network_error: None,
             disk: Some(0),
             battery: Some(BatteryStatus::new(5, false)),
             metered: Some(true),
