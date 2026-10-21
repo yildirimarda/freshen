@@ -81,7 +81,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add a lock file so two freshen runs cannot overlap, with a clear message naming the PID that holds it
 - [x] Detect when another package manager process is running (brew, apt/dpkg lock, winget) and wait or abort with a clear message
 - [x] Graceful handling of SIGINT/SIGTERM on every OS: stop the running step, restore everything that was stopped (apps, containers, VMs), print a partial summary
-- [ ] Idempotency guarantee: running the tool twice in a row must be a no-op the second time; add a test asserting it
+- [x] Idempotency guarantee: running the tool twice in a row must be a no-op the second time; add a test asserting it
 - [ ] Per-step and global timeouts with a clear "timed out" status distinct from "failed"
 - [ ] Network failure handling: retry transient download errors with exponential backoff, skip the step if the registry is unreachable
 - [ ] Detect processes running from a tool version that is about to be removed (old Node, Python, Java, Go toolchains) and report them with the parent application that started them
@@ -91,6 +91,8 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Kill the whole process tree on timeout or interrupt (process group on Unix, job object on Windows) so grandchildren that keep output pipes open cannot outlive the step, covered by a test using a shell that spawns a child
 - [ ] Prune old pre-upgrade snapshots with a configurable retention count (default keeps a small recent window) so automatic snapshots do not grow without bound, covered by tests
 - [ ] Record cask versions in the pre-upgrade snapshot (`brew list --cask --versions`) so rollback hints can cover upgraded casks, covered by tests
+- [ ] Guard `brew autoremove` and `brew cleanup` with their dry-run listings so a run with nothing to remove does not invoke the mutating command, covered by tests
+- [ ] Extend the idempotency test to the uv, mise, Docker and Colima steps with stateful stubs, so every mutating step proves a second run changes nothing
 
 ## Milestone 4: macOS Depth
 

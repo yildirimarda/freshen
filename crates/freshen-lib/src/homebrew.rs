@@ -316,11 +316,23 @@ impl Step for FormulaeStep {
     }
 
     fn run(&self) -> Result<(), StepError> {
-        if let Ok(outdated) = CommandSpec::new("brew")
+        let outdated = match CommandSpec::new("brew")
             .args(["outdated", "--formula", "--quiet"])
             .run()
         {
-            warn_if_zellij_upgrade(outdated.stdout());
+            Ok(outdated) => {
+                warn_if_zellij_upgrade(outdated.stdout());
+                Some(lines(outdated.stdout()))
+            }
+            Err(error) => {
+                eprintln!("freshen: could not list outdated formulae: {error}");
+                None
+            }
+        };
+
+        if outdated.is_some_and(|formulae| formulae.is_empty()) {
+            println!("No outdated formulae.");
+            return Ok(());
         }
 
         run_brew(

@@ -80,7 +80,7 @@ fn a_ported_step_replays_a_recorded_command_transcript() {
             StubOutput::new(),
             StubOutput::new(),
             StubOutput::new(),
-            StubOutput::new(),
+            StubOutput::stdout("jq\n"),
             StubOutput::new(),
             StubOutput::new(),
             StubOutput::stdout("firefox\n"),
