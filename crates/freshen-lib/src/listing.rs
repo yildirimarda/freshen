@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::options::{SelectionFlag, StepSelection};
+use crate::options::{RunOptions, SelectionFlag, StepSelection};
 use crate::platform::Platform;
 use crate::registry::Registry;
 use crate::runner::SkipReason;
@@ -146,17 +146,18 @@ impl fmt::Display for StepList {
 }
 
 /// Lists every step in `registry` for `platform`, detecting each available
-/// step and applying `selection` to decide why a run would skip it.
+/// step and applying the selection and the configuration file to decide why a
+/// run would skip it.
 ///
 /// Steps that do not support `platform` are never detected. Detection errors
 /// are reported in the listing instead of aborting it, so one broken tool
 /// does not hide the rest of the steps.
 #[must_use]
-pub fn list_steps(registry: &Registry, selection: &StepSelection, platform: Platform) -> StepList {
-    let conflicts = conflict_skips(registry, selection, platform);
+pub fn list_steps(registry: &Registry, options: &RunOptions, platform: Platform) -> StepList {
+    let conflicts = conflict_skips(registry, options, platform);
     let steps = registry
         .steps()
-        .map(|step| list_step(step, selection, platform, &conflicts))
+        .map(|step| list_step(step, options, platform, &conflicts))
         .collect();
 
     StepList { steps }
@@ -164,7 +165,7 @@ pub fn list_steps(registry: &Registry, selection: &StepSelection, platform: Plat
 
 fn list_step(
     step: &dyn Step,
-    selection: &StepSelection,
+    options: &RunOptions,
     platform: Platform,
     conflicts: &HashMap<StepId, StepId>,
 ) -> StepListing {
@@ -186,7 +187,8 @@ fn list_step(
         Err(error) => DetectionState::Failed(error),
     };
 
-    let skip_reason = selection_reason(selection, id)
+    let skip_reason = selection_reason(options.selection(), id)
+        .or_else(|| (!options.is_step_enabled(id)).then_some(SkipReason::Disabled))
         .or_else(|| {
             conflicts
                 .get(&id)
@@ -204,19 +206,21 @@ fn list_step(
 
 fn conflict_skips(
     registry: &Registry,
-    selection: &StepSelection,
+    options: &RunOptions,
     platform: Platform,
 ) -> HashMap<StepId, StepId> {
     let Ok(ordered) = registry.ordered_for(platform) else {
         return HashMap::new();
     };
 
+    let selection = options.selection();
     let mut running: Vec<&dyn Step> = Vec::new();
     let mut skipped = HashMap::new();
 
     for step in ordered
         .into_iter()
         .filter(|step| selection.includes(step.id()))
+        .filter(|step| options.is_step_enabled(step.id()))
     {
         let conflict = running.iter().find(|earlier| {
             earlier.conflicts().contains(&step.id()) || step.conflicts().contains(&earlier.id())
@@ -251,6 +255,7 @@ mod tests {
     use crate::registry::Registry;
     use crate::runner::{Runner, SkipReason};
     use crate::step::{CheckReport, Detection, Step, StepError, StepId};
+    use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
@@ -349,7 +354,11 @@ mod tests {
     }
 
     fn list(registry: &Registry, selection: &StepSelection) -> StepList {
-        list_steps(registry, selection, Platform::Linux)
+        list_steps(
+            registry,
+            &RunOptions::new().with_selection(selection.clone()),
+            Platform::Linux,
+        )
     }
 
     #[test]
@@ -489,6 +498,44 @@ mod tests {
 
         let listed = list(&registry, &StepSelection::new().with_skip(["brew"]));
 
+        assert_eq!(listed.steps()[1].skip_reason(), None);
+    }
+
+    #[test]
+    fn a_step_disabled_in_the_configuration_file_says_why() {
+        let registry = registry([
+            TestStep::new("brew", &Platform::ALL),
+            TestStep::new("uv", &Platform::ALL),
+        ]);
+        let mut overrides = BTreeMap::new();
+        overrides.insert("uv".to_owned(), false);
+        let options = RunOptions::new().with_step_overrides(overrides);
+
+        let listed = list_steps(&registry, &options, Platform::Linux);
+
+        assert_eq!(listed.steps()[0].skip_reason(), None);
+        assert_eq!(listed.steps()[1].skip_reason(), Some(SkipReason::Disabled));
+        assert!(
+            listed
+                .to_string()
+                .contains("disabled in the configuration file"),
+            "listing: {listed}"
+        );
+    }
+
+    #[test]
+    fn a_disabled_step_does_not_conflict_with_the_rest_of_the_run() {
+        let registry = registry([
+            TestStep::new("brew", &Platform::ALL),
+            TestStep::new("mas", &Platform::ALL).conflicting(&["brew"]),
+        ]);
+        let mut overrides = BTreeMap::new();
+        overrides.insert("brew".to_owned(), false);
+        let options = RunOptions::new().with_step_overrides(overrides);
+
+        let listed = list_steps(&registry, &options, Platform::Linux);
+
+        assert_eq!(listed.steps()[0].skip_reason(), Some(SkipReason::Disabled));
         assert_eq!(listed.steps()[1].skip_reason(), None);
     }
 

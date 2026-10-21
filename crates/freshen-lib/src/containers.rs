@@ -233,6 +233,10 @@ impl Step for ColimaStopStep {
     }
 
     fn run(&self) -> Result<(), StepError> {
+        self.run_with_options(&RunOptions::new())
+    }
+
+    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
         let outdated = CommandSpec::new("brew")
             .args(["outdated", "--formula", "--quiet"])
             .retry_transient_network(NETWORK_RETRIES)
@@ -252,8 +256,8 @@ impl Step for ColimaStopStep {
 
         if command_exists("docker") {
             snapshot = Snapshot {
-                compose: list_compose_projects(),
-                standalone: list_standalone_containers(),
+                compose: selected_projects(list_compose_projects(), options),
+                standalone: selected_containers(list_standalone_containers(), options),
             };
         }
 
@@ -445,7 +449,7 @@ impl Step for DockerStep {
         }
 
         human!("Docker: pull newer images for running compose projects");
-        let projects = list_compose_projects();
+        let projects = selected_projects(list_compose_projects(), options);
         let mut failures = Vec::new();
 
         if projects.is_empty() {
@@ -531,6 +535,46 @@ fn list_standalone_containers() -> Vec<StandaloneContainer> {
     parse_standalone_containers(output.stdout())
 }
 
+/// Keeps the compose projects the project filter allows.
+///
+/// A project that is filtered out is never stopped, pulled or started, so it
+/// keeps running while the container runtime is upgraded.
+fn selected_projects(projects: Vec<ComposeProject>, options: &RunOptions) -> Vec<ComposeProject> {
+    let filter = options.filters().projects();
+    if filter.is_empty() {
+        return projects;
+    }
+
+    projects
+        .into_iter()
+        .filter(|project| filter.includes(project.name()))
+        .collect()
+}
+
+/// Keeps the standalone containers the container filter allows.
+///
+/// A container is named by its name or by its id, so either one can be
+/// excluded or included.
+fn selected_containers(
+    containers: Vec<StandaloneContainer>,
+    options: &RunOptions,
+) -> Vec<StandaloneContainer> {
+    let filter = options.filters().containers();
+    if filter.is_empty() {
+        return containers;
+    }
+
+    containers
+        .into_iter()
+        .filter(|container| {
+            let names = [container.name(), container.id()];
+            !names.iter().any(|name| filter.is_excluded(name))
+                && (filter.include().is_empty()
+                    || names.iter().any(|name| filter.is_included(name)))
+        })
+        .collect()
+}
+
 fn compose_command(project: &ComposeProject, arguments: &[&str]) -> CommandSpec {
     let mut spec = CommandSpec::new("docker")
         .args(["compose", "-p"])
@@ -565,6 +609,7 @@ mod tests {
         ComposeProject, StandaloneContainer, COLIMA_START, COLIMA_STOP, DOCKER, PS_FORMAT,
     };
     use crate::homebrew;
+    use crate::options::RunOptions;
     use crate::platform::Platform;
     use crate::registry::Registry;
     use crate::step::StepId;
@@ -581,6 +626,81 @@ mod tests {
 
     fn os_strings(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
+    }
+
+    fn options_with(projects: &[&str], containers: &[&str]) -> RunOptions {
+        use crate::policy::{ItemFilters, NameFilter};
+
+        RunOptions::new().with_filters(
+            ItemFilters::new()
+                .with_projects(NameFilter::new().with_exclude(projects.to_vec()))
+                .with_containers(NameFilter::new().with_exclude(containers.to_vec())),
+        )
+    }
+
+    fn names(projects: &[ComposeProject]) -> Vec<&str> {
+        projects.iter().map(ComposeProject::name).collect()
+    }
+
+    fn container_names(containers: &[StandaloneContainer]) -> Vec<&str> {
+        containers.iter().map(StandaloneContainer::name).collect()
+    }
+
+    #[test]
+    fn an_excluded_project_is_not_stopped_or_started() {
+        let projects = vec![
+            ComposeProject::new("web", Vec::<String>::new()),
+            ComposeProject::new("db", Vec::<String>::new()),
+        ];
+
+        let selected = super::selected_projects(projects, &options_with(&["db"], &[]));
+
+        assert_eq!(names(&selected), ["web"]);
+    }
+
+    #[test]
+    fn a_project_that_is_not_excluded_is_kept() {
+        let projects = vec![ComposeProject::new("web", Vec::<String>::new())];
+
+        let selected = super::selected_projects(projects, &options_with(&["db"], &[]));
+
+        assert_eq!(names(&selected), ["web"]);
+    }
+
+    #[test]
+    fn an_excluded_container_is_not_stopped_or_started() {
+        let containers = vec![
+            StandaloneContainer::new("def", "lonely"),
+            StandaloneContainer::new("ghi", "lonely2"),
+        ];
+
+        let selected = super::selected_containers(containers, &options_with(&[], &["lonely2"]));
+
+        assert_eq!(container_names(&selected), ["lonely"]);
+    }
+
+    #[test]
+    fn a_container_can_be_excluded_by_its_id() {
+        let containers = vec![
+            StandaloneContainer::new("def", "lonely"),
+            StandaloneContainer::new("ghi", "lonely2"),
+        ];
+
+        let selected = super::selected_containers(containers, &options_with(&[], &["ghi"]));
+
+        assert_eq!(container_names(&selected), ["lonely"]);
+    }
+
+    #[test]
+    fn without_a_filter_every_container_is_kept() {
+        let containers = vec![
+            StandaloneContainer::new("def", "lonely"),
+            StandaloneContainer::new("ghi", "lonely2"),
+        ];
+
+        let selected = super::selected_containers(containers, &options_with(&[], &[]));
+
+        assert_eq!(container_names(&selected), ["lonely", "lonely2"]);
     }
 
     #[test]

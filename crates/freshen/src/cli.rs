@@ -222,6 +222,9 @@ impl Cli {
                     .with_only(self.only.clone())
                     .with_skip(self.skip.clone()),
             )
+            .with_step_overrides(config.step_overrides())
+            .with_filters(config.item_filters())
+            .with_app_lists(config.app_lists())
     }
 }
 
@@ -244,7 +247,10 @@ fn timeout(seconds: Option<u64>) -> Option<Duration> {
 mod tests {
     use super::Cli;
     use clap::Parser;
-    use freshen_lib::{Config, PreflightCheck, PreflightSection, RunSection};
+    use freshen_lib::{
+        AppSection, Config, FilterSection, PreflightCheck, PreflightSection, RunSection,
+    };
+    use std::collections::BTreeMap;
 
     fn options(cli: &Cli) -> freshen_lib::RunOptions {
         cli.run_options_with(&Config::default())
@@ -455,6 +461,50 @@ mod tests {
         assert_eq!(options.preflight().min_battery_percent(), 35);
         assert_eq!(options.jobs(), 8);
         assert_eq!(options.snapshot_retention(), 2);
+    }
+
+    #[test]
+    fn the_lists_of_the_configuration_file_reach_the_run_options() {
+        let config = Config {
+            steps: BTreeMap::from([("brew-casks".to_owned(), false)]),
+            include: FilterSection {
+                packages: Some(vec!["node".to_owned()]),
+                ..FilterSection::default()
+            },
+            exclude: FilterSection {
+                casks: Some(vec!["dropbox".to_owned()]),
+                ..FilterSection::default()
+            },
+            apps: AppSection {
+                never_quit: Some(vec!["com.docker".to_owned()]),
+                always_quit: Some(vec!["com.spotify".to_owned()]),
+            },
+            ..Config::default()
+        };
+
+        let options = parse(&["freshen"]).run_options_with(&config);
+
+        assert!(!options.is_step_enabled("brew-casks"));
+        assert!(options.is_step_enabled("brew"));
+        assert!(options.filters().packages().includes("node"));
+        assert!(!options.filters().packages().includes("python"));
+        assert!(!options.filters().casks().includes("dropbox"));
+        assert!(options.filters().casks().includes("firefox"));
+        assert!(options
+            .app_lists()
+            .is_never_quit("com.docker", "Docker.app"));
+        assert!(options
+            .app_lists()
+            .is_always_quit("com.spotify", "Spotify.app"));
+    }
+
+    #[test]
+    fn without_a_configuration_file_nothing_is_filtered() {
+        let options = parse(&["freshen"]).run_options_with(&Config::default());
+
+        assert!(options.step_overrides().is_empty());
+        assert!(options.filters().is_empty());
+        assert!(options.app_lists().is_empty());
     }
 
     #[test]

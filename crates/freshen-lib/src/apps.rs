@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::output::human;
+use crate::policy::AppLists;
 use crate::process::CommandSpec;
 
 /// Seconds `osascript` waits for an app before the quit command gives up.
@@ -75,6 +76,7 @@ impl RunningApp {
 pub struct AppScan {
     running: Vec<RunningApp>,
     protected: Vec<String>,
+    never_quit: Vec<String>,
 }
 
 impl AppScan {
@@ -90,10 +92,28 @@ impl AppScan {
         &self.protected
     }
 
+    /// Installed apps that were not quit because they are on the never-quit
+    /// list.
+    #[must_use]
+    pub fn never_quit(&self) -> &[String] {
+        &self.never_quit
+    }
+
     /// Returns `true` when there is nothing running to quit.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.running.is_empty()
+    }
+
+    /// Creates a scan that holds the given running apps.
+    #[cfg(test)]
+    #[must_use]
+    pub fn with_running(running: Vec<RunningApp>) -> Self {
+        Self {
+            running,
+            protected: Vec::new(),
+            never_quit: Vec::new(),
+        }
     }
 }
 
@@ -209,14 +229,16 @@ pub trait AppSystem: Send + Sync {
 
 /// Finds the running apps among `installed` bundles.
 ///
-/// Apps without a bundle id are ignored, and an app whose bundle id matches
+/// Apps without a bundle id are ignored, an app whose bundle id matches
 /// `self_bundle_id` is reported in [`AppScan::protected`] instead of being
-/// considered for quitting.
+/// considered for quitting, and an app on the never-quit list is reported in
+/// [`AppScan::never_quit`].
 #[must_use]
 pub fn find_running_apps<S: AppSystem + ?Sized>(
     system: &S,
     installed: &[PathBuf],
     self_bundle_id: Option<&str>,
+    app_lists: &AppLists,
 ) -> AppScan {
     let mut scan = AppScan::default();
 
@@ -224,18 +246,23 @@ pub fn find_running_apps<S: AppSystem + ?Sized>(
         let Some(bundle_id) = system.bundle_id(path) else {
             continue;
         };
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_owned();
         if self_bundle_id.is_some_and(|self_id| self_id == bundle_id) {
-            let name = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or_default()
-                .to_owned();
             scan.protected.push(name);
             continue;
         }
-        if system.is_running(path) {
-            scan.running.push(RunningApp::new(path.clone(), bundle_id));
+        if !system.is_running(path) {
+            continue;
         }
+        if app_lists.is_never_quit(&bundle_id, &name) {
+            scan.never_quit.push(name);
+            continue;
+        }
+        scan.running.push(RunningApp::new(path.clone(), bundle_id));
     }
 
     scan
@@ -435,6 +462,7 @@ mod tests {
         pids_from_processes, process_list_command, quit_apps, quit_choice, quit_command,
         reopen_apps, AppSystem, QuitChoice, QuitPolicy,
     };
+    use crate::policy::AppLists;
 
     #[derive(Default)]
     struct FakeSystem {
@@ -539,7 +567,7 @@ mod tests {
             "/Applications/Editor.app",
         ]);
 
-        let scan = find_running_apps(&system, &apps, Some("com.terminal"));
+        let scan = find_running_apps(&system, &apps, Some("com.terminal"), &AppLists::new());
 
         assert_eq!(scan.running().len(), 1);
         assert_eq!(scan.running()[0].name(), "Firefox.app");
@@ -555,7 +583,12 @@ mod tests {
         running_apps.insert(PathBuf::from("/Applications/Unknown.app"), vec![7]);
         drop(running_apps);
 
-        let scan = find_running_apps(&system, &installed(&["/Applications/Unknown.app"]), None);
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/Unknown.app"]),
+            None,
+            &AppLists::new(),
+        );
 
         assert!(scan.is_empty());
         assert!(scan.protected().is_empty());
@@ -565,9 +598,63 @@ mod tests {
     fn apps_that_are_not_running_are_not_quit() {
         let system = FakeSystem::new().with_bundle_id("/Applications/Editor.app", "com.editor");
 
-        let scan = find_running_apps(&system, &installed(&["/Applications/Editor.app"]), None);
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/Editor.app"]),
+            None,
+            &AppLists::new(),
+        );
 
         assert!(scan.is_empty());
+    }
+
+    #[test]
+    fn an_app_on_the_never_quit_list_is_not_quit() {
+        let system = FakeSystem::new().with_app("/Applications/Docker.app", "com.docker", &[10]);
+        let lists = AppLists::new().with_never_quit(["com.docker"]);
+
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/Docker.app"]),
+            None,
+            &lists,
+        );
+
+        assert!(scan.is_empty());
+        assert_eq!(scan.never_quit(), ["Docker.app"]);
+        assert!(lock(&system.quit_calls).is_empty());
+    }
+
+    #[test]
+    fn an_app_on_the_never_quit_list_is_named_by_its_app_name_too() {
+        let system = FakeSystem::new().with_app("/Applications/Docker.app", "com.docker", &[10]);
+        let lists = AppLists::new().with_never_quit(["Docker"]);
+
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/Docker.app"]),
+            None,
+            &lists,
+        );
+
+        assert!(scan.is_empty());
+        assert_eq!(scan.never_quit(), ["Docker.app"]);
+    }
+
+    #[test]
+    fn an_app_that_is_not_on_the_never_quit_list_is_still_quit() {
+        let system = FakeSystem::new().with_app("/Applications/Docker.app", "com.docker", &[10]);
+        let lists = AppLists::new().with_never_quit(["com.other"]);
+
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/Docker.app"]),
+            None,
+            &lists,
+        );
+
+        assert_eq!(scan.running().len(), 1);
+        assert!(scan.never_quit().is_empty());
     }
 
     #[test]
@@ -577,7 +664,12 @@ mod tests {
             quit_stops_apps: true,
             ..system
         };
-        let scan = find_running_apps(&system, &installed(&["/Applications/Firefox.app"]), None);
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/Firefox.app"]),
+            None,
+            &AppLists::new(),
+        );
 
         let reopen = quit_apps(
             &system,
@@ -594,7 +686,12 @@ mod tests {
     #[test]
     fn a_timeout_without_force_kill_leaves_the_app_running() {
         let system = FakeSystem::new().with_app("/Applications/Firefox.app", "com.firefox", &[10]);
-        let scan = find_running_apps(&system, &installed(&["/Applications/Firefox.app"]), None);
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/Firefox.app"]),
+            None,
+            &AppLists::new(),
+        );
 
         let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
 
@@ -607,7 +704,12 @@ mod tests {
     fn a_timeout_with_force_kill_kills_the_main_executable_pids() {
         let system =
             FakeSystem::new().with_app("/Applications/Firefox.app", "com.firefox", &[10, 11]);
-        let scan = find_running_apps(&system, &installed(&["/Applications/Firefox.app"]), None);
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/Firefox.app"]),
+            None,
+            &AppLists::new(),
+        );
 
         let reopen = quit_apps(&system, scan.running(), &fast_policy(true));
 
@@ -628,6 +730,7 @@ mod tests {
             &system,
             &installed(&["/Applications/Firefox.app", "/Applications/Terminal.app"]),
             Some("com.terminal"),
+            &AppLists::new(),
         );
 
         let reopen = quit_apps(&system, scan.running(), &fast_policy(false));

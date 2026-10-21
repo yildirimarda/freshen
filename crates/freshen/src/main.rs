@@ -5,7 +5,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use freshen_lib::{
-    exit, install_interrupt_handler, list_steps, wait_for_package_managers, Config,
+    exit, install_interrupt_handler, list_steps, wait_for_package_managers, AppLists, Config,
     ConfigEnvironment, HostPackageManagerProbe, HostPreflightProbe, PackageManagerConfig,
     PackageManagerProbe, Platform, PreflightReport, Registry, RunLock, Runner, WaitOutcome,
 };
@@ -41,6 +41,8 @@ fn main() -> ExitCode {
         }
     };
     let options = cli.run_options_with(&config);
+    let app_lists = config.app_lists().merged_with(AppLists::from_env());
+    let options = options.with_app_lists(app_lists);
     let registry = build_registry();
 
     let steps = match options.plan(&registry, platform) {
@@ -52,7 +54,7 @@ fn main() -> ExitCode {
     };
 
     if cli.list_steps {
-        print!("{}", list_steps(&registry, options.selection(), platform));
+        print!("{}", list_steps(&registry, &options, platform));
         return exit::code(exit::OK);
     }
 

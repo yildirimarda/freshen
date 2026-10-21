@@ -151,6 +151,8 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Add native Docker Engine on Linux to the runtime abstraction (restart through `systemctl restart docker` with a warning about running containers when `live-restore` is off), covered by tests with injected facts
 - [ ] Update the README and docs to describe the supported container runtimes and replace the Colima-only wording, once the runtime abstraction exists
 - [ ] Add a read-only Homebrew cask metadata probe to `--check` (or a dedicated command) so the real-tools job verifies the recorded `brew info --cask --json=v2` transcript and fails on cask JSON parser drift, covered by tests
+- [ ] Apply the package include/exclude list to the mise step, so an excluded mise tool is not upgraded (mise upgrades every plugin in one command, so the list needs a per-tool upgrade path), covered by tests
+- [ ] Skip the steps whose prerequisite is disabled in the configuration file, so disabling `brew` also skips the Homebrew steps that need it, covered by tests
 
 ## Milestone 5: Linux
 

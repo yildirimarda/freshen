@@ -20,6 +20,7 @@ pub mod options;
 pub mod output;
 pub mod package_manager;
 pub mod platform;
+pub mod policy;
 pub mod preflight;
 pub mod process;
 pub mod registry;
@@ -39,8 +40,8 @@ pub use apps::{
 pub use check::{CheckResult, CheckStatus, CheckSummary};
 pub use cleanup::{CleanupReport, ENABLE_FLAG as CLEANUP_FLAG};
 pub use config::{
-    Config, ConfigEnvironment, ConfigError, PackageManagerSection, PreflightSection, RunSection,
-    TimeoutSection, CONFIG_DIR_NAME, CONFIG_FILE_NAME,
+    AppSection, Config, ConfigEnvironment, ConfigError, FilterSection, PackageManagerSection,
+    PreflightSection, RunSection, TimeoutSection, CONFIG_DIR_NAME, CONFIG_FILE_NAME,
 };
 pub use containers::{
     parse_compose_projects, parse_standalone_containers, ComposeProject, StandaloneContainer,
@@ -54,6 +55,7 @@ pub use package_manager::{
     PackageManagerProcess, WaitOutcome, DEFAULT_WAIT,
 };
 pub use platform::Platform;
+pub use policy::{AppLists, ItemFilters, NameFilter, ALWAYS_QUIT_ENV, NEVER_QUIT_ENV};
 pub use preflight::{
     BatteryStatus, HostPreflightProbe, PreflightCheck, PreflightConfig, PreflightIssue,
     PreflightProbe, PreflightReport, DEFAULT_MIN_BATTERY_PERCENT, DEFAULT_MIN_FREE_DISK_BYTES,

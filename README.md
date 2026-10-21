@@ -120,7 +120,23 @@ min_free_disk_gib = 5
 
 [run]
 jobs = 8
+
+[steps]
+brew-casks = false
+
+[exclude]
+casks = ["dropbox"]
+
+[apps]
+never_quit = ["com.docker"]
 ```
+
+The `[steps]` section enables or disables single steps, the `[include]` and
+`[exclude]` sections choose the casks, packages, containers and compose
+projects a run may touch, and the `[apps]` section names the applications that
+are never quit (`never_quit`) or always quit without asking (`always_quit`).
+The `NEVER_QUIT` and `ALWAYS_QUIT` environment variables hold the same app
+lists.
 
 A flag given on the command line wins over the same key in the file, and the
 file wins over the built-in default. `freshen --config /path/to/config.toml`

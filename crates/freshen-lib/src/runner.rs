@@ -82,6 +82,8 @@ pub enum SkipReason {
     UnsupportedPlatform,
     /// `--only` or `--skip` excluded the step from the run.
     NotSelected(SelectionFlag),
+    /// The configuration file disabled the step.
+    Disabled,
     /// The step conflicts with an earlier step that is part of the run.
     Conflict(StepId),
     /// The package registry the step needs could not be reached.
@@ -99,6 +101,7 @@ impl SkipReason {
             Self::UnsupportedPlatform => "not supported on this platform",
             Self::NotSelected(SelectionFlag::Only) => "not selected by --only",
             Self::NotSelected(SelectionFlag::Skip) => "excluded by --skip",
+            Self::Disabled => "disabled in the configuration file",
             Self::Conflict(_) => "conflicts with another step",
             Self::RegistryUnreachable => "registry unreachable",
             Self::Interrupted => "interrupted before it started",
@@ -574,6 +577,10 @@ impl<'a> Runner<'a> {
 
     /// Creates a runner that applies `options`, including `--dry-run` and the
     /// `--only`/`--skip` selection.
+    ///
+    /// A step the configuration file disables is planned as skipped, with the
+    /// reason [`SkipReason::Disabled`], so the summary names it instead of
+    /// leaving the user wondering where the step went.
     pub fn with_options(
         steps: impl IntoIterator<Item = &'a dyn Step>,
         options: RunOptions,
@@ -585,6 +592,14 @@ impl<'a> Runner<'a> {
             .into_iter()
             .filter(|step| selection.includes(step.id()))
         {
+            if !options.is_step_enabled(step.id()) {
+                planned.push(PlannedStep::Skip {
+                    step,
+                    reason: SkipReason::Disabled,
+                });
+                continue;
+            }
+
             let conflict = planned
                 .iter()
                 .copied()
@@ -761,7 +776,8 @@ impl<'a> Runner<'a> {
                     let Some(planned) = self.steps.get(index).copied() else {
                         break;
                     };
-                    let result = check_planned(planned, step_timeout, global_deadline);
+                    let result =
+                        check_planned(planned, &self.options, step_timeout, global_deadline);
                     let mut slots = match results.lock() {
                         Ok(slots) => slots,
                         Err(poisoned) => poisoned.into_inner(),
@@ -783,6 +799,7 @@ impl<'a> Runner<'a> {
 
 fn check_planned(
     planned: PlannedStep<'_>,
+    options: &RunOptions,
     step_timeout: Option<Duration>,
     global_deadline: Option<Deadline>,
 ) -> CheckResult {
@@ -800,7 +817,7 @@ fn check_planned(
         PlannedStep::Run(step) => {
             let deadline = effective_deadline(now, step_timeout, global_deadline);
             let guard = deadline::enter(deadline);
-            let result = check_step(step);
+            let result = check_step(step, options);
             drop(guard);
 
             if deadline.is_some_and(|deadline| deadline.expired()) {
@@ -830,13 +847,13 @@ fn effective_deadline(
     }
 }
 
-fn check_step(step: &dyn Step) -> CheckResult {
+fn check_step(step: &dyn Step, options: &RunOptions) -> CheckResult {
     let started = Instant::now();
     match step.detect() {
         Ok(Detection::NotInstalled) => {
             CheckResult::skipped(step, SkipReason::NotInstalled, started.elapsed())
         }
-        Ok(Detection::Installed) => match step.check() {
+        Ok(Detection::Installed) => match step.check_with_options(options) {
             Ok(report) if report.is_up_to_date() => {
                 CheckResult::up_to_date(step, started.elapsed())
             }
@@ -875,7 +892,7 @@ fn run_step(
                 return StepResult::interrupted(step, started.elapsed());
             }
 
-            let before = step.check().ok();
+            let before = step.check_with_options(options).ok();
             if interrupt() {
                 return StepResult::interrupted(step, started.elapsed());
             }
@@ -904,10 +921,12 @@ fn run_step(
                     Vec::new()
                 } else {
                     match before {
-                        Some(before) if !before.is_up_to_date() => match step.check() {
-                            Ok(after) => diff_reports(&before, &after),
-                            Err(_) => Vec::new(),
-                        },
+                        Some(before) if !before.is_up_to_date() => {
+                            match step.check_with_options(options) {
+                                Ok(after) => diff_reports(&before, &after),
+                                Err(_) => Vec::new(),
+                            }
+                        }
                         _ => Vec::new(),
                     }
                 };
@@ -994,6 +1013,7 @@ mod tests {
     use crate::options::{RunOptions, StepSelection};
     use crate::platform::Platform;
     use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
+    use std::collections::BTreeMap;
     use std::process::ExitCode;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -1487,6 +1507,55 @@ mod tests {
         assert_eq!(later_calls.detect.load(Ordering::SeqCst), 0);
         assert_eq!(later_calls.run.load(Ordering::SeqCst), 0);
         assert_eq!(later_calls.cleanup.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_step_disabled_in_the_configuration_file_is_skipped_with_the_reason() {
+        let brew = FakeStep::new("brew", "Homebrew");
+        let uv = FakeStep::new("uv", "uv");
+        let steps: [&dyn Step; 2] = [&brew, &uv];
+        let mut overrides = BTreeMap::new();
+        overrides.insert("uv".to_owned(), false);
+        let options = RunOptions::new().with_step_overrides(overrides);
+
+        let summary = Runner::with_options(steps, options).run();
+
+        assert_eq!(summary.steps().len(), 2);
+        assert_eq!(summary.steps()[0].status(), StepStatus::Ok);
+        assert_eq!(summary.steps()[1].status(), StepStatus::Skipped);
+        assert_eq!(summary.steps()[1].skip_reason(), Some(SkipReason::Disabled));
+        assert!(summary
+            .to_string()
+            .contains("disabled in the configuration file"));
+    }
+
+    #[test]
+    fn a_disabled_step_is_never_detected_or_run() {
+        let brew = FakeStep::new("brew", "Homebrew");
+        let calls = brew.calls();
+        let mut overrides = BTreeMap::new();
+        overrides.insert("brew".to_owned(), false);
+        let options = RunOptions::new().with_step_overrides(overrides);
+
+        let _ = Runner::with_options([&brew as &dyn Step], options).run();
+
+        assert_eq!(calls.detect.load(Ordering::SeqCst), 0);
+        assert_eq!(calls.run.load(Ordering::SeqCst), 0);
+        assert_eq!(calls.cleanup.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_disabled_step_does_not_conflict_with_the_rest_of_the_run() {
+        let brew = FakeStep::new("brew", "Homebrew").conflicting(&["mas"]);
+        let mas = FakeStep::new("mas", "Mac App Store");
+        let mut overrides = BTreeMap::new();
+        overrides.insert("brew".to_owned(), false);
+        let options = RunOptions::new().with_step_overrides(overrides);
+
+        let summary = Runner::with_options([&brew as &dyn Step, &mas], options).run();
+
+        assert_eq!(summary.steps()[0].status(), StepStatus::Skipped);
+        assert_eq!(summary.steps()[1].status(), StepStatus::Ok);
     }
 
     #[test]

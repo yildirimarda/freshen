@@ -16,6 +16,7 @@
 //! The schema is documented in `docs/config.md`; the section structs below are
 //! the same schema in code.
 
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io;
@@ -25,6 +26,7 @@ use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
 
 use crate::platform::Platform;
+use crate::policy::{AppLists, ItemFilters, NameFilter};
 
 /// Name of the directory that holds the configuration file.
 pub const CONFIG_DIR_NAME: &str = "freshen";
@@ -91,6 +93,22 @@ pub struct Config {
     /// How the run itself behaves.
     #[serde(default)]
     pub run: RunSection,
+
+    /// Which steps may run.
+    #[serde(default)]
+    pub steps: BTreeMap<String, bool>,
+
+    /// The items that are always in scope.
+    #[serde(default)]
+    pub include: FilterSection,
+
+    /// The items that are never in scope.
+    #[serde(default)]
+    pub exclude: FilterSection,
+
+    /// The apps that are quit around a cask upgrade.
+    #[serde(default)]
+    pub apps: AppSection,
 }
 
 /// The `[preflight]` section: the checks that run before an update.
@@ -156,6 +174,37 @@ pub struct RunSection {
     pub snapshot_retention: Option<usize>,
 }
 
+/// The `[include]` and `[exclude]` sections: the items a run may touch.
+///
+/// Every list is optional. An empty include list means "everything of this
+/// kind", and the exclude list always wins over the include list.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FilterSection {
+    /// Homebrew casks.
+    pub casks: Option<Vec<String>>,
+
+    /// Packages, that is Homebrew formulae and uv tools.
+    pub packages: Option<Vec<String>>,
+
+    /// Standalone containers.
+    pub containers: Option<Vec<String>>,
+
+    /// Compose projects.
+    pub projects: Option<Vec<String>>,
+}
+
+/// The `[apps]` section: the applications that are quit around a cask upgrade.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppSection {
+    /// Applications that are never quit.
+    pub never_quit: Option<Vec<String>>,
+
+    /// Applications that are always quit, without asking.
+    pub always_quit: Option<Vec<String>>,
+}
+
 impl Config {
     /// Parses configuration text.
     ///
@@ -206,6 +255,39 @@ impl Config {
             Err(error) => Err(error),
         }
     }
+
+    /// The include and exclude lists of the file.
+    #[must_use]
+    pub fn item_filters(&self) -> ItemFilters {
+        ItemFilters::new()
+            .with_casks(filter(&self.include.casks, &self.exclude.casks))
+            .with_packages(filter(&self.include.packages, &self.exclude.packages))
+            .with_containers(filter(&self.include.containers, &self.exclude.containers))
+            .with_projects(filter(&self.include.projects, &self.exclude.projects))
+    }
+
+    /// The app lists of the file.
+    #[must_use]
+    pub fn app_lists(&self) -> AppLists {
+        AppLists::new()
+            .with_never_quit(self.apps.never_quit.clone().unwrap_or_default())
+            .with_always_quit(self.apps.always_quit.clone().unwrap_or_default())
+    }
+
+    /// The step ids the file enables or disables.
+    ///
+    /// A step that is not named keeps its default, which is enabled.
+    #[must_use]
+    pub fn step_overrides(&self) -> BTreeMap<String, bool> {
+        self.steps.clone()
+    }
+}
+
+/// Builds the filter of one kind of item from its include and exclude lists.
+fn filter(include: &Option<Vec<String>>, exclude: &Option<Vec<String>>) -> NameFilter {
+    NameFilter::new()
+        .with_include(include.clone().unwrap_or_default())
+        .with_exclude(exclude.clone().unwrap_or_default())
 }
 
 /// The environment values that decide where the configuration file lives.
@@ -381,6 +463,115 @@ mod tests {
         let config = parsed("");
 
         assert_eq!(config, Config::default());
+    }
+
+    #[test]
+    fn the_step_flags_are_read() {
+        let config = parsed(
+            r#"
+[steps]
+brew-casks = false
+docker = true
+"#,
+        );
+
+        assert_eq!(config.steps.get("brew-casks"), Some(&false));
+        assert_eq!(config.steps.get("docker"), Some(&true));
+        assert_eq!(config.step_overrides().len(), 2);
+    }
+
+    #[test]
+    fn the_include_and_exclude_lists_are_read() {
+        let config = parsed(
+            r#"
+[include]
+casks = ["firefox"]
+packages = ["node"]
+containers = ["web"]
+projects = ["stack"]
+
+[exclude]
+casks = ["dropbox"]
+packages = ["python"]
+containers = ["old"]
+projects = ["legacy"]
+"#,
+        );
+
+        let filters = config.item_filters();
+
+        assert_eq!(filters.casks().include(), ["firefox"]);
+        assert_eq!(filters.casks().exclude(), ["dropbox"]);
+        assert_eq!(filters.packages().include(), ["node"]);
+        assert_eq!(filters.packages().exclude(), ["python"]);
+        assert_eq!(filters.containers().include(), ["web"]);
+        assert_eq!(filters.containers().exclude(), ["old"]);
+        assert_eq!(filters.projects().include(), ["stack"]);
+        assert_eq!(filters.projects().exclude(), ["legacy"]);
+    }
+
+    #[test]
+    fn the_app_lists_are_read() {
+        let config = parsed(
+            r#"
+[apps]
+never_quit = ["com.docker", "Terminal.app"]
+always_quit = ["com.spotify"]
+"#,
+        );
+
+        let lists = config.app_lists();
+
+        assert_eq!(lists.never_quit(), ["com.docker", "Terminal.app"]);
+        assert_eq!(lists.always_quit(), ["com.spotify"]);
+    }
+
+    #[test]
+    fn a_configuration_without_the_new_sections_filters_nothing() {
+        let config = parsed("[run]\njobs = 2\n");
+
+        assert!(config.item_filters().is_empty());
+        assert!(config.app_lists().is_empty());
+        assert!(config.step_overrides().is_empty());
+    }
+
+    #[test]
+    fn an_unknown_key_in_a_list_section_points_at_its_line() {
+        let error = parse("[include]\ncask = [\"firefox\"]\n").err();
+
+        let (_, line, _, message) = invalid(error);
+
+        assert_eq!(line, 2);
+        assert!(
+            message.contains("unknown field `cask`"),
+            "unexpected message: {message}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_key_in_the_app_section_points_at_its_line() {
+        let error = parse("[apps]\nnever_quit_app = [\"com.docker\"]\n").err();
+
+        let (_, line, _, message) = invalid(error);
+
+        assert_eq!(line, 2);
+        assert!(
+            message.contains("unknown field `never_quit_app`"),
+            "unexpected message: {message}"
+        );
+    }
+
+    #[test]
+    fn a_list_that_is_not_a_list_of_names_points_at_its_line() {
+        let error = parse("[include]\ncasks = \"firefox\"\n").err();
+
+        let (_, line, _, message) = invalid(error);
+
+        assert_eq!(line, 2);
+        assert!(
+            message.contains("invalid type"),
+            "unexpected message: {message}"
+        );
     }
 
     #[test]
