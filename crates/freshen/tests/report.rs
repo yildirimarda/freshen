@@ -102,7 +102,9 @@ fn json_report_contains_the_before_and_after_versions() {
         tools.step_calls(),
         [
             "brew outdated --formula",
+            "brew list --pinned --formula",
             "brew outdated --formula --quiet",
+            "brew list --pinned --formula",
             "brew upgrade --formula",
             "brew outdated --formula",
         ]
