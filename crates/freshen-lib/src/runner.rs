@@ -715,21 +715,54 @@ impl<'a> Runner<'a> {
     }
 
     /// Detects every step and asks each installed one what is outdated,
-    /// without running or cleaning up anything.
+    /// without running or cleaning up anything. The configured step and global
+    /// timeouts bound detection and the read-only query too, so a hung query
+    /// cannot hang the report.
     #[must_use]
     pub fn check(&self) -> CheckSummary {
-        CheckSummary::from_results(
-            self.steps
-                .iter()
-                .copied()
-                .map(|planned| match planned {
-                    PlannedStep::Run(step) => check_step(step),
-                    PlannedStep::Skip { step, reason } => {
-                        CheckResult::skipped(step, reason, Duration::ZERO)
+        let run_started = Instant::now();
+        let global_deadline = self
+            .options
+            .global_timeout()
+            .map(|limit| Deadline::after(run_started, limit));
+        let mut results = Vec::with_capacity(self.steps.len());
+
+        for planned in self.steps.iter().copied() {
+            let now = Instant::now();
+            if global_deadline.is_some_and(|deadline| now >= deadline.at()) {
+                match planned {
+                    PlannedStep::Run(step) => {
+                        results.push(CheckResult::timed_out(step, Duration::ZERO));
                     }
-                })
-                .collect(),
-        )
+                    PlannedStep::Skip { step, reason } => {
+                        results.push(CheckResult::skipped(step, reason, Duration::ZERO));
+                    }
+                }
+                continue;
+            }
+
+            let result = match planned {
+                PlannedStep::Run(step) => {
+                    let deadline =
+                        effective_deadline(now, self.options.step_timeout(), global_deadline);
+                    let guard = deadline::enter(deadline);
+                    let result = check_step(step);
+                    drop(guard);
+
+                    if deadline.is_some_and(|deadline| deadline.expired()) {
+                        result.into_timed_out()
+                    } else {
+                        result
+                    }
+                }
+                PlannedStep::Skip { step, reason } => {
+                    CheckResult::skipped(step, reason, Duration::ZERO)
+                }
+            };
+            results.push(result);
+        }
+
+        CheckSummary::from_results(results)
     }
 }
 
@@ -946,6 +979,7 @@ mod tests {
         fail_cleanup: bool,
         conflicts: &'static [StepId],
         sleep: Duration,
+        check_sleep: Duration,
         interrupt_on_run: bool,
         calls: Rc<Calls>,
     }
@@ -965,6 +999,7 @@ mod tests {
                 fail_cleanup: false,
                 conflicts: &[],
                 sleep: Duration::ZERO,
+                check_sleep: Duration::ZERO,
                 interrupt_on_run: false,
                 calls: Rc::new(Calls::default()),
             }
@@ -1022,6 +1057,11 @@ mod tests {
             self
         }
 
+        fn check_sleep(mut self, duration: Duration) -> Self {
+            self.check_sleep = duration;
+            self
+        }
+
         fn interrupt_on_run(mut self) -> Self {
             self.interrupt_on_run = true;
             self
@@ -1051,6 +1091,9 @@ mod tests {
 
         fn check(&self) -> Result<CheckReport, StepError> {
             self.calls.check.set(self.calls.check.get() + 1);
+            if !self.check_sleep.is_zero() {
+                std::thread::sleep(self.check_sleep);
+            }
             if self.fail_check {
                 return Err(StepError::check(self.id, self.check_error));
             }
@@ -1250,6 +1293,40 @@ mod tests {
         assert_eq!(summary.steps()[0].status(), CheckStatus::Failed);
         assert_exit_code(summary.exit_code(), ExitCode::FAILURE);
         assert_eq!(calls.check.get(), 0);
+    }
+
+    #[test]
+    fn a_check_that_exceeds_the_step_timeout_is_timed_out_not_failed() {
+        let step = FakeStep::new("brew", "Homebrew").check_sleep(Duration::from_millis(200));
+        let options = RunOptions::new().with_step_timeout(Some(Duration::from_millis(20)));
+
+        let summary = Runner::with_options([&step as &dyn Step], options).check();
+
+        let result = &summary.steps()[0];
+        assert_eq!(result.status(), CheckStatus::TimedOut);
+        assert_eq!(result.error(), None);
+        assert_eq!(summary.timed_out_count(), 1);
+        assert_eq!(summary.failed_count(), 0);
+        assert!(summary.has_failures());
+        assert_exit_code(summary.exit_code(), ExitCode::FAILURE);
+        assert!(summary.to_string().contains("Homebrew: timed out"));
+    }
+
+    #[test]
+    fn a_global_timeout_marks_remaining_check_steps_as_timed_out() {
+        let slow = FakeStep::new("brew", "Homebrew").check_sleep(Duration::from_millis(200));
+        let remaining = FakeStep::new("uv", "uv");
+        let remaining_calls = remaining.calls();
+        let options = RunOptions::new().with_global_timeout(Some(Duration::from_millis(20)));
+        let steps: [&dyn Step; 2] = [&slow, &remaining];
+
+        let summary = Runner::with_options(steps, options).check();
+
+        assert_eq!(summary.steps()[0].status(), CheckStatus::TimedOut);
+        assert_eq!(summary.steps()[1].status(), CheckStatus::TimedOut);
+        assert_eq!(summary.timed_out_count(), 2);
+        assert_eq!(summary.failed_count(), 0);
+        assert_eq!(remaining_calls.check.get(), 0);
     }
 
     #[test]

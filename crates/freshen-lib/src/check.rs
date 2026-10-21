@@ -24,6 +24,9 @@ pub enum CheckStatus {
     Skipped,
     /// Detection or the read-only check failed.
     Failed,
+    /// The step was stopped because its own timeout or the run's global
+    /// timeout elapsed before it finished.
+    TimedOut,
 }
 
 impl CheckStatus {
@@ -35,6 +38,7 @@ impl CheckStatus {
             Self::Outdated => "outdated",
             Self::Skipped => "skipped",
             Self::Failed => "failed",
+            Self::TimedOut => "timed out",
         }
     }
 }
@@ -93,6 +97,23 @@ impl CheckResult {
                 duration,
             )
         }
+    }
+
+    pub(crate) fn timed_out(step: &dyn Step, duration: Duration) -> Self {
+        Self::new(
+            step,
+            CheckStatus::TimedOut,
+            CheckReport::up_to_date(),
+            duration,
+        )
+    }
+
+    pub(crate) fn into_timed_out(mut self) -> Self {
+        self.status = CheckStatus::TimedOut;
+        self.report = CheckReport::up_to_date();
+        self.skip_reason = None;
+        self.error = None;
+        self
     }
 
     fn new(step: &dyn Step, status: CheckStatus, report: CheckReport, duration: Duration) -> Self {
@@ -200,6 +221,12 @@ impl CheckSummary {
         self.count(CheckStatus::Failed)
     }
 
+    /// Number of steps that ran out of time before reporting.
+    #[must_use]
+    pub fn timed_out_count(&self) -> usize {
+        self.count(CheckStatus::TimedOut)
+    }
+
     /// Total number of outdated items across every step.
     #[must_use]
     pub fn pending(&self) -> usize {
@@ -215,10 +242,10 @@ impl CheckSummary {
         self.pending() > 0
     }
 
-    /// Returns `true` when at least one step failed to report.
+    /// Returns `true` when at least one step failed or timed out.
     #[must_use]
     pub fn has_failures(&self) -> bool {
-        self.failed_count() > 0
+        self.failed_count() > 0 || self.timed_out_count() > 0
     }
 
     /// Renders the check summary as a JSON report.
@@ -267,6 +294,10 @@ impl fmt::Display for CheckSummary {
                     } else {
                         writeln!(f, "{}: check failed", result.name())?;
                     }
+                }
+                CheckStatus::TimedOut => {
+                    reported = true;
+                    writeln!(f, "{}: timed out", result.name())?;
                 }
                 CheckStatus::UpToDate | CheckStatus::Skipped => {}
             }

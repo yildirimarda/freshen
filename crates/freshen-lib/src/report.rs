@@ -177,6 +177,7 @@ pub(crate) fn check_json(summary: &CheckSummary) -> String {
         "outdated": summary.outdated_steps(),
         "skipped": summary.skipped_count(),
         "failed": summary.failed_count(),
+        "timed_out": summary.timed_out_count(),
         "pending": summary.pending(),
         "steps": steps,
     });
@@ -188,11 +189,12 @@ pub(crate) fn check_markdown(summary: &CheckSummary) -> String {
     let mut out = String::new();
     out.push_str("# freshen check\n\n");
     out.push_str(&format!(
-        "**Summary:** {} up to date, {} outdated, {} skipped, {} failed ({} update(s) pending)\n\n",
+        "**Summary:** {} up to date, {} outdated, {} skipped, {} failed, {} timed out ({} update(s) pending)\n\n",
         summary.up_to_date_count(),
         summary.outdated_steps(),
         summary.skipped_count(),
         summary.failed_count(),
+        summary.timed_out_count(),
         summary.pending()
     ));
     out.push_str("| Step | Status | Duration | Outdated |\n");
