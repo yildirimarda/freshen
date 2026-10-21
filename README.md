@@ -104,6 +104,29 @@ and the `curl`/`git` processes they start see the same proxy and certificate
 variables. Export them in your shell or service manager before running
 `freshen`.
 
+## Configuration
+
+freshen reads an optional TOML file from `~/.config/freshen/config.toml`
+(macOS, Linux) or `%APPDATA%\freshen\config.toml` (Windows). Every key is
+optional, and a key that is wrong is refused with an error that points at the
+offending line:
+
+```toml
+# ~/.config/freshen/config.toml
+
+[preflight]
+network = false
+min_free_disk_gib = 5
+
+[run]
+jobs = 8
+```
+
+A flag given on the command line wins over the same key in the file, and the
+file wins over the built-in default. `freshen --config /path/to/config.toml`
+reads a different file. The full schema is documented in
+[docs/config.md](docs/config.md).
+
 ## Exit codes
 
 The exit codes are part of the command-line contract and are stable across releases:

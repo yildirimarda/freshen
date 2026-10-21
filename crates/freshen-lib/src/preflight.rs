@@ -20,8 +20,11 @@ use std::fmt;
 use std::path::PathBuf;
 use std::process::Command;
 
+/// Default minimum free disk space, in GiB.
+pub const DEFAULT_MIN_FREE_DISK_GIB: u64 = 1;
+
 /// Default minimum free disk space, in bytes (1 GiB).
-pub const DEFAULT_MIN_FREE_DISK_BYTES: u64 = 1024 * 1024 * 1024;
+pub const DEFAULT_MIN_FREE_DISK_BYTES: u64 = DEFAULT_MIN_FREE_DISK_GIB * 1024 * 1024 * 1024;
 
 /// Default battery threshold, in percent.
 pub const DEFAULT_MIN_BATTERY_PERCENT: u8 = 20;

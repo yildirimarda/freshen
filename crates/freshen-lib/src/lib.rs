@@ -7,6 +7,7 @@
 pub mod apps;
 pub mod check;
 pub mod cleanup;
+pub mod config;
 pub mod containers;
 pub(crate) mod deadline;
 mod executable;
@@ -37,6 +38,10 @@ pub use apps::{
 };
 pub use check::{CheckResult, CheckStatus, CheckSummary};
 pub use cleanup::{CleanupReport, ENABLE_FLAG as CLEANUP_FLAG};
+pub use config::{
+    Config, ConfigEnvironment, ConfigError, PackageManagerSection, PreflightSection, RunSection,
+    TimeoutSection, CONFIG_DIR_NAME, CONFIG_FILE_NAME,
+};
 pub use containers::{
     parse_compose_projects, parse_standalone_containers, ComposeProject, StandaloneContainer,
 };
@@ -46,12 +51,13 @@ pub use options::{PlanError, RunOptions, SelectionFlag, StepSelection, DEFAULT_J
 pub use output::{route_to_stderr, route_to_stdout};
 pub use package_manager::{
     wait_for_package_managers, HostPackageManagerProbe, PackageManagerConfig, PackageManagerProbe,
-    PackageManagerProcess, WaitOutcome,
+    PackageManagerProcess, WaitOutcome, DEFAULT_WAIT,
 };
 pub use platform::Platform;
 pub use preflight::{
     BatteryStatus, HostPreflightProbe, PreflightCheck, PreflightConfig, PreflightIssue,
-    PreflightProbe, PreflightReport,
+    PreflightProbe, PreflightReport, DEFAULT_MIN_BATTERY_PERCENT, DEFAULT_MIN_FREE_DISK_BYTES,
+    DEFAULT_MIN_FREE_DISK_GIB,
 };
 pub use process::{
     Backoff, CommandSpec, NetworkFailure, OutputStream, ProcessError, ProcessOutput,
