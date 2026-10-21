@@ -158,6 +158,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Report the casks that were skipped because their installer needs an administrator password in the run summary and in the `--json`/`--markdown` reports, so a structured report names them instead of only printing a human-readable warning
 - [ ] Respect pinned casks (`brew pin --cask`) as held back too, so a pinned cask is skipped and reported instead of being shown as upgradable, covered by tests
 - [ ] Report the Homebrew services that were restarted in the run summary and in the `--json`/`--markdown` reports, so a structured report names them instead of only printing a human-readable line, covered by tests
+- [ ] Stop apps for casks whose `uninstall` stanza lists only `signal` entries (for example Zoom's `signal: ["KILL", "us.zoom.xos"]`) instead of a `quit` bundle id, so a pkg-installer cask with no `quit` entry still has its running app stopped before the upgrade, covered by tests with a recorded transcript
 
 ## Milestone 5: Linux
 

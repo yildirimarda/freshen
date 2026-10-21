@@ -31,10 +31,14 @@ const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// Default wait after a force kill, matching the zsh script.
 const DEFAULT_FORCE_KILL_GRACE: Duration = Duration::from_secs(2);
 
-/// An installed application bundle that is running.
+/// An application that is running.
+///
+/// Most apps are known by their `.app` bundle path. A cask without an `.app`
+/// artifact, such as a pkg installer or a menu-bar helper, is known only by
+/// the bundle id in its `uninstall` stanza.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunningApp {
-    path: PathBuf,
+    path: Option<PathBuf>,
     bundle_id: String,
     name: String,
 }
@@ -49,16 +53,30 @@ impl RunningApp {
             .unwrap_or_default()
             .to_owned();
         Self {
-            path,
+            path: Some(path),
             bundle_id: bundle_id.into(),
             name,
         }
     }
 
-    /// Path of the `.app` bundle.
+    /// Creates a running app known only by its bundle identifier.
+    ///
+    /// Used for casks that install something other than an `.app` bundle, so
+    /// there is no path to search for or inspect.
     #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
+    pub fn from_bundle_id(bundle_id: impl Into<String>) -> Self {
+        let bundle_id = bundle_id.into();
+        Self {
+            path: None,
+            name: bundle_id.clone(),
+            bundle_id,
+        }
+    }
+
+    /// Path of the `.app` bundle, when the app has one.
+    #[must_use]
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
     }
 
     /// Bundle identifier used for the AppleScript quit and the reopen.
@@ -71,6 +89,20 @@ impl RunningApp {
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    fn is_running<S: AppSystem + ?Sized>(&self, system: &S) -> bool {
+        match self.path() {
+            Some(path) => system.is_running(path),
+            None => system.is_bundle_running(&self.bundle_id),
+        }
+    }
+
+    fn pids<S: AppSystem + ?Sized>(&self, system: &S) -> Vec<u32> {
+        match self.path() {
+            Some(path) => system.pids(path),
+            None => system.bundle_pids(&self.bundle_id),
+        }
     }
 }
 
@@ -261,6 +293,19 @@ pub trait AppSystem: Send + Sync {
     /// Pids of processes running the bundle's main executable.
     fn pids(&self, app: &Path) -> Vec<u32>;
 
+    /// Returns `true` when an app with this bundle id is running.
+    ///
+    /// Casks without an `.app` artifact are known only by the bundle id in
+    /// their `uninstall` stanza, so there is no path to inspect.
+    fn is_bundle_running(&self, _bundle_id: &str) -> bool {
+        false
+    }
+
+    /// Pids of the processes with this bundle id, for a force kill.
+    fn bundle_pids(&self, _bundle_id: &str) -> Vec<u32> {
+        Vec::new()
+    }
+
     /// Asks the application to quit gracefully.
     ///
     /// The outcome says whether the request was delivered or denied by
@@ -288,7 +333,25 @@ pub fn find_running_apps<S: AppSystem + ?Sized>(
     self_bundle_id: Option<&str>,
     app_lists: &AppLists,
 ) -> AppScan {
+    find_running_cask_apps(system, installed, &[], self_bundle_id, app_lists)
+}
+
+/// Finds the running apps among `installed` bundles and `bundle_ids`.
+///
+/// The bundle ids come from a cask's `uninstall` stanza, so a cask whose
+/// artifacts are not an `.app` bundle (a pkg installer or a menu-bar helper)
+/// still has its app quit before the upgrade. An app found through its path is
+/// not added a second time when the same bundle id is also listed.
+#[must_use]
+pub fn find_running_cask_apps<S: AppSystem + ?Sized>(
+    system: &S,
+    installed: &[PathBuf],
+    bundle_ids: &[String],
+    self_bundle_id: Option<&str>,
+    app_lists: &AppLists,
+) -> AppScan {
     let mut scan = AppScan::default();
+    let mut seen = Vec::new();
 
     for path in installed {
         let Some(bundle_id) = system.bundle_id(path) else {
@@ -299,6 +362,7 @@ pub fn find_running_apps<S: AppSystem + ?Sized>(
             .and_then(|name| name.to_str())
             .unwrap_or_default()
             .to_owned();
+        seen.push(bundle_id.clone());
         if self_bundle_id.is_some_and(|self_id| self_id == bundle_id) {
             scan.protected.push(name);
             continue;
@@ -311,6 +375,26 @@ pub fn find_running_apps<S: AppSystem + ?Sized>(
             continue;
         }
         scan.running.push(RunningApp::new(path.clone(), bundle_id));
+    }
+
+    for bundle_id in bundle_ids {
+        if seen.iter().any(|seen_id| seen_id == bundle_id) {
+            continue;
+        }
+        seen.push(bundle_id.clone());
+        if self_bundle_id.is_some_and(|self_id| self_id == bundle_id) {
+            scan.protected.push(bundle_id.clone());
+            continue;
+        }
+        if !system.is_bundle_running(bundle_id) {
+            continue;
+        }
+        if app_lists.is_never_quit(bundle_id, bundle_id) {
+            scan.never_quit.push(bundle_id.clone());
+            continue;
+        }
+        scan.running
+            .push(RunningApp::from_bundle_id(bundle_id.clone()));
     }
 
     scan
@@ -358,12 +442,12 @@ fn quit_one<S: AppSystem + ?Sized>(system: &S, app: &RunningApp, policy: &QuitPo
         return false;
     }
 
-    let mut running = system.is_running(app.path());
+    let mut running = app.is_running(system);
     let mut waited = Duration::ZERO;
     while running && waited < policy.timeout {
         std::thread::sleep(policy.poll_interval);
         waited += policy.poll_interval;
-        running = system.is_running(app.path());
+        running = app.is_running(system);
     }
 
     if !running {
@@ -385,7 +469,7 @@ fn quit_one<S: AppSystem + ?Sized>(system: &S, app: &RunningApp, policy: &QuitPo
 /// Kills the app's main executable and waits for it to disappear.
 fn kill_app<S: AppSystem + ?Sized>(system: &S, app: &RunningApp, policy: &QuitPolicy) {
     warn(&format!("{} did not quit, force-killing", app.name));
-    let pids = system.pids(app.path());
+    let pids = app.pids(system);
     if !pids.is_empty() {
         system.force_kill(&pids);
         std::thread::sleep(policy.force_kill_grace);
@@ -420,6 +504,19 @@ pub fn pids_from_processes(processes: &str, app: &Path) -> Vec<u32> {
         .collect()
 }
 
+/// Pids from AppleScript's list output, such as `123, 456`.
+///
+/// System Events prints the unix ids separated by commas, and an app that is
+/// not running prints `missing value`.
+#[must_use]
+pub fn pids_from_apple_script(output: &str) -> Vec<u32> {
+    output
+        .split(|character: char| !character.is_ascii_digit())
+        .filter(|token| !token.is_empty())
+        .filter_map(|token| token.parse().ok())
+        .collect()
+}
+
 fn bundle_id_command(app: &Path) -> CommandSpec {
     CommandSpec::new("defaults")
         .arg("read")
@@ -437,6 +534,23 @@ fn process_list_command() -> CommandSpec {
 fn pid_list_command() -> CommandSpec {
     CommandSpec::new("ps")
         .args(["-axo", "pid=,command="])
+        .neutral_locale()
+}
+
+fn bundle_running_command(bundle_id: &str) -> CommandSpec {
+    CommandSpec::new("osascript")
+        .arg("-e")
+        .arg(format!("application id \"{bundle_id}\" is running"))
+        .neutral_locale()
+}
+
+fn bundle_pids_command(bundle_id: &str) -> CommandSpec {
+    CommandSpec::new("osascript")
+        .arg("-e")
+        .arg(format!(
+            "tell application \"System Events\" to get unix id of \
+             (every process whose bundle identifier is \"{bundle_id}\")"
+        ))
         .neutral_locale()
 }
 
@@ -501,6 +615,19 @@ impl AppSystem for MacAppSystem {
         }
     }
 
+    fn is_bundle_running(&self, bundle_id: &str) -> bool {
+        bundle_running_command(bundle_id)
+            .run()
+            .is_ok_and(|output| output.stdout().trim().eq_ignore_ascii_case("true"))
+    }
+
+    fn bundle_pids(&self, bundle_id: &str) -> Vec<u32> {
+        match bundle_pids_command(bundle_id).run() {
+            Ok(output) => pids_from_apple_script(output.stdout()),
+            Err(_) => Vec::new(),
+        }
+    }
+
     fn quit(&self, bundle_id: &str) -> QuitOutcome {
         match quit_command(bundle_id).run() {
             Ok(_) => QuitOutcome::Quit,
@@ -537,10 +664,10 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        automation_denied_message, bundle_id_command, find_running_apps, is_automation_denied,
-        kill_command, open_command, pid_list_command, pids_from_processes, process_list_command,
-        quit_apps, quit_choice, quit_command, reopen_apps, AppSystem, QuitChoice, QuitOutcome,
-        QuitPolicy,
+        automation_denied_message, bundle_id_command, find_running_apps, find_running_cask_apps,
+        is_automation_denied, kill_command, open_command, pid_list_command, pids_from_apple_script,
+        pids_from_processes, process_list_command, quit_apps, quit_choice, quit_command,
+        reopen_apps, AppSystem, QuitChoice, QuitOutcome, QuitPolicy,
     };
     use crate::policy::AppLists;
 
@@ -548,6 +675,7 @@ mod tests {
     struct FakeSystem {
         bundle_ids: Mutex<HashMap<PathBuf, String>>,
         running: Mutex<HashMap<PathBuf, Vec<u32>>>,
+        running_bundles: Mutex<HashMap<String, Vec<u32>>>,
         quit_stops_apps: bool,
         quit_outcome: QuitOutcome,
         open_succeeds: bool,
@@ -584,6 +712,11 @@ mod tests {
             self
         }
 
+        fn with_running_bundle(self, bundle_id: &str, pids: &[u32]) -> Self {
+            lock(&self.running_bundles).insert(bundle_id.to_owned(), pids.to_vec());
+            self
+        }
+
         fn open_fails(mut self) -> Self {
             self.open_succeeds = false;
             self
@@ -612,10 +745,26 @@ mod tests {
             lock(&self.running).get(app).cloned().unwrap_or_default()
         }
 
+        fn is_bundle_running(&self, bundle_id: &str) -> bool {
+            let mut checks = lock(&self.running_checks);
+            *checks += 1;
+            lock(&self.running_bundles)
+                .get(bundle_id)
+                .is_some_and(|pids| !pids.is_empty())
+        }
+
+        fn bundle_pids(&self, bundle_id: &str) -> Vec<u32> {
+            lock(&self.running_bundles)
+                .get(bundle_id)
+                .cloned()
+                .unwrap_or_default()
+        }
+
         fn quit(&self, bundle_id: &str) -> QuitOutcome {
             lock(&self.quit_calls).push(bundle_id.to_owned());
             if self.quit_stops_apps {
                 lock(&self.running).clear();
+                lock(&self.running_bundles).clear();
             }
             self.quit_outcome
         }
@@ -623,6 +772,7 @@ mod tests {
         fn force_kill(&self, pids: &[u32]) {
             lock(&self.killed).push(pids.to_vec());
             lock(&self.running).clear();
+            lock(&self.running_bundles).clear();
         }
 
         fn open(&self, bundle_id: &str) -> bool {
@@ -696,6 +846,87 @@ mod tests {
         );
 
         assert!(scan.is_empty());
+    }
+
+    #[test]
+    fn a_running_bundle_id_without_an_app_path_is_quit() {
+        let system = FakeSystem::new().with_running_bundle("com.example.menubar", &[42]);
+
+        let scan = find_running_cask_apps(
+            &system,
+            &[],
+            &["com.example.menubar".to_owned()],
+            None,
+            &AppLists::new(),
+        );
+
+        assert_eq!(scan.running().len(), 1);
+        assert_eq!(scan.running()[0].bundle_id(), "com.example.menubar");
+        assert_eq!(scan.running()[0].name(), "com.example.menubar");
+        assert_eq!(scan.running()[0].path(), None);
+    }
+
+    #[test]
+    fn a_bundle_id_already_found_through_its_app_path_is_not_added_twice() {
+        let system = FakeSystem::new()
+            .with_app("/Applications/Firefox.app", "com.firefox", &[10])
+            .with_running_bundle("com.firefox", &[10]);
+
+        let scan = find_running_cask_apps(
+            &system,
+            &installed(&["/Applications/Firefox.app"]),
+            &["com.firefox".to_owned()],
+            None,
+            &AppLists::new(),
+        );
+
+        assert_eq!(scan.running().len(), 1);
+        assert_eq!(scan.running()[0].name(), "Firefox.app");
+    }
+
+    #[test]
+    fn a_bundle_id_only_app_can_be_protected_or_never_quit() {
+        let system = FakeSystem::new()
+            .with_running_bundle("com.terminal", &[10])
+            .with_running_bundle("com.docker", &[20]);
+        let lists = AppLists::new().with_never_quit(["com.docker"]);
+
+        let scan = find_running_cask_apps(
+            &system,
+            &[],
+            &["com.terminal".to_owned(), "com.docker".to_owned()],
+            Some("com.terminal"),
+            &lists,
+        );
+
+        assert!(scan.is_empty());
+        assert_eq!(scan.protected(), ["com.terminal"]);
+        assert_eq!(scan.never_quit(), ["com.docker"]);
+    }
+
+    #[test]
+    fn a_bundle_id_only_app_is_quit_and_reopened_by_its_bundle_id() {
+        let system = FakeSystem {
+            quit_stops_apps: true,
+            ..FakeSystem::new().with_running_bundle("com.example.helper", &[42])
+        };
+        let scan = find_running_cask_apps(
+            &system,
+            &[],
+            &["com.example.helper".to_owned()],
+            None,
+            &AppLists::new(),
+        );
+
+        let reopened = quit_apps(&system, scan.running(), &fast_policy(false));
+
+        assert_eq!(lock(&system.quit_calls).as_slice(), ["com.example.helper"]);
+        assert_eq!(reopened, ["com.example.helper"]);
+        assert_eq!(
+            *lock(&system.running_checks),
+            2,
+            "the quit should be followed by a running check"
+        );
     }
 
     #[test]
@@ -972,6 +1203,12 @@ mod tests {
             pids_from_processes(processes, std::path::Path::new("/Applications/Firefox.app"));
 
         assert_eq!(pids, [100, 102]);
+    }
+
+    #[test]
+    fn pids_are_read_from_the_apple_script_bundle_id_list() {
+        assert_eq!(pids_from_apple_script("123, 456\n"), [123, 456]);
+        assert_eq!(pids_from_apple_script("missing value"), Vec::<u32>::new());
     }
 
     /// The arguments of a command in the form the zsh script writes them.
