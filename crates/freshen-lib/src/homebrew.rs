@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::Value;
 
 use crate::apps::{
-    find_running_apps, quit_apps, quit_choice, reopen_apps, AppScan, AppSystem, MacAppSystem,
+    find_running_cask_apps, quit_apps, quit_choice, reopen_apps, AppScan, AppSystem, MacAppSystem,
     QuitChoice, QuitPolicy, RunningApp,
 };
 use crate::cleanup;
@@ -136,6 +136,7 @@ pub enum CaskError {
 pub struct CaskInfo {
     token: Option<String>,
     apps: Vec<String>,
+    quit_bundle_ids: Vec<String>,
     administrator: bool,
     version: Option<String>,
     auto_updates: bool,
@@ -152,6 +153,15 @@ impl CaskInfo {
     #[must_use]
     pub fn apps(&self) -> &[String] {
         &self.apps
+    }
+
+    /// The bundle ids the cask's `uninstall` stanza asks to quit.
+    ///
+    /// A cask whose artifacts are not an `.app` bundle, such as a pkg
+    /// installer or a menu-bar helper, names the running app only here.
+    #[must_use]
+    pub fn quit_bundle_ids(&self) -> &[String] {
+        &self.quit_bundle_ids
     }
 
     /// Returns `true` when the cask asks for an administrator password.
@@ -277,6 +287,10 @@ fn cask_info(cask: &Value) -> CaskInfo {
     CaskInfo {
         token: cask.get("token").and_then(Value::as_str).map(str::to_owned),
         apps: artifacts.map_or_else(Vec::new, |artifacts| app_artifacts(artifacts)),
+        quit_bundle_ids: uninstall_quit_bundle_ids(
+            cask,
+            artifacts.map_or(&[], |artifacts| artifacts.as_slice()),
+        ),
         administrator: artifacts
             .is_some_and(|artifacts| artifacts.iter().any(artifact_needs_administrator)),
         version: cask
@@ -333,6 +347,68 @@ fn app_name(entry: &Value) -> Option<String> {
         .file_name()
         .and_then(|name| name.to_str())
         .map(str::to_owned)
+}
+
+/// The bundle ids the cask's `uninstall` stanza asks to quit.
+///
+/// Homebrew emits the stanza as an artifact (`{"uninstall": [{"quit": ...}]}`),
+/// and some metadata also carries it at the top level. Both forms are read so
+/// a cask whose artifacts are not an `.app` bundle still has its running app
+/// quit before the upgrade.
+fn uninstall_quit_bundle_ids(cask: &Value, artifacts: &[Value]) -> Vec<String> {
+    let mut bundle_ids = Vec::new();
+
+    for artifact in artifacts {
+        if let Some(uninstall) = artifact.get("uninstall") {
+            collect_quit_bundle_ids(uninstall, &mut bundle_ids);
+        }
+    }
+    if let Some(uninstall) = cask.get("uninstall") {
+        collect_quit_bundle_ids(uninstall, &mut bundle_ids);
+    }
+
+    bundle_ids
+}
+
+fn collect_quit_bundle_ids(uninstall: &Value, bundle_ids: &mut Vec<String>) {
+    match uninstall {
+        Value::Array(items) => {
+            for item in items {
+                if let Some(quit) = item.get("quit") {
+                    push_quit_bundle_ids(quit, bundle_ids);
+                }
+            }
+        }
+        Value::Object(_) => {
+            if let Some(quit) = uninstall.get("quit") {
+                push_quit_bundle_ids(quit, bundle_ids);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn push_quit_bundle_ids(value: &Value, bundle_ids: &mut Vec<String>) {
+    match value {
+        Value::String(bundle_id) => push_unique_bundle_id(bundle_id, bundle_ids),
+        Value::Array(items) => {
+            for item in items {
+                push_quit_bundle_ids(item, bundle_ids);
+            }
+        }
+        Value::Object(fields) => {
+            if let Some(bundle_id) = fields.get("bundle").and_then(Value::as_str) {
+                push_unique_bundle_id(bundle_id, bundle_ids);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn push_unique_bundle_id(bundle_id: &str, bundle_ids: &mut Vec<String>) {
+    if !bundle_id.is_empty() && !bundle_ids.iter().any(|known| known == bundle_id) {
+        bundle_ids.push(bundle_id.to_owned());
+    }
 }
 
 /// Whether an artifact needs an administrator password.
@@ -893,6 +969,19 @@ fn apps_of(metadata: &CaskMetadata, casks: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// The bundle ids the given casks ask to quit in their `uninstall` stanza.
+fn quit_bundle_ids_of(metadata: &CaskMetadata, casks: &[String]) -> Vec<String> {
+    metadata
+        .casks()
+        .iter()
+        .filter(|cask| {
+            cask.token()
+                .is_some_and(|token| casks.iter().any(|name| name == token))
+        })
+        .flat_map(|cask| cask.quit_bundle_ids().iter().cloned())
+        .collect()
+}
+
 /// The command that reads the metadata of the given casks.
 fn cask_info_command(casks: &[String]) -> CommandSpec {
     let mut info = CommandSpec::new("brew")
@@ -997,13 +1086,19 @@ impl CasksStep {
         }))
     }
 
-    fn quit_running_apps(&self, apps: &[String], options: &RunOptions) -> QuitChoice {
+    fn quit_running_apps(
+        &self,
+        apps: &[String],
+        bundle_ids: &[String],
+        options: &RunOptions,
+    ) -> QuitChoice {
         let installed = installed_app_paths(apps, &app_roots());
         let self_bundle_id = own_bundle_id(|key| env::var(key).ok());
         let system = self.system.as_ref();
-        let scan = find_running_apps(
+        let scan = find_running_cask_apps(
             system,
             &installed,
+            bundle_ids,
             self_bundle_id.as_deref(),
             options.app_lists(),
         );
@@ -1125,8 +1220,9 @@ impl Step for CasksStep {
                     needs_greedy = selected.iter().any(|cask| metadata.needs_greedy(cask));
 
                     let apps = apps_of(&metadata, &selected);
+                    let bundle_ids = quit_bundle_ids_of(&metadata, &selected);
                     report_cask_apps(&apps);
-                    choice = self.quit_running_apps(&apps, options);
+                    choice = self.quit_running_apps(&apps, &bundle_ids, options);
                 }
                 Err(error) => eprintln!("freshen: could not read cask metadata: {error}"),
             },
@@ -1354,9 +1450,9 @@ impl Step for ReopenStep {
 mod tests {
     use super::{
         administrator_skip_message, apps_of, cask_app_artifacts, cask_metadata,
-        installed_app_paths, is_pinned, own_bundle_id, parse_outdated, quit_plan, register,
-        running_services, services_for_formulae, CaskError, CasksStep, ReopenQueue, ReopenStep,
-        CASKS, FORMULAE, REOPEN, SERVICES,
+        installed_app_paths, is_pinned, own_bundle_id, parse_outdated, quit_bundle_ids_of,
+        quit_plan, register, running_services, services_for_formulae, CaskError, CasksStep,
+        ReopenQueue, ReopenStep, CASKS, FORMULAE, REOPEN, SERVICES,
     };
     use crate::apps::{AppScan, AppSystem, QuitOutcome, RunningApp};
     use crate::platform::Platform;
@@ -1779,6 +1875,97 @@ mod tests {
         let apps = apps_of(&metadata, &["firefox".to_owned()]);
 
         assert_eq!(apps, ["Firefox.app"]);
+    }
+
+    /// A transcript with a menu-bar helper, a pkg installer and a cask whose
+    /// `quit` list names several bundle ids.
+    const CASKS_WITH_UNINSTALL_QUIT: &str = r#"{
+        "casks": [
+            {
+                "token": "menu-bar",
+                "artifacts": [
+                    {"uninstall": [{"quit": "com.example.menubar", "launchctl": "com.example.helper"}]},
+                    {"app": ["Menu Bar.app"]}
+                ]
+            },
+            {
+                "token": "pkg-tool",
+                "artifacts": [
+                    {"uninstall": [{"quit": {"bundle": "com.example.pkgtool"}}]},
+                    {"pkg": ["Tool.pkg"]}
+                ]
+            },
+            {
+                "token": "multi",
+                "artifacts": [
+                    {"uninstall": [{"quit": ["com.example.one", "com.example.two"]}]}
+                ]
+            },
+            {
+                "token": "top-level",
+                "uninstall": [{"quit": "com.example.toplevel"}],
+                "artifacts": [{"pkg": ["Top.pkg"]}]
+            },
+            {
+                "token": "no-quit",
+                "artifacts": [
+                    {"uninstall": [{"signal": ["TERM", "com.example.other"]}]},
+                    {"pkg": ["Other.pkg"]}
+                ]
+            }
+        ]
+    }"#;
+
+    #[test]
+    fn reads_the_bundle_ids_from_the_uninstall_stanza() {
+        let metadata = cask_metadata(CASKS_WITH_UNINSTALL_QUIT)
+            .unwrap_or_else(|error| panic!("transcript should parse: {error}"));
+
+        assert_eq!(
+            metadata.casks()[0].quit_bundle_ids(),
+            ["com.example.menubar"]
+        );
+        assert_eq!(
+            metadata.casks()[1].quit_bundle_ids(),
+            ["com.example.pkgtool"]
+        );
+        assert_eq!(
+            metadata.casks()[2].quit_bundle_ids(),
+            ["com.example.one", "com.example.two"]
+        );
+        assert_eq!(
+            metadata.casks()[3].quit_bundle_ids(),
+            ["com.example.toplevel"]
+        );
+        assert!(metadata.casks()[4].quit_bundle_ids().is_empty());
+    }
+
+    #[test]
+    fn only_the_quit_bundle_ids_of_the_selected_casks_are_collected() {
+        let metadata = cask_metadata(CASKS_WITH_UNINSTALL_QUIT)
+            .unwrap_or_else(|error| panic!("transcript should parse: {error}"));
+
+        let bundle_ids = quit_bundle_ids_of(
+            &metadata,
+            &[
+                "menu-bar".to_owned(),
+                "multi".to_owned(),
+                "no-quit".to_owned(),
+            ],
+        );
+
+        assert_eq!(
+            bundle_ids,
+            ["com.example.menubar", "com.example.one", "com.example.two"]
+        );
+    }
+
+    #[test]
+    fn a_cask_without_an_uninstall_stanza_has_no_quit_bundle_ids() {
+        let metadata = cask_metadata(CASKS_WITH_ADMINISTRATOR)
+            .unwrap_or_else(|error| panic!("transcript should parse: {error}"));
+
+        assert!(metadata.casks()[1].quit_bundle_ids().is_empty());
     }
 
     #[test]

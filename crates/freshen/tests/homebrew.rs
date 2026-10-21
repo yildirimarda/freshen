@@ -17,6 +17,25 @@ const CASK_INFO_WITH_ADMINISTRATOR: &str =
     include_str!("../../freshen-lib/tests/fixtures/brew-info-casks-administrator.json");
 const CASK_INFO_WITH_GREEDY: &str =
     include_str!("../../freshen-lib/tests/fixtures/brew-info-casks-greedy.json");
+/// A menu-bar helper: no `.app` artifact, only the bundle id in the
+/// `uninstall` stanza names the app to quit.
+const CASK_INFO_WITHOUT_APP_ARTIFACTS: &str = r#"{
+    "casks": [
+        {
+            "token": "menu-bar",
+            "artifacts": [
+                {
+                    "uninstall": [
+                        {
+                            "quit": "com.example.menubar",
+                            "launchctl": "com.example.helper"
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}"#;
 const HOMEBREW_STEPS: &str =
     "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-reopen";
 
@@ -619,6 +638,76 @@ fn quits_running_cask_apps_before_the_upgrade_and_reopens_after_cleanup() {
     );
     assert!(
         text.contains("Opening: com.example.firefox"),
+        "output: {text}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn quits_and_reopens_a_cask_app_known_only_by_its_uninstall_bundle_id() {
+    let tools = StubTools::new(&["brew", "osascript", "open", "kill"]);
+    tools.set_script(
+        "brew",
+        r#"case "$*" in
+  "outdated --formula --quiet")
+    printf 'jq\n'
+    ;;
+  "outdated --cask --greedy --quiet")
+    printf 'menu-bar\n'
+    ;;
+  "info --cask --json=v2 menu-bar")
+    printf '%s\n' "$FRESHEN_BREW_INFO_JSON"
+    ;;
+esac"#,
+    );
+
+    let running = tools.home().join("running-bundle.txt");
+    std::fs::write(&running, "true\n")
+        .unwrap_or_else(|error| panic!("failed to write running state: {error}"));
+    tools.set_script(
+        "osascript",
+        r#"case "$*" in
+  *"is running"*)
+    IFS= read -r running < "$FRESHEN_RUNNING_BUNDLE"
+    printf '%s\n' "$running"
+    ;;
+  *"to quit"*)
+    : > "$FRESHEN_RUNNING_BUNDLE"
+    ;;
+esac"#,
+    );
+
+    let output = tools
+        .command()
+        .env("FRESHEN_BREW_INFO_JSON", CASK_INFO_WITHOUT_APP_ARTIFACTS)
+        .env("FRESHEN_RUNNING_BUNDLE", &running)
+        .args(["--only", HOMEBREW_STEPS, "--yes", "--cleanup"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    let running_query = "osascript -e application id \"com.example.menubar\" is running".to_owned();
+    assert!(
+        calls.contains(&running_query),
+        "the bundle id was not checked for running: {calls:?}"
+    );
+    assert!(
+        calls.contains(&"osascript -e with timeout of 3 seconds -e tell application id \"com.example.menubar\" to quit -e end timeout".to_owned()),
+        "the bundle id was not quit: {calls:?}"
+    );
+    assert!(
+        calls.contains(&"open -g -b com.example.menubar".to_owned()),
+        "the bundle id was not reopened: {calls:?}"
+    );
+
+    let text = stdout(&output);
+    assert!(
+        text.contains("Quitting: com.example.menubar"),
+        "output: {text}"
+    );
+    assert!(
+        text.contains("Opening: com.example.menubar"),
         "output: {text}"
     );
 }
