@@ -136,7 +136,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 ## Milestone 6: Windows
 
 - [ ] Add winget support (`winget upgrade --all`, source update, pinned packages) with exit-code mapping
-- [ ] Add Scoop (`scoop update *`, `scoop cleanup *`, `scoop cache rm *`) and Chocolatey (`choco upgrade all`) steps
+- [ ] Add Scoop steps (`scoop update`, `scoop update *`, `scoop cleanup *`, `scoop cache rm *`), skipped when scoop is absent, covered by recorded transcripts
 - [ ] Add Windows Update reporting via the PSWindowsUpdate module or `usoclient`, report-only by default, with pending-reboot detection
 - [ ] Add Microsoft Store app updates where an API or CLI is available
 - [ ] Add WSL support: update `wsl --update`, and run the Linux steps inside each selected distro
@@ -145,6 +145,14 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Support PowerShell 7 and Windows PowerShell 5.1 as launching shells, and `cmd.exe` shims
 - [ ] Add a Windows CI job running the unit tests and a smoke test against stub package managers
 - [ ] Resolve Windows executable names through `PATHEXT` during step detection so `uv` and `mise` are found as `uv.exe`/`mise.exe`, covered by tests with an injected lookup
+- [ ] Add Chocolatey detection (`choco.exe` through `PATHEXT`, `choco --version`) and mark the step as requiring administrator rights, so an un-elevated run skips it with the reason "needs administrator" instead of failing, covered by tests with an injected elevation state
+- [ ] Implement read-only `check()` for Chocolatey with `choco outdated --limit-output` (parse `name|current|available|pinned`), reporting pinned packages as held back, covered by recorded transcripts
+- [ ] Add the Chocolatey upgrade step: first `choco upgrade chocolatey -y --no-progress`, then `choco upgrade all -y --no-progress`, streaming output and recording per-package failures in the summary, covered by stub-based tests
+- [ ] Map Chocolatey exit codes: 0 is success, 1641 and 3010 are success with a "reboot pending" flag in the summary, any other non-zero code is a failure, covered by tests
+- [ ] Honour `choco pin` and add an exclusion list for Chocolatey packages that is passed as `--except`, with the excluded packages shown in `--list-steps` and the run summary, covered by tests
+- [ ] Record `choco list --local-only -r` in the pre-upgrade snapshot and print rollback hints (`choco upgrade <name> --version <old>`) for upgraded packages, covered by tests
+- [ ] Report packages that are installed by more than one Windows package manager (winget, Chocolatey, Scoop) so the same application is not upgraded twice unnoticed, as a report-only check covered by tests with injected package lists
+- [ ] Add a stub `choco` executable to the stub harness (canned `outdated` output, exit codes 0, 1641, 3010 and 1) and cover the Chocolatey step end to end on every platform
 
 ## Milestone 7: Language and Developer Tooling
 
