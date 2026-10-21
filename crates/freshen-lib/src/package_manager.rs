@@ -32,6 +32,9 @@ pub const DEFAULT_WAIT: Duration = Duration::from_secs(30);
 /// Default interval between checks while waiting.
 pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
+/// How often the wait looks for an interrupt while it sleeps.
+const INTERRUPT_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
 /// Lock files apt and dpkg take while they change the package database.
 #[cfg(target_os = "linux")]
 const APT_LOCK_FILES: [&str; 4] = [
@@ -193,6 +196,13 @@ pub enum WaitOutcome {
         /// Processes that were still running.
         processes: Vec<PackageManagerProcess>,
     },
+    /// The user interrupted the wait before it finished.
+    Interrupted {
+        /// How long the run waited before the interrupt.
+        waited: Duration,
+        /// Processes that were still running when the wait was interrupted.
+        processes: Vec<PackageManagerProcess>,
+    },
 }
 
 impl WaitOutcome {
@@ -207,7 +217,9 @@ impl WaitOutcome {
     pub fn waited(&self) -> Option<Duration> {
         match self {
             Self::Idle => None,
-            Self::Waited { waited, .. } | Self::Busy { waited, .. } => Some(*waited),
+            Self::Waited { waited, .. }
+            | Self::Busy { waited, .. }
+            | Self::Interrupted { waited, .. } => Some(*waited),
         }
     }
 
@@ -216,7 +228,9 @@ impl WaitOutcome {
     pub fn processes(&self) -> &[PackageManagerProcess] {
         match self {
             Self::Idle => &[],
-            Self::Waited { processes, .. } | Self::Busy { processes, .. } => processes,
+            Self::Waited { processes, .. }
+            | Self::Busy { processes, .. }
+            | Self::Interrupted { processes, .. } => processes,
         }
     }
 }
@@ -224,12 +238,25 @@ impl WaitOutcome {
 /// Waits up to the configured time for every package manager to finish.
 ///
 /// A disabled configuration returns [`WaitOutcome::Idle`] without probing the
-/// host. With a zero wait the first probe decides immediately.
+/// host. With a zero wait the first probe decides immediately. A SIGINT or
+/// SIGTERM during the wait stops it promptly and returns
+/// [`WaitOutcome::Interrupted`].
 #[must_use]
 pub fn wait_for_package_managers(
     probe: &dyn PackageManagerProbe,
     config: &PackageManagerConfig,
 ) -> WaitOutcome {
+    wait_for_package_managers_with(probe, config, crate::signals::requested)
+}
+
+fn wait_for_package_managers_with<F>(
+    probe: &dyn PackageManagerProbe,
+    config: &PackageManagerConfig,
+    interrupt: F,
+) -> WaitOutcome
+where
+    F: Fn() -> bool,
+{
     if !config.is_enabled() {
         return WaitOutcome::Idle;
     }
@@ -252,8 +279,11 @@ pub fn wait_for_package_managers(
     while started.elapsed() < wait {
         let remaining = wait.saturating_sub(started.elapsed());
         let delay = config.poll().min(remaining);
-        if !delay.is_zero() {
-            thread::sleep(delay);
+        if !sleep_unless_interrupted(delay, &interrupt) {
+            return WaitOutcome::Interrupted {
+                waited: started.elapsed(),
+                processes: current,
+            };
         }
 
         current = normalize(probe.running_package_managers());
@@ -268,6 +298,29 @@ pub fn wait_for_package_managers(
     WaitOutcome::Busy {
         waited: started.elapsed(),
         processes: current,
+    }
+}
+
+/// Sleeps for `delay` in short slices so an interrupt is noticed promptly.
+///
+/// Returns `false` when the interrupt check fired before the delay elapsed.
+fn sleep_unless_interrupted<F>(delay: Duration, interrupt: &F) -> bool
+where
+    F: Fn() -> bool,
+{
+    let started = Instant::now();
+
+    loop {
+        if interrupt() {
+            return false;
+        }
+
+        let remaining = delay.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            return true;
+        }
+
+        thread::sleep(remaining.min(INTERRUPT_POLL_INTERVAL));
     }
 }
 
@@ -464,11 +517,14 @@ fn parse_tasklist(table: &str) -> Vec<PackageManagerProcess> {
 mod tests {
     use super::{
         classify_command, normalize, parse_proc_locks, parse_ps_processes, parse_tasklist,
-        wait_for_package_managers, PackageManagerConfig, PackageManagerProbe,
-        PackageManagerProcess, WaitOutcome,
+        wait_for_package_managers, wait_for_package_managers_with, PackageManagerConfig,
+        PackageManagerProbe, PackageManagerProcess, WaitOutcome,
     };
     use std::cell::Cell;
-    use std::time::Duration;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     struct FakeProbe {
         calls: Cell<usize>,
@@ -656,6 +712,41 @@ mod tests {
             other => panic!("expected a completed wait, got {other:?}"),
         }
         assert_eq!(probe.calls.get(), 3);
+    }
+
+    #[test]
+    fn an_interrupt_stops_the_wait_without_waiting_for_the_poll_interval() {
+        let probe = FakeProbe::new(vec![vec![process("brew", 1)]]);
+        let interrupted = Arc::new(AtomicBool::new(false));
+        let setter = Arc::clone(&interrupted);
+        let signal = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            setter.store(true, Ordering::SeqCst);
+        });
+        let config = PackageManagerConfig::new()
+            .with_wait(Duration::from_secs(5))
+            .with_poll(Duration::from_secs(5));
+
+        let started = Instant::now();
+        let outcome =
+            wait_for_package_managers_with(&probe, &config, || interrupted.load(Ordering::SeqCst));
+        let elapsed = started.elapsed();
+        signal
+            .join()
+            .unwrap_or_else(|_| panic!("the interrupt thread panicked"));
+
+        match outcome {
+            WaitOutcome::Interrupted { waited, processes } => {
+                assert!(waited < Duration::from_secs(2), "waited {waited:?}");
+                assert_eq!(processes, vec![process("brew", 1)]);
+            }
+            other => panic!("expected an interrupted wait, got {other:?}"),
+        }
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "the interrupt waited for the poll interval: {elapsed:?}"
+        );
+        assert_eq!(probe.calls.get(), 1);
     }
 
     #[test]
