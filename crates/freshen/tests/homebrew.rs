@@ -40,6 +40,9 @@ fn command_transcript_matches_the_zsh_homebrew_block() {
     tools.set_script(
         "brew",
         r#"case "$*" in
+  "outdated --formula --quiet")
+    printf 'jq\n'
+    ;;
   "outdated --cask --greedy --quiet")
     printf 'firefox\ngoogle-chrome\n'
     ;;
@@ -101,12 +104,16 @@ fn no_outdated_casks_skips_the_cask_upgrade() {
             "brew update",
             "brew outdated --formula",
             "brew outdated --formula --quiet",
-            "brew upgrade --formula",
             "brew outdated --cask --greedy",
             "brew outdated --cask --greedy --quiet",
             "brew autoremove",
             "brew cleanup --prune=all",
         ]
+    );
+    assert!(
+        stdout(&output).contains("No outdated formulae."),
+        "output: {}",
+        stdout(&output)
     );
     assert!(
         stdout(&output).contains("No outdated casks."),
@@ -136,6 +143,9 @@ fn invalid_cask_metadata_does_not_stop_the_cask_upgrade() {
     tools.set_script(
         "brew",
         r#"case "$*" in
+  "outdated --formula --quiet")
+    printf 'jq\n'
+    ;;
   "outdated --cask --greedy --quiet")
     printf 'firefox\n'
     ;;
@@ -176,6 +186,9 @@ fn a_failing_formula_upgrade_does_not_stop_the_cask_steps() {
     tools.set_script(
         "brew",
         r#"case "$*" in
+  "outdated --formula --quiet")
+    printf 'jq\n'
+    ;;
   "upgrade --formula")
     exit 1
     ;;
@@ -219,6 +232,9 @@ fn app_tools(osascript_quits: bool) -> (StubTools, std::path::PathBuf, std::path
     tools.set_script(
         "brew",
         r#"case "$*" in
+  "outdated --formula --quiet")
+    printf 'jq\n'
+    ;;
   "outdated --cask --greedy --quiet")
     printf 'firefox\n'
     ;;

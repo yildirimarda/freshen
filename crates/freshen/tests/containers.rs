@@ -232,7 +232,6 @@ fn up_to_date_colima_is_never_stopped() {
             "brew outdated --formula --quiet",
             "brew outdated --formula",
             "brew outdated --formula --quiet",
-            "brew upgrade --formula",
             "brew outdated --cask --greedy",
             "brew outdated --cask --greedy --quiet",
             "brew autoremove",
