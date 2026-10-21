@@ -17,6 +17,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use crate::check::{CheckResult, CheckSummary};
+use crate::containers::{COLIMA_STOP, DOCKER};
 use crate::deadline::{self, Deadline};
 use crate::options::{RunOptions, SelectionFlag};
 use crate::snapshot::{RollbackCommand, SnapshotRecorder};
@@ -605,9 +606,20 @@ impl<'a> Runner<'a> {
         &self.options
     }
 
+    fn runs_container_step(&self) -> bool {
+        self.steps.iter().copied().any(|planned| match planned {
+            PlannedStep::Run(step) => matches!(step.id(), COLIMA_STOP | DOCKER),
+            PlannedStep::Skip { .. } => false,
+        })
+    }
+
     /// Runs every step and returns the collected results.
     #[must_use]
     pub fn run(&self) -> RunSummary {
+        if self.runs_container_step() {
+            crate::warnings::warn_about_running_docker_builds();
+        }
+
         let mut snapshots = SnapshotRecorder::new();
         let mut results = Vec::with_capacity(self.steps.len());
         let mut interrupted = false;
