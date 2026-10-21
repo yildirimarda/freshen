@@ -22,8 +22,4 @@ allow = [
 # must stay empty: a new advisory either gets fixed by a dependency bump or is
 # recorded here with a justification, never silently.
 [advisories]
-ignore = [
-    # TEMPORARY: rustls-pemfile is unmaintained; network.rs reads PEM with it.
-    # Tracked in PLAN.md (replace with rustls-pki-types PemObject), then remove.
-    "RUSTSEC-2025-0134",
-]
+ignore = []

@@ -11,15 +11,16 @@
 
 use std::fmt;
 use std::fs;
-use std::io::{self, BufReader, Read, Write};
+use std::io::{self, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine as _;
-use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
+use rustls_pki_types::pem::PemObject;
+use rustls_pki_types::{CertificateDer, ServerName};
 
 /// Maximum size of a proxy `CONNECT` response head.
 const MAX_PROXY_HEADER_BYTES: usize = 8 * 1024;
@@ -391,14 +392,19 @@ fn check_with(
 fn root_store(environment: &Environment) -> Result<RootCertStore, String> {
     let mut roots = RootCertStore::empty();
 
-    match rustls_native_certs::load_native_certs() {
-        Ok(certificates) => {
-            roots.add_parsable_certificates(certificates);
-        }
-        Err(error) if environment.ca_bundles.is_empty() => {
-            return Err(format!("cannot load the system trust store: {error}"));
-        }
-        Err(_) => {}
+    // The native store can fail partially: some certificates are loaded and
+    // others are not. Only a store that yielded nothing usable is an error,
+    // and only when no custom bundle can take over.
+    let native = rustls_native_certs::load_native_certs();
+    roots.add_parsable_certificates(native.certs);
+    if roots.is_empty() && !native.errors.is_empty() && environment.ca_bundles.is_empty() {
+        let details = native
+            .errors
+            .iter()
+            .map(|error| error.to_string())
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(format!("cannot load the system trust store: {details}"));
     }
 
     for path in &environment.ca_bundles {
@@ -462,9 +468,8 @@ fn add_certificates(
 fn certificates_from_file(path: &Path) -> Result<Vec<CertificateDer<'static>>, String> {
     let data = fs::read(path)
         .map_err(|error| format!("cannot read CA bundle {}: {error}", path.display()))?;
-    let mut reader = BufReader::new(data.as_slice());
     let mut certificates = Vec::new();
-    for certificate in rustls_pemfile::certs(&mut reader) {
+    for certificate in CertificateDer::pem_slice_iter(&data) {
         certificates.push(
             certificate
                 .map_err(|error| format!("cannot parse CA bundle {}: {error}", path.display()))?,
@@ -681,14 +686,21 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        check_with, no_proxy_matches, parse_proxy, Endpoint, Environment, NetworkCheckError,
+        certificates_from_file, check_with, no_proxy_matches, parse_proxy, root_store, Endpoint,
+        Environment, NetworkCheckError,
     };
+    use base64::Engine as _;
     use rustls::{ServerConfig, ServerConnection, StreamOwned};
+    use rustls_pki_types::pem::PemObject;
+    use rustls_pki_types::{CertificateDer, PrivateKeyDer};
     use std::io::{self, Read, Write};
     use std::net::{SocketAddr, TcpListener, TcpStream};
     use std::sync::Arc;
     use std::thread;
     use std::time::{Duration, Instant};
+
+    /// The common name of the test CA certificate.
+    const CA_SUBJECT: &[u8] = b"freshen test CA";
 
     const CA_CERTIFICATE: &str = r#"-----BEGIN CERTIFICATE-----
 MIIDJzCCAg+gAwIBAgIUZAVNl6ELS3/Rrd9j7sMH6uJGNFQwDQYJKoZIhvcNAQEL
@@ -802,17 +814,14 @@ pT8yRnSiD29WLvz412hxX/k=
             .unwrap_or_else(|error| panic!("failed to make TLS test server non-blocking: {error}"));
 
         let mut certificates = Vec::new();
-        let mut reader = io::BufReader::new(SERVER_CERTIFICATE.as_bytes());
-        for certificate in rustls_pemfile::certs(&mut reader) {
+        for certificate in CertificateDer::pem_slice_iter(SERVER_CERTIFICATE.as_bytes()) {
             certificates.push(
                 certificate
                     .unwrap_or_else(|error| panic!("failed to parse test certificate: {error}")),
             );
         }
-        let mut key_reader = io::BufReader::new(SERVER_KEY.as_bytes());
-        let key = rustls_pemfile::private_key(&mut key_reader)
-            .unwrap_or_else(|error| panic!("failed to parse test key: {error}"))
-            .unwrap_or_else(|| panic!("test key file did not contain a key"));
+        let key = PrivateKeyDer::from_pem_slice(SERVER_KEY.as_bytes())
+            .unwrap_or_else(|error| panic!("failed to parse test key: {error}"));
         let config = Arc::new(
             ServerConfig::builder()
                 .with_no_client_auth()
@@ -922,6 +931,25 @@ pT8yRnSiD29WLvz412hxX/k=
         std::fs::write(&path, CA_CERTIFICATE)
             .unwrap_or_else(|error| panic!("failed to write test CA bundle: {error}"));
         path
+    }
+
+    /// Writes `content` to a new temporary file and returns its path.
+    fn temp_file(name: &str, extension: &str, content: &[u8]) -> std::path::PathBuf {
+        let path = temp_path(name, extension);
+        std::fs::write(&path, content)
+            .unwrap_or_else(|error| panic!("failed to write test file: {error}"));
+        path
+    }
+
+    /// Decodes the body of a single-section PEM document into DER bytes.
+    fn pem_body(pem: &str) -> Vec<u8> {
+        let body: String = pem
+            .lines()
+            .filter(|line| !line.starts_with("-----"))
+            .collect();
+        base64::engine::general_purpose::STANDARD
+            .decode(body.trim())
+            .unwrap_or_else(|error| panic!("failed to decode test PEM body: {error}"))
     }
 
     #[test]
@@ -1082,6 +1110,128 @@ pT8yRnSiD29WLvz412hxX/k=
             .join()
             .unwrap_or_else(|_| panic!("TLS test server panicked"));
         let _ = std::fs::remove_file(bundle);
+    }
+
+    #[test]
+    fn a_custom_ca_bundle_is_added_to_the_trust_store() {
+        let bundle = ca_bundle();
+        let environment = environment(&[(
+            "SSL_CERT_FILE",
+            bundle
+                .to_str()
+                .unwrap_or_else(|| panic!("test CA path is not UTF-8")),
+        )]);
+
+        let roots = root_store(&environment)
+            .unwrap_or_else(|error| panic!("the trust store should be built: {error}"));
+
+        assert!(
+            roots.subjects().iter().any(|subject| subject
+                .as_ref()
+                .windows(CA_SUBJECT.len())
+                .any(|part| part == CA_SUBJECT)),
+            "the custom CA certificate should be part of the trust store"
+        );
+        let _ = std::fs::remove_file(bundle);
+    }
+
+    #[test]
+    fn a_pem_ca_bundle_is_read_as_certificates() {
+        let path = temp_file("pem-ca", "pem", CA_CERTIFICATE.as_bytes());
+
+        let certificates = certificates_from_file(&path)
+            .unwrap_or_else(|error| panic!("the PEM bundle should be read: {error}"));
+
+        assert_eq!(certificates.len(), 1);
+        assert_eq!(
+            certificates[0].as_ref(),
+            pem_body(CA_CERTIFICATE).as_slice()
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_pem_ca_bundle_with_several_certificates_is_read_completely() {
+        let bundle = format!("{CA_CERTIFICATE}{SERVER_CERTIFICATE}");
+        let path = temp_file("multi-pem-ca", "pem", bundle.as_bytes());
+
+        let certificates = certificates_from_file(&path)
+            .unwrap_or_else(|error| panic!("the PEM bundle should be read: {error}"));
+
+        assert_eq!(certificates.len(), 2);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_pem_ca_bundle_ignores_sections_that_are_not_certificates() {
+        let bundle = format!("{SERVER_KEY}{CA_CERTIFICATE}");
+        let path = temp_file("key-pem-ca", "pem", bundle.as_bytes());
+
+        let certificates = certificates_from_file(&path)
+            .unwrap_or_else(|error| panic!("the PEM bundle should be read: {error}"));
+
+        assert_eq!(certificates.len(), 1);
+        assert_eq!(
+            certificates[0].as_ref(),
+            pem_body(CA_CERTIFICATE).as_slice()
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_pem_ca_bundle_with_windows_line_endings_is_read_as_certificates() {
+        let bundle = CA_CERTIFICATE.replace('\n', "\r\n");
+        let path = temp_file("crlf-pem-ca", "pem", bundle.as_bytes());
+
+        let certificates = certificates_from_file(&path)
+            .unwrap_or_else(|error| panic!("the PEM bundle should be read: {error}"));
+
+        assert_eq!(certificates.len(), 1);
+        assert_eq!(
+            certificates[0].as_ref(),
+            pem_body(CA_CERTIFICATE).as_slice()
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_der_ca_bundle_is_read_as_a_certificate() {
+        let path = temp_file("der-ca", "der", &pem_body(CA_CERTIFICATE));
+
+        let certificates = certificates_from_file(&path)
+            .unwrap_or_else(|error| panic!("the DER bundle should be read: {error}"));
+
+        assert_eq!(certificates.len(), 1);
+        assert_eq!(
+            certificates[0].as_ref(),
+            pem_body(CA_CERTIFICATE).as_slice()
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_broken_pem_ca_bundle_is_reported() {
+        let bundle = "-----BEGIN CERTIFICATE-----\nnot base64!\n-----END CERTIFICATE-----\n";
+        let path = temp_file("broken-pem-ca", "pem", bundle.as_bytes());
+
+        let error = certificates_from_file(&path)
+            .err()
+            .unwrap_or_else(|| panic!("the broken bundle should be rejected"));
+
+        assert!(error.contains("cannot parse CA bundle"), "{error}");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_missing_ca_bundle_is_reported() {
+        let path = temp_path("missing-bundle", "pem");
+        let _ = std::fs::remove_file(&path);
+
+        let error = certificates_from_file(&path)
+            .err()
+            .unwrap_or_else(|| panic!("the missing bundle should be rejected"));
+
+        assert!(error.contains("cannot read CA bundle"), "{error}");
     }
 
     #[test]
