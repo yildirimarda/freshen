@@ -87,7 +87,9 @@ fn a_ported_step_replays_a_recorded_command_transcript() {
             StubOutput::stdout("firefox\n"),
             StubOutput::stdout(CASK_INFO),
             StubOutput::stderr("cask upgrade failed\n").with_status(1),
+            StubOutput::stdout("==> Would autoremove 1 unneeded formula:\nold-dependency\n"),
             StubOutput::new(),
+            StubOutput::stdout("Would remove: /tmp/old (1.2MB)\n"),
             StubOutput::new(),
         ],
     );
@@ -116,7 +118,9 @@ fn a_ported_step_replays_a_recorded_command_transcript() {
             "brew outdated --cask --greedy --quiet",
             "brew info --cask --json=v2 firefox",
             "brew upgrade --cask --greedy",
+            "brew autoremove --dry-run",
             "brew autoremove",
+            "brew cleanup --dry-run --prune=all",
             "brew cleanup --prune=all",
         ]
     );
