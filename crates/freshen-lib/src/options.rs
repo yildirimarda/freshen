@@ -16,6 +16,9 @@ use crate::registry::{Registry, RegistryError};
 use crate::snapshot::DEFAULT_SNAPSHOT_RETENTION;
 use crate::step::{Step, StepId};
 
+/// Default number of steps `--check` queries at the same time.
+pub const DEFAULT_JOBS: usize = 4;
+
 /// The flag that named a step id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SelectionFlag {
@@ -193,6 +196,7 @@ pub struct RunOptions {
     step_timeout: Option<Duration>,
     global_timeout: Option<Duration>,
     snapshot_retention: Option<usize>,
+    jobs: Option<usize>,
 }
 
 impl RunOptions {
@@ -276,6 +280,15 @@ impl RunOptions {
         self
     }
 
+    /// Sets how many `--check` queries may run at the same time.
+    ///
+    /// A value of `0` is treated as `1`, so the concurrency is always bounded.
+    #[must_use]
+    pub fn with_jobs(mut self, jobs: usize) -> Self {
+        self.jobs = Some(jobs);
+        self
+    }
+
     /// Returns `true` when `--dry-run` is set.
     #[must_use]
     pub fn is_dry_run(&self) -> bool {
@@ -335,6 +348,12 @@ impl RunOptions {
     pub fn snapshot_retention(&self) -> usize {
         self.snapshot_retention
             .unwrap_or(DEFAULT_SNAPSHOT_RETENTION)
+    }
+
+    /// Number of `--check` queries that may run at the same time.
+    #[must_use]
+    pub fn jobs(&self) -> usize {
+        self.jobs.unwrap_or(DEFAULT_JOBS).max(1)
     }
 
     /// Builds the ordered list of steps this run should execute on `platform`.
@@ -446,6 +465,13 @@ mod tests {
             options.snapshot_retention(),
             crate::snapshot::DEFAULT_SNAPSHOT_RETENTION
         );
+        assert_eq!(options.jobs(), super::DEFAULT_JOBS);
+    }
+
+    #[test]
+    fn jobs_are_bounded_below_by_one() {
+        assert_eq!(RunOptions::new().with_jobs(8).jobs(), 8);
+        assert_eq!(RunOptions::new().with_jobs(0).jobs(), 1);
     }
 
     #[test]
@@ -457,13 +483,15 @@ mod tests {
             .with_cleanup(true)
             .with_step_timeout(Some(std::time::Duration::from_secs(60)))
             .with_global_timeout(Some(std::time::Duration::from_secs(600)))
-            .with_snapshot_retention(4);
+            .with_snapshot_retention(4)
+            .with_jobs(3);
 
         assert!(options.is_dry_run());
         assert!(options.assume_yes());
         assert!(options.force_kill());
         assert!(options.cleanup_enabled());
         assert_eq!(options.snapshot_retention(), 4);
+        assert_eq!(options.jobs(), 3);
         assert_eq!(
             options.step_timeout(),
             Some(std::time::Duration::from_secs(60))

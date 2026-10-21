@@ -187,7 +187,7 @@ pub fn quit_choice(answer: &str) -> QuitChoice {
 ///
 /// The real implementation is [`MacAppSystem`]. Tests provide a fake process
 /// table and record the quit, kill and open calls.
-pub trait AppSystem {
+pub trait AppSystem: Send + Sync {
     /// Reads `CFBundleIdentifier` from the bundle's `Contents/Info`.
     fn bundle_id(&self, app: &Path) -> Option<String>;
 
@@ -425,9 +425,9 @@ impl AppSystem for MacAppSystem {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
     use std::collections::HashMap;
     use std::path::PathBuf;
+    use std::sync::{Mutex, MutexGuard};
     use std::time::Duration;
 
     use super::{
@@ -438,13 +438,20 @@ mod tests {
 
     #[derive(Default)]
     struct FakeSystem {
-        bundle_ids: RefCell<HashMap<PathBuf, String>>,
-        running: RefCell<HashMap<PathBuf, Vec<u32>>>,
+        bundle_ids: Mutex<HashMap<PathBuf, String>>,
+        running: Mutex<HashMap<PathBuf, Vec<u32>>>,
         quit_stops_apps: bool,
         open_succeeds: bool,
-        quit_calls: RefCell<Vec<String>>,
-        killed: RefCell<Vec<Vec<u32>>>,
-        opened: RefCell<Vec<String>>,
+        quit_calls: Mutex<Vec<String>>,
+        killed: Mutex<Vec<Vec<u32>>>,
+        opened: Mutex<Vec<String>>,
+    }
+
+    fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+        match mutex.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
     }
 
     impl FakeSystem {
@@ -457,17 +464,13 @@ mod tests {
 
         fn with_app(self, app: &str, bundle_id: &str, pids: &[u32]) -> Self {
             let path = PathBuf::from(app);
-            self.bundle_ids
-                .borrow_mut()
-                .insert(path.clone(), bundle_id.to_owned());
-            self.running.borrow_mut().insert(path, pids.to_vec());
+            lock(&self.bundle_ids).insert(path.clone(), bundle_id.to_owned());
+            lock(&self.running).insert(path, pids.to_vec());
             self
         }
 
         fn with_bundle_id(self, app: &str, bundle_id: &str) -> Self {
-            self.bundle_ids
-                .borrow_mut()
-                .insert(PathBuf::from(app), bundle_id.to_owned());
+            lock(&self.bundle_ids).insert(PathBuf::from(app), bundle_id.to_owned());
             self
         }
 
@@ -479,34 +482,33 @@ mod tests {
 
     impl AppSystem for FakeSystem {
         fn bundle_id(&self, app: &std::path::Path) -> Option<String> {
-            self.bundle_ids.borrow().get(app).cloned()
+            lock(&self.bundle_ids).get(app).cloned()
         }
 
         fn is_running(&self, app: &std::path::Path) -> bool {
-            self.running
-                .borrow()
+            lock(&self.running)
                 .get(app)
                 .is_some_and(|pids| !pids.is_empty())
         }
 
         fn pids(&self, app: &std::path::Path) -> Vec<u32> {
-            self.running.borrow().get(app).cloned().unwrap_or_default()
+            lock(&self.running).get(app).cloned().unwrap_or_default()
         }
 
         fn quit(&self, bundle_id: &str) {
-            self.quit_calls.borrow_mut().push(bundle_id.to_owned());
+            lock(&self.quit_calls).push(bundle_id.to_owned());
             if self.quit_stops_apps {
-                self.running.borrow_mut().clear();
+                lock(&self.running).clear();
             }
         }
 
         fn force_kill(&self, pids: &[u32]) {
-            self.killed.borrow_mut().push(pids.to_vec());
-            self.running.borrow_mut().clear();
+            lock(&self.killed).push(pids.to_vec());
+            lock(&self.running).clear();
         }
 
         fn open(&self, bundle_id: &str) -> bool {
-            self.opened.borrow_mut().push(bundle_id.to_owned());
+            lock(&self.opened).push(bundle_id.to_owned());
             self.open_succeeds
         }
     }
@@ -543,13 +545,13 @@ mod tests {
         assert_eq!(scan.running()[0].name(), "Firefox.app");
         assert_eq!(scan.running()[0].bundle_id(), "com.firefox");
         assert_eq!(scan.protected(), ["Terminal.app"]);
-        assert!(system.quit_calls.borrow().is_empty());
+        assert!(lock(&system.quit_calls).is_empty());
     }
 
     #[test]
     fn apps_without_a_bundle_id_are_ignored() {
         let system = FakeSystem::new();
-        let mut running_apps = system.running.borrow_mut();
+        let mut running_apps = lock(&system.running);
         running_apps.insert(PathBuf::from("/Applications/Unknown.app"), vec![7]);
         drop(running_apps);
 
@@ -584,8 +586,8 @@ mod tests {
         );
 
         assert_eq!(reopen, ["com.firefox"]);
-        assert_eq!(system.quit_calls.borrow().as_slice(), ["com.firefox"]);
-        assert!(system.killed.borrow().is_empty());
+        assert_eq!(lock(&system.quit_calls).as_slice(), ["com.firefox"]);
+        assert!(lock(&system.killed).is_empty());
         assert!(!running(&system, "/Applications/Firefox.app"));
     }
 
@@ -597,7 +599,7 @@ mod tests {
         let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
 
         assert_eq!(reopen, ["com.firefox"]);
-        assert!(system.killed.borrow().is_empty());
+        assert!(lock(&system.killed).is_empty());
         assert!(running(&system, "/Applications/Firefox.app"));
     }
 
@@ -610,7 +612,7 @@ mod tests {
         let reopen = quit_apps(&system, scan.running(), &fast_policy(true));
 
         assert_eq!(reopen, ["com.firefox"]);
-        assert_eq!(system.killed.borrow().as_slice(), [vec![10, 11]]);
+        assert_eq!(lock(&system.killed).as_slice(), [vec![10, 11]]);
     }
 
     #[test]
@@ -632,7 +634,7 @@ mod tests {
         reopen_apps(&system, &reopen);
 
         assert_eq!(reopen, ["com.firefox"]);
-        assert_eq!(system.opened.borrow().as_slice(), ["com.firefox"]);
+        assert_eq!(lock(&system.opened).as_slice(), ["com.firefox"]);
     }
 
     #[test]
@@ -641,10 +643,7 @@ mod tests {
 
         reopen_apps(&system, &["com.first".to_owned(), "com.second".to_owned()]);
 
-        assert_eq!(
-            system.opened.borrow().as_slice(),
-            ["com.first", "com.second"]
-        );
+        assert_eq!(lock(&system.opened).as_slice(), ["com.first", "com.second"]);
     }
 
     #[test]

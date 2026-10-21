@@ -542,7 +542,7 @@ esac"#,
 
     let output = tools
         .command()
-        .args(["--check", "--only", "uv,mise"])
+        .args(["--check", "--jobs", "1", "--only", "uv,mise"])
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
 

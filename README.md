@@ -32,6 +32,7 @@ A failing step never aborts the run. Failures are collected and listed at the en
 - **Every run records a pre-upgrade snapshot** of installed versions (`brew list --versions`, `brew list --cask --versions`, `brew bundle dump`, `uv tool list`, `mise ls`, Docker images) in a timestamped file under the platform state directory (`~/.local/state/freshen/snapshots` on Linux, `~/Library/Application Support/freshen/snapshots` on macOS, `%LOCALAPPDATA%\freshen\snapshots` on Windows). Set `FRESHEN_SNAPSHOT_DIR` to override the location. The summary prints the commands that reinstall the recorded versions. Only the most recent snapshots are kept; `--snapshot-retention` changes the window (the default is 10, and `0` keeps every snapshot).
 - **Destructive cleanup is opt-in.** Cache pruning, old-version pruning, `brew autoremove`, `brew cleanup --prune=all` and `docker image prune` only run with `--cleanup`. Without it freshen prints why each one was skipped. When enabled, every item a cleanup removes is echoed and the reclaimed space is reported when the tool provides it.
 - **A hung step cannot hang the whole run.** `--step-timeout <SECONDS>` bounds each step (detection, check, upgrade and cleanup) and `--timeout <SECONDS>` bounds the whole run. A step that runs out of time is stopped, reported as `timed out` rather than `failed`, and anything it stopped is restored; `0` disables a timeout.
+- **`--check` queries independent steps concurrently.** Up to `--jobs N` read-only queries run at the same time (the default is 4, and `0` is treated as 1). The report keeps the run order and the summary counts are deterministic regardless of which query finishes first.
 - **Transient download errors are retried with exponential backoff.** A connection reset, timeout or temporary HTTP 5xx/429 response is retried up to twice before the step gives up. If the package registry is permanently unreachable (DNS failure, refused connection or no route), the step is reported as `skipped` with the reason `registry unreachable` instead of failing the run.
 - **Only one update runs at a time.** A second run stops with an error naming the PID that holds the lock. The lock lives under the platform state directory (`FRESHEN_LOCK_DIR` overrides it), and `--dry-run`/`--check` do not take it.
 
@@ -57,6 +58,7 @@ freshen --cleanup             # also prune caches, old versions and dangling ima
 QUIT_TIMEOUT=40 freshen       # wait longer for apps to quit
 freshen --dry-run             # detect and plan, change nothing
 freshen --check               # report outdated items, change nothing (exit 2 if updates are pending)
+freshen --check --jobs 8      # query up to eight steps at the same time
 freshen --json                # print the report as JSON (before/after versions per step)
 freshen --markdown            # print the report as Markdown
 freshen --list-steps          # show every step, its detection and skip reason
@@ -150,6 +152,7 @@ The Rust binary accepts the same options on macOS, Linux and Windows:
 ```bash
 cargo run -p freshen -- --dry-run                    # detect, change nothing
 cargo run -p freshen -- --check                      # report outdated items, exit 2 when pending
+cargo run -p freshen -- --check --jobs 8             # query up to eight steps at the same time
 cargo run -p freshen -- --json                       # machine-readable report with version changes
 cargo run -p freshen -- --markdown                   # Markdown report with version changes
 cargo run -p freshen -- --list-steps                 # detect every step and explain skips

@@ -662,7 +662,16 @@ fn check_reports_outdated_versions_and_exits_2() {
 esac"#,
     );
 
-    let output = run(&tools, &["--check", "--only", "brew-formulae,brew-casks"]);
+    let output = run(
+        &tools,
+        &[
+            "--check",
+            "--jobs",
+            "1",
+            "--only",
+            "brew-formulae,brew-casks",
+        ],
+    );
 
     assert_eq!(output.status.code(), Some(2), "stderr: {}", stderr(&output));
     assert_eq!(
@@ -685,7 +694,16 @@ esac"#,
 fn check_exits_zero_when_homebrew_is_up_to_date() {
     let tools = StubTools::new(&["brew"]);
 
-    let output = run(&tools, &["--check", "--only", "brew-formulae,brew-casks"]);
+    let output = run(
+        &tools,
+        &[
+            "--check",
+            "--jobs",
+            "1",
+            "--only",
+            "brew-formulae,brew-casks",
+        ],
+    );
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(

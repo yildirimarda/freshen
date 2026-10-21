@@ -41,7 +41,7 @@ pub use containers::{
 };
 pub use listing::{list_steps, DetectionState, StepList, StepListing};
 pub use lock::{LockError, RunLock};
-pub use options::{PlanError, RunOptions, SelectionFlag, StepSelection};
+pub use options::{PlanError, RunOptions, SelectionFlag, StepSelection, DEFAULT_JOBS};
 pub use output::{route_to_stderr, route_to_stdout};
 pub use package_manager::{
     wait_for_package_managers, HostPackageManagerProbe, PackageManagerConfig, PackageManagerProbe,

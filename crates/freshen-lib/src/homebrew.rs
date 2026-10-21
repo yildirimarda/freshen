@@ -9,11 +9,10 @@
 //! the app artifacts a cask will replace are known. Running apps are quit
 //! before the upgrade and reopened after cleanup through [`crate::apps`].
 
-use std::cell::RefCell;
 use std::env;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
@@ -42,19 +41,26 @@ const HOMEBREW_PLATFORMS: [Platform; 2] = [Platform::Macos, Platform::Linux];
 
 /// Bundle ids of the apps that were quit and still need to be reopened.
 #[derive(Clone, Default)]
-struct ReopenQueue(Rc<RefCell<Vec<String>>>);
+struct ReopenQueue(Arc<Mutex<Vec<String>>>);
 
 impl ReopenQueue {
     fn extend(&self, bundle_ids: impl IntoIterator<Item = String>) {
-        self.0.borrow_mut().extend(bundle_ids);
+        lock(&self.0).extend(bundle_ids);
     }
 
     fn bundle_ids(&self) -> Vec<String> {
-        self.0.borrow().clone()
+        lock(&self.0).clone()
     }
 
     fn clear(&self) {
-        self.0.borrow_mut().clear();
+        lock(&self.0).clear();
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
     }
 }
 
@@ -362,19 +368,19 @@ impl Step for FormulaeStep {
 
 struct CasksStep {
     reopen: ReopenQueue,
-    system: Rc<dyn AppSystem>,
+    system: Arc<dyn AppSystem>,
 }
 
 impl CasksStep {
     fn new(reopen: ReopenQueue) -> Self {
         Self {
             reopen,
-            system: Rc::new(MacAppSystem),
+            system: Arc::new(MacAppSystem),
         }
     }
 
     #[cfg(test)]
-    fn with_system(reopen: ReopenQueue, system: Rc<dyn AppSystem>) -> Self {
+    fn with_system(reopen: ReopenQueue, system: Arc<dyn AppSystem>) -> Self {
         Self { reopen, system }
     }
 
@@ -619,19 +625,19 @@ impl Step for CleanupStep {
 
 struct ReopenStep {
     reopen: ReopenQueue,
-    system: Rc<dyn AppSystem>,
+    system: Arc<dyn AppSystem>,
 }
 
 impl ReopenStep {
     fn new(reopen: ReopenQueue) -> Self {
         Self {
             reopen,
-            system: Rc::new(MacAppSystem),
+            system: Arc::new(MacAppSystem),
         }
     }
 
     #[cfg(test)]
-    fn with_system(reopen: ReopenQueue, system: Rc<dyn AppSystem>) -> Self {
+    fn with_system(reopen: ReopenQueue, system: Arc<dyn AppSystem>) -> Self {
         Self { reopen, system }
     }
 }
@@ -696,13 +702,12 @@ mod tests {
     use crate::platform::Platform;
     use crate::registry::Registry;
     use crate::step::{Step, StepId};
-    use std::cell::RefCell;
     use std::path::Path;
-    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
 
     #[derive(Default)]
     struct FakeAppSystem {
-        opened: RefCell<Vec<String>>,
+        opened: Mutex<Vec<String>>,
     }
 
     impl AppSystem for FakeAppSystem {
@@ -723,7 +728,7 @@ mod tests {
         fn force_kill(&self, _pids: &[u32]) {}
 
         fn open(&self, bundle_id: &str) -> bool {
-            self.opened.borrow_mut().push(bundle_id.to_owned());
+            super::lock(&self.opened).push(bundle_id.to_owned());
             true
         }
     }
@@ -882,14 +887,14 @@ mod tests {
     fn an_interrupted_cask_step_reopens_the_apps_it_quit() {
         let queue = ReopenQueue::default();
         queue.extend(["com.firefox".to_owned(), "com.editor".to_owned()]);
-        let system = Rc::new(FakeAppSystem::default());
+        let system = Arc::new(FakeAppSystem::default());
         let step = CasksStep::with_system(queue.clone(), system.clone());
 
         step.restore()
             .unwrap_or_else(|error| panic!("restore failed: {error}"));
 
         assert_eq!(
-            system.opened.borrow().as_slice(),
+            super::lock(&system.opened).as_slice(),
             ["com.firefox", "com.editor"]
         );
         assert!(queue.bundle_ids().is_empty());
@@ -899,13 +904,13 @@ mod tests {
     fn the_reopen_step_restores_apps_after_an_interrupt() {
         let queue = ReopenQueue::default();
         queue.extend(["com.firefox".to_owned()]);
-        let system = Rc::new(FakeAppSystem::default());
+        let system = Arc::new(FakeAppSystem::default());
         let step = ReopenStep::with_system(queue.clone(), system.clone());
 
         step.restore()
             .unwrap_or_else(|error| panic!("restore failed: {error}"));
 
-        assert_eq!(system.opened.borrow().as_slice(), ["com.firefox"]);
+        assert_eq!(super::lock(&system.opened).as_slice(), ["com.firefox"]);
         assert!(queue.bundle_ids().is_empty());
     }
 
