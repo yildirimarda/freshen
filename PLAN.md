@@ -108,10 +108,18 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Add GNU screen (`STY`, `screen -ls`), byobu, dtach/abduco and mosh-server to the session guard so an upgrade warns about every terminal session it would break, covered by tests with injected process tables
 - [ ] Extend terminal emulator detection with iTerm2, Apple Terminal, Rio, Termius, Zed, Cursor, Windsurf and JetBrains IDE terminals (bundle ids and `TERM_PROGRAM` values) so freshen never quits the terminal that runs it, covered by tests
 - [ ] Generalise the README wording: replace the zellij-only bullet and the Ghostty/iTerm2 examples with the list of supported terminals and session managers, generated from the same tables where possible
+- [ ] Implement read-only `check()` for the uv and mise steps (`uv tool list --outdated`, `mise outdated`) so `--check` reports pending tool updates instead of always reporting them up to date, covered by recorded transcripts
+- [ ] Run independent read-only `check()` queries concurrently with bounded concurrency (`--jobs N`, default 4) while keeping the printed order and the summary deterministic, covered by tests with slow stubs
 
-## Milestone 4: macOS Depth
+## Milestone 4: CI, Configuration and macOS Depth
 
+- [ ] Retry stub execution when the kernel returns `ETXTBSY` (text file busy), so parallel test threads that write and execute a stub cannot fail spuriously, with a test for the retry helper
+- [ ] Make `preflight::tests::tcp_reachability_detects_open_and_closed_ports` robust against another process reusing the just-released port, so the suite does not fail spuriously on shared CI runners
 - [ ] CI matrix: macOS, Ubuntu and Windows runners for lint, unit tests and the stub-based integration tests
+- [ ] Propose a CI job (as `ci-proposals/real-tools.yml`) that runs `freshen --check` and `freshen --dry-run` read-only against the real Homebrew on `macos-latest` and fails on parser errors, so the recorded transcripts are verified against real output
+- [ ] Extend the proposed real-tool job to `windows-latest` (real Chocolatey and winget, read-only) and `ubuntu-latest` (real apt, read-only), with the same failure rule
+- [ ] Add a config file (TOML) at the OS-appropriate location (`~/.config/<name>/config.toml`, `%APPDATA%`) with a documented schema and validation errors that point at the offending line
+- [ ] Support per-step enable/disable, include/exclude lists (casks, packages, containers, projects) and `NEVER_QUIT` / `ALWAYS_QUIT` app lists
 - [ ] Run every command whose output is parsed with a neutral locale (`LC_ALL=C`, `LANG=C`; UTF-8 console and `--disable-interactivity` on Windows) so localized output such as Turkish and progress spinners cannot break parsers, covered by tests that run the parsers on non-English fixtures
 - [ ] Detect an Automation (TCC) denial when quitting apps through AppleScript (error -1743) and print an actionable message naming the System Settings pane instead of treating the app as unquittable, covered by tests with injected osascript output
 - [ ] Detect casks whose installer needs an administrator password (pkg installers, `sudo` prompts) and skip them with a clear reason in non-interactive runs instead of hanging, covered by tests
@@ -143,9 +151,14 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Add apt support (update, upgrade, autoremove, autoclean) with dpkg lock handling and `needrestart`/`/var/run/reboot-required` detection
 - [ ] Add dnf/yum support with `needs-restarting` reboot detection
 - [ ] Add pacman support (with optional AUR helpers `yay`/`paru`) including `pacnew` file reporting
-- [ ] Add zypper, apk and emerge support as separate opt-in steps
-- [ ] Add Flatpak (`flatpak update`, `uninstall --unused`) and Snap (`snap refresh`) steps
-- [ ] Add Nix (`nix-channel --update`, `nix profile upgrade`, `home-manager switch`) and `nix-collect-garbage` as opt-in
+- [ ] Add zypper support (`zypper refresh`, `zypper update`, and `zypper ps -s` to list services that need a restart) as an opt-in step, covered by recorded transcripts
+- [ ] Add apk support (`apk update`, `apk upgrade`) for Alpine as an opt-in step, covered by recorded transcripts
+- [ ] Add emerge support (`emerge --sync`, `emerge -uDN @world`) for Gentoo as an opt-in, report-first step, covered by recorded transcripts
+- [ ] Add Flatpak (`flatpak update -y`, and `flatpak uninstall --unused` only with `--cleanup`), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add Snap (`snap refresh`, mentioning a held refresh window when snapd reports one), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add Nix upgrades (`nix-channel --update`, `nix profile upgrade`), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add `home-manager switch` as an opt-in step that runs only when a home-manager configuration is detected, covered by tests with injected paths
+- [ ] Add `nix-collect-garbage` as a cleanup step that runs only with `--cleanup` and reports the reclaimed space, covered by recorded transcripts
 - [ ] Add firmware updates through `fwupdmgr` (report-only by default)
 - [ ] Privilege handling: use `sudo` only for steps that need it, validate credentials once up front, never run user-level tools as root
 - [ ] Detect services that need a restart after upgrades (`systemctl`, `needrestart`) and offer to restart them
@@ -186,17 +199,40 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] mise: add opt-in `--bump` flag with a warning that it replaces `lts`/`latest` with a fixed version
 - [ ] mise: reinstall global npm packages listed in `~/.default-npm-packages` after the Node version changed, and the same for Python/Ruby default packages
 - [ ] uv: run `uv self update` when uv is not installed via a system package manager, and `uv python upgrade` for managed interpreters
-- [ ] Add pipx (`pipx upgrade-all`) and `pip` user-site outdated reporting (report-only)
-- [ ] Add Rust: `rustup update`, `cargo install-update -a` (when cargo-update is installed)
+- [ ] Add pipx (`pipx upgrade-all`), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add a report-only `pip list --user --outdated` check that never upgrades anything, covered by recorded transcripts
+- [ ] Add rustup (`rustup update`), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add `cargo install-update -a` when cargo-update is installed, skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add Go: report outdated binaries installed with `go install` and a safe update path
-- [ ] Add global npm, pnpm, yarn and bun package updates, each as its own step with a skip when absent
-- [ ] Add other version managers as steps: asdf, nvm, fnm, volta, pyenv, rbenv, sdkman, jenv, tfenv
-- [ ] Add Ruby gems, Composer, Conda/Mamba, .NET tools and Elixir/Hex steps (all optional, skipped when absent)
-- [ ] Add editor tooling: VS Code extensions (`code --update-extensions`), Neovim plugin managers (lazy.nvim, packer) and Mason
-- [ ] Add shell tooling: oh-my-zsh, zinit, antidote, tmux plugin manager (tpm), fisher
-- [ ] Add cloud/DevOps CLIs: `gh extension upgrade --all`, `kubectl krew upgrade`, `helm repo update`, AWS CLI v2 (non-brew installs), `gcloud components update`, `az upgrade`
-- [ ] Add git-related upkeep: `git lfs` self-check, global pre-commit hook repos (`pre-commit autoupdate` for opted-in repo paths)
-- [ ] Implement read-only `check()` for the uv and mise steps (`uv tool list --outdated`, `mise outdated`) so `--check` reports pending tool updates instead of always reporting them up to date, covered by recorded transcripts
+- [ ] Add global npm packages (`npm outdated -g --json`, `npm update -g`), skipped when npm is absent or managed by mise, covered by recorded transcripts
+- [ ] Add global pnpm packages (`pnpm update -g`), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add global yarn packages (`yarn global upgrade`, classic yarn only), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add global bun packages (`bun update -g`), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add asdf (`asdf plugin update --all` and a report of tools with newer versions) without changing the versions pinned in `.tool-versions`, skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add nvm, fnm and volta: report when a newer Node LTS exists than the one in use and update the manager itself only when it is not managed by brew or mise, covered by recorded transcripts
+- [ ] Add pyenv and rbenv: update the managers and their plugins (`pyenv update`, `git pull` of rbenv and ruby-build) and report newer Python and Ruby versions without installing them, covered by recorded transcripts
+- [ ] Add SDKMAN (`sdk selfupdate`, `sdk upgrade`) run in a non-interactive shell, skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add jenv and tfenv as report-only steps that show newer Java and Terraform versions without switching, covered by recorded transcripts
+- [ ] Add Ruby gems (`gem update --system`, `gem update` for user-installed gems), skipped when Ruby is managed by a system package manager, covered by recorded transcripts
+- [ ] Add Composer (`composer self-update`, `composer global update`), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add Conda and Mamba (`conda update -n base conda`, `micromamba self-update`) and report-only checks for other environments, covered by recorded transcripts
+- [ ] Add .NET global tools (`dotnet tool update --global` for each installed tool), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add Elixir tooling (`mix local.hex --force`, `mix local.rebar --force`), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add VS Code extensions (`code --update-extensions`), and the same for Cursor and VSCodium when their CLIs exist, covered by recorded transcripts
+- [ ] Add Neovim plugin managers (`lazy.nvim` through `nvim --headless "+Lazy! sync" +qa`, packer) as opt-in steps because they change plugins, covered by recorded transcripts
+- [ ] Add Mason and Treesitter parser updates (`nvim --headless "+MasonUpdate" +qa`) as an opt-in step, covered by recorded transcripts
+- [ ] Add oh-my-zsh (`omz update --unattended`), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add zinit (`zinit self-update`, `zinit update --all`) and antidote (`antidote update`), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add the tmux plugin manager (`~/.tmux/plugins/tpm/bin/update_plugins all`), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add fisher (`fisher update`), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add GitHub CLI extensions (`gh extension upgrade --all`), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add kubectl plugins (`kubectl krew upgrade`), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add Helm (`helm repo update`) and a report-only list of releases with newer chart versions, covered by recorded transcripts
+- [ ] Add AWS CLI v2 for non-brew installs: report a newer version and update through the official installer only with an explicit flag, covered by recorded transcripts
+- [ ] Add the Google Cloud CLI (`gcloud components update --quiet`) when installed outside a system package manager, covered by recorded transcripts
+- [ ] Add the Azure CLI (`az upgrade --yes`) when installed outside a system package manager, covered by recorded transcripts
+- [ ] Add a `git lfs` self-check (`git lfs version`, `git lfs install --skip-repo`), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add `pre-commit autoupdate` as an opt-in step for the repositories listed in the config, never scanning the disk for repositories, covered by tests
 
 ## Milestone 8: Containers and Services
 
@@ -212,8 +248,6 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 
 ## Milestone 9: Configuration and UX
 
-- [ ] Add a config file (TOML) at the OS-appropriate location (`~/.config/<name>/config.toml`, `%APPDATA%`) with a documented schema and validation errors that point at the offending line
-- [ ] Support per-step enable/disable, include/exclude lists (casks, packages, containers, projects) and `NEVER_QUIT` / `ALWAYS_QUIT` app lists
 - [ ] Support named profiles (e.g. `work`, `minimal`) selectable with `--profile`
 - [ ] Add pre/post hooks per step and global hooks (`pre_run`, `post_run`) with environment variables describing the run
 - [ ] Add user-defined custom steps (a name, a command, platforms, order) so anything not built in can be added without code changes
@@ -226,6 +260,8 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Add shell completions for zsh, bash, fish and PowerShell, and a man page
 - [ ] Add a `self-update` subcommand and an update-available hint that never blocks the run
 - [ ] Cap captured subprocess output (for example the last N bytes per stream) so a runaway command cannot exhaust memory, while still streaming every line live
+- [ ] Refuse to load the config file, hooks and custom steps from world-writable files or directories and print the offending path, covered by tests on Unix and with injected ACL facts on Windows
+- [ ] Print the exact command of every hook and custom step before running it (unless `--quiet`) and require `--trust-config`, or an interactive confirmation that stores a hash, the first time a new or changed hook or custom step is seen, covered by tests
 
 ## Milestone 10: Automation
 
@@ -238,6 +274,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 ## Milestone 11: Distribution and Docs
 
 - [ ] GitHub Releases with prebuilt binaries for macOS (arm64, x86_64), Linux (x86_64, aarch64) and Windows (x86_64), with checksums (cargo-dist or an equivalent cross-compilation workflow)
+- [ ] Add Windows aarch64 and fully static Linux (musl) targets to the release workflow, with checksums for every artifact
 - [ ] Publish to crates.io (`cargo install freshen`) and support `cargo binstall`
 - [ ] Sign and notarize the macOS binary, sign the Windows binary, and publish SBOM / provenance attestations
 - [ ] Homebrew tap formula, Scoop bucket manifest and winget manifest
@@ -247,6 +284,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] "Writing a step" contributor guide with a worked example and a step template
 - [ ] Add a terminal recording (asciinema/GIF) to the README
 - [ ] Add issue templates (bug report with `--doctor` output, new step request) and a security policy
+- [ ] State in the README and docs that freshen collects no telemetry and sends no data itself (only the tools it runs and the optional self-update check use the network), and make the self-update check easy to disable
 
 ## Milestone 12: Quality
 
@@ -256,13 +294,12 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Container-based integration tests on Linux that exercise real package managers against throwaway images
 - [ ] Add a scheduled CI job that runs against the latest Homebrew/winget/apt metadata to catch upstream output changes early
 - [ ] Add performance budget: `--check` on a typical machine completes within a documented time
+- [ ] Add `docs/TESTING.md` with a manual checklist per operating system (a real run on macOS, Linux and Windows with the expected output and a rollback check) to run before every minor release
 
 ## Discovered
 
 - [ ] Add the Cargo workspace checks promised by `tests/README.md` to `tests/run-tests.sh`: the workspace sets an MSRV (`rust-version`), `rust-toolchain.toml` pins an exact channel with `rustfmt`/`clippy`, and every crate under `crates/` inherits the workspace MSRV and lints
-- [ ] Retry stub execution when the kernel returns `ETXTBSY` (text file busy), so parallel test threads that write and execute a stub cannot fail spuriously, with a test for the retry helper
 - [ ] Probe both IPv4 and IPv6 (and allow overriding the endpoint) in the network preflight check so IPv6-only or filtered networks are not reported as unreachable, covered by tests with injected endpoints
 - [ ] Detect user-marked metered networks on macOS instead of only hotspot SSIDs, so the metered preflight check matches the system setting, covered by tests with injected command output
-- [ ] Make `preflight::tests::tcp_reachability_detects_open_and_closed_ports` robust against another process reusing the just-released port, so the suite does not fail spuriously on shared CI runners
 
 <!-- The agent appends newly found work here. -->
