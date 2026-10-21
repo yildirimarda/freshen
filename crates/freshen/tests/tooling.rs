@@ -83,7 +83,11 @@ fn uv_upgrades_tools_and_prunes_the_cache() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
         tools.step_calls(),
-        ["uv tool upgrade --all", "uv cache prune"]
+        [
+            "uv tool list --outdated",
+            "uv tool upgrade --all",
+            "uv cache prune"
+        ]
     );
 }
 
@@ -102,7 +106,11 @@ fn a_failing_uv_upgrade_still_prunes_the_cache_and_fails_the_step() {
     assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
     assert_eq!(
         tools.step_calls(),
-        ["uv tool upgrade --all", "uv cache prune"]
+        [
+            "uv tool list --outdated",
+            "uv tool upgrade --all",
+            "uv cache prune"
+        ]
     );
     assert!(
         stdout(&output).contains("1 failed"),
@@ -123,6 +131,7 @@ fn mise_self_updates_upgrades_and_prunes_when_not_installed_with_brew() {
     assert_eq!(
         tools.step_calls(),
         [
+            "mise outdated",
             "brew list --formula mise",
             "mise self-update -y",
             "mise upgrade",
@@ -149,6 +158,7 @@ fn mise_installed_with_brew_is_not_self_updated() {
     assert_eq!(
         tools.step_calls(),
         [
+            "mise outdated",
             "brew list --formula mise",
             "mise upgrade",
             "mise ls --prunable --json",
@@ -168,6 +178,7 @@ fn mise_self_updates_when_brew_is_not_installed() {
     assert_eq!(
         tools.step_calls(),
         [
+            "mise outdated",
             "mise self-update -y",
             "mise upgrade",
             "mise ls --prunable --json",
@@ -192,6 +203,7 @@ fn a_failing_mise_self_update_is_only_a_warning() {
     assert_eq!(
         tools.step_calls(),
         [
+            "mise outdated",
             "mise self-update -y",
             "mise upgrade",
             "mise ls --prunable --json",
@@ -221,6 +233,7 @@ fn a_failing_mise_upgrade_still_prunes_and_fails_the_step() {
     assert_eq!(
         tools.step_calls(),
         [
+            "mise outdated",
             "mise self-update -y",
             "mise upgrade",
             "mise ls --prunable --json",
@@ -307,6 +320,7 @@ fn warns_about_processes_still_running_an_old_node_version() {
     assert_eq!(
         tools.step_calls(),
         [
+            "mise outdated",
             "mise self-update -y",
             "mise upgrade",
             "mise ls --prunable --json",
@@ -441,5 +455,128 @@ esac"#,
             .any(|call| call.starts_with("ps -o comm=")),
         "calls: {:?}",
         tools.step_calls()
+    );
+}
+
+#[test]
+fn check_reports_outdated_uv_tools_and_exits_2() {
+    let tools = StubTools::new(&["uv"]);
+    tools.set_script(
+        "uv",
+        r#"case "$*" in
+  "tool list --outdated")
+    printf 'black v23.1.0 [latest: 26.10.1]\n- black\n- blackd\nruff v0.6.0 [latest: 0.7.0]\n- ruff\n'
+    ;;
+esac"#,
+    );
+
+    let output = tools
+        .command()
+        .args(["--check", "--only", "uv"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert_eq!(output.status.code(), Some(2), "stderr: {}", stderr(&output));
+    assert_eq!(tools.step_calls(), ["uv tool list --outdated"]);
+    let text = stdout(&output);
+    assert!(text.contains("uv:"), "output: {text}");
+    assert!(text.contains("black 23.1.0 -> 26.10.1"), "output: {text}");
+    assert!(text.contains("ruff 0.6.0 -> 0.7.0"), "output: {text}");
+    assert!(
+        text.contains("2 update(s) pending across 1 step(s)."),
+        "output: {text}"
+    );
+}
+
+#[test]
+fn check_reports_outdated_mise_tools_and_exits_2() {
+    let tools = StubTools::new(&["mise"]);
+    tools.set_script(
+        "mise",
+        r#"case "$*" in
+  "outdated")
+    printf 'Plugin  Requested  Current  Latest\n'
+    printf 'node    20         20.0.0   20.1.0\n'
+    printf 'python  3.11       3.11.0   3.11.1\n'
+    ;;
+esac"#,
+    );
+
+    let output = tools
+        .command()
+        .args(["--check", "--only", "mise"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert_eq!(output.status.code(), Some(2), "stderr: {}", stderr(&output));
+    assert_eq!(tools.step_calls(), ["mise outdated"]);
+    let text = stdout(&output);
+    assert!(text.contains("mise:"), "output: {text}");
+    assert!(text.contains("node 20.0.0 -> 20.1.0"), "output: {text}");
+    assert!(text.contains("python 3.11.0 -> 3.11.1"), "output: {text}");
+    assert!(
+        text.contains("2 update(s) pending across 1 step(s)."),
+        "output: {text}"
+    );
+}
+
+#[test]
+fn check_reports_uv_and_mise_up_to_date_without_running_them() {
+    let tools = StubTools::new(&["uv", "mise"]);
+    tools.set_script(
+        "uv",
+        r#"case "$*" in
+  "tool list --outdated")
+    printf 'No tools installed\n'
+    ;;
+esac"#,
+    );
+    tools.set_script(
+        "mise",
+        r#"case "$*" in
+  "outdated")
+    printf 'All tools are up to date\n' >&2
+    ;;
+esac"#,
+    );
+
+    let output = tools
+        .command()
+        .args(["--check", "--only", "uv,mise"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        ["uv tool list --outdated", "mise outdated"]
+    );
+    assert_eq!(stdout(&output), "Everything is up to date.\n");
+}
+
+#[test]
+fn check_reports_a_failed_tool_query_with_exit_1() {
+    let tools = StubTools::new(&["uv"]);
+    tools.set_script(
+        "uv",
+        r#"case "$*" in
+  "tool list --outdated")
+    exit 1
+    ;;
+esac"#,
+    );
+
+    let output = tools
+        .command()
+        .args(["--check", "--only", "uv"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
+    assert_eq!(tools.step_calls(), ["uv tool list --outdated"]);
+    assert!(
+        stdout(&output).contains("failed during check"),
+        "output: {}",
+        stdout(&output)
     );
 }

@@ -229,7 +229,12 @@ esac"#,
     assert!(!text.contains("ruff v0.7.0"), "{text}");
     assert_eq!(
         tools.calls(),
-        ["uv tool list", "uv tool upgrade --all", "uv cache prune"]
+        [
+            "uv tool list",
+            "uv tool list --outdated",
+            "uv tool upgrade --all",
+            "uv cache prune"
+        ]
     );
 }
 
