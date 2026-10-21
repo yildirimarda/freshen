@@ -21,7 +21,7 @@ use serde_json::Value;
 
 use crate::homebrew::{BREW, FORMULAE, REOPEN};
 use crate::platform::Platform;
-use crate::process::CommandSpec;
+use crate::process::{CommandSpec, NETWORK_RETRIES};
 use crate::registry::Registry;
 use crate::snapshot::{self, SnapshotCommand, SnapshotSection};
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
@@ -228,8 +228,9 @@ impl Step for ColimaStopStep {
     fn run(&self) -> Result<(), StepError> {
         let outdated = CommandSpec::new("brew")
             .args(["outdated", "--formula", "--quiet"])
+            .retry_transient_network(NETWORK_RETRIES)
             .run()
-            .map_err(|error| StepError::run(COLIMA_STOP, error.to_string()))?;
+            .map_err(|error| StepError::run_from_process(COLIMA_STOP, &error))?;
         let upgrade_stops_colima = lines(outdated.stdout())
             .iter()
             .any(|name| name == "colima" || name == "lima");
@@ -254,21 +255,21 @@ impl Step for ColimaStopStep {
         for project in &snapshot.compose {
             println!("docker compose down: {}", project.name());
             if let Err(error) = compose_command(project, &["down"]).run() {
-                failures.push(error.to_string());
+                failures.push(StepError::run_from_process(COLIMA_STOP, &error));
             }
         }
         for container in &snapshot.standalone {
             println!("docker stop: {}", container.name());
             if let Err(error) = docker_command(&["stop"], container.id()).run() {
-                failures.push(error.to_string());
+                failures.push(StepError::run_from_process(COLIMA_STOP, &error));
             }
         }
 
         if let Err(error) = CommandSpec::new("colima").arg("stop").run() {
-            failures.push(error.to_string());
+            failures.push(StepError::run_from_process(COLIMA_STOP, &error));
         }
 
-        finish(COLIMA_STOP, failures)
+        finish(failures)
     }
 
     fn snapshot(&self) -> Option<SnapshotSection> {
@@ -307,23 +308,23 @@ impl ColimaStartStep {
 
         if let Err(error) = CommandSpec::new("colima").arg("start").run() {
             println!("warning: colima did not start; containers were NOT restarted");
-            return Err(StepError::run(COLIMA_START, error.to_string()));
+            return Err(StepError::run_from_process(COLIMA_START, &error));
         }
 
         for container in &snapshot.standalone {
             println!("docker start: {}", container.name());
             if let Err(error) = docker_command(&["start"], container.id()).run() {
-                failures.push(error.to_string());
+                failures.push(StepError::run_from_process(COLIMA_START, &error));
             }
         }
         for project in &snapshot.compose {
             println!("docker compose up -d: {}", project.name());
             if let Err(error) = compose_command(project, &["up", "-d"]).run() {
-                failures.push(error.to_string());
+                failures.push(StepError::run_from_process(COLIMA_START, &error));
             }
         }
 
-        let result = finish(COLIMA_START, failures);
+        let result = finish(failures);
         if result.is_ok() {
             self.snapshot.clear();
         }
@@ -341,23 +342,23 @@ fn restore_colima(snapshot: &ContainerSnapshot, step: StepId) -> Result<(), Step
 
     if let Err(error) = CommandSpec::new("colima").arg("start").run() {
         println!("warning: colima did not start; containers were NOT restarted");
-        return Err(StepError::run(step, error.to_string()));
+        return Err(StepError::run_from_process(step, &error));
     }
 
     for container in &stopped.standalone {
         println!("docker start: {}", container.name());
         if let Err(error) = docker_command(&["start"], container.id()).run() {
-            failures.push(error.to_string());
+            failures.push(StepError::run_from_process(step, &error));
         }
     }
     for project in &stopped.compose {
         println!("docker compose up -d: {}", project.name());
         if let Err(error) = compose_command(project, &["up", "-d"]).run() {
-            failures.push(error.to_string());
+            failures.push(StepError::run_from_process(step, &error));
         }
     }
 
-    let result = finish(step, failures);
+    let result = finish(failures);
     if result.is_ok() {
         snapshot.clear();
     }
@@ -442,10 +443,10 @@ impl Step for DockerStep {
             for project in &projects {
                 println!("docker compose pull + up -d: {}", project.name());
                 if let Err(error) = compose_command(project, &["pull", "--quiet"]).run() {
-                    failures.push(error.to_string());
+                    failures.push(StepError::run_from_process(DOCKER, &error));
                 }
                 if let Err(error) = compose_command(project, &["up", "-d"]).run() {
-                    failures.push(error.to_string());
+                    failures.push(StepError::run_from_process(DOCKER, &error));
                 }
             }
         }
@@ -455,10 +456,10 @@ impl Step for DockerStep {
             .args(["image", "prune", "-f"])
             .run()
         {
-            failures.push(error.to_string());
+            failures.push(StepError::run_from_process(DOCKER, &error));
         }
 
-        finish(DOCKER, failures)
+        finish(failures)
     }
 
     fn snapshot(&self) -> Option<SnapshotSection> {
@@ -477,9 +478,9 @@ impl Step for DockerStep {
     }
 }
 
-fn finish(step: StepId, failures: Vec<String>) -> Result<(), StepError> {
+fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
     match failures.into_iter().next() {
-        Some(message) => Err(StepError::run(step, message)),
+        Some(error) => Err(error),
         None => Ok(()),
     }
 }
@@ -526,6 +527,7 @@ fn compose_command(project: &ComposeProject, arguments: &[&str]) -> CommandSpec 
         spec = spec.arg("-f").arg(file.as_str());
     }
     spec.args(arguments)
+        .retry_transient_network(NETWORK_RETRIES)
 }
 
 fn docker_command(arguments: &[&str], id: &str) -> CommandSpec {

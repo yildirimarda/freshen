@@ -208,7 +208,7 @@ impl Step for ProbeStep {
         self.command
             .run()
             .map(|_| ())
-            .map_err(|error| StepError::run(self.id, error.to_string()))
+            .map_err(|error| StepError::run_from_process(self.id, &error))
     }
 
     fn platforms(&self) -> &'static [Platform] {

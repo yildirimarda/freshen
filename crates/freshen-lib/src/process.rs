@@ -124,6 +124,114 @@ impl Default for Backoff {
     }
 }
 
+/// How many times a network command is retried after its first attempt.
+pub const NETWORK_RETRIES: u32 = 2;
+
+/// The kind of network failure found in a command's output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkFailure {
+    /// A temporary problem that may disappear when the request is repeated,
+    /// such as a reset connection, a timeout or an HTTP 5xx response.
+    Transient,
+    /// The registry cannot be reached at all, such as a DNS failure, a
+    /// refused connection or an unreachable network.
+    Unreachable,
+}
+
+/// Classifies network failures from command output.
+///
+/// Package managers and the download tools they call print very different
+/// messages. This recognises the common curl, HTTP and package-manager
+/// phrases so a transient error can be retried and a permanently unreachable
+/// registry can skip the step instead of failing the whole run.
+#[must_use]
+pub fn network_failure(text: &str) -> Option<NetworkFailure> {
+    let text = text.to_ascii_lowercase();
+
+    const UNREACHABLE: &[&str] = &[
+        "could not resolve host",
+        "couldn't resolve host",
+        "could not resolve proxy",
+        "name or service not known",
+        "nodename nor servname provided",
+        "network is unreachable",
+        "no route to host",
+        "connection refused",
+        "failed to connect",
+        "could not connect",
+        "can't connect",
+        "unable to connect",
+        "host not found",
+        "getaddrinfo",
+        "proxy connect aborted",
+        "offline",
+    ];
+    if UNREACHABLE.iter().any(|marker| text.contains(marker)) {
+        return Some(NetworkFailure::Unreachable);
+    }
+
+    const TRANSIENT: &[&str] = &[
+        "temporary failure in name resolution",
+        "connection reset",
+        "connection was reset",
+        "connection aborted",
+        "connection closed",
+        "broken pipe",
+        "unexpected eof",
+        "unexpected end of file",
+        "failure when receiving data",
+        "ssl connect error",
+        "ssl_error_syscall",
+        "tls handshake timeout",
+        "operation timed out",
+        "connection timed out",
+        "request timed out",
+        "temporarily unavailable",
+        "try again",
+        "rate limit",
+        "too many requests",
+        "http 429",
+        " 429 ",
+        "http 500",
+        "http 502",
+        "http 503",
+        "http 504",
+        "status 500",
+        "status 502",
+        "status 503",
+        "status 504",
+        "internal server error",
+        "bad gateway",
+        "service unavailable",
+        "gateway timeout",
+        "returned error: 500",
+        "returned error: 502",
+        "returned error: 503",
+        "returned error: 504",
+        "error downloading",
+        "failed to download",
+        "download failed",
+        "could not download",
+        "unable to download",
+        "error fetching",
+        "failed to fetch",
+        "network error",
+        "connection error",
+    ];
+    if TRANSIENT.iter().any(|marker| text.contains(marker)) {
+        return Some(NetworkFailure::Transient);
+    }
+
+    None
+}
+
+fn captured_network_failure(stdout: &[u8], stderr: &[u8]) -> Option<NetworkFailure> {
+    let mut text = String::from_utf8_lossy(stdout).into_owned();
+    text.push('\n');
+    text.push_str(&String::from_utf8_lossy(stderr));
+    network_failure(&text)
+}
+
 /// Description of one external command.
 ///
 /// The builder methods consume and return the spec, so a command reads as a
@@ -149,6 +257,7 @@ pub struct CommandSpec {
     env_remove: Vec<OsString>,
     timeout: Option<Duration>,
     retries: u32,
+    retry_transient_network_only: bool,
     backoff: Backoff,
 }
 
@@ -164,6 +273,7 @@ impl CommandSpec {
             env_remove: Vec::new(),
             timeout: None,
             retries: 0,
+            retry_transient_network_only: false,
             backoff: Backoff::default(),
         }
     }
@@ -242,6 +352,21 @@ impl CommandSpec {
     #[must_use]
     pub fn retries(mut self, retries: u32) -> Self {
         self.retries = retries;
+        self.retry_transient_network_only = false;
+        self
+    }
+
+    /// Retries only transient network failures, up to `retries` times.
+    ///
+    /// A registry that is permanently unreachable (DNS failure, refused
+    /// connection) is not retried: the caller can report the step as skipped
+    /// instead of spending the whole backoff waiting for an answer that will
+    /// not come. Timeouts are treated as transient because a stalled download
+    /// often succeeds when it is started again.
+    #[must_use]
+    pub fn retry_transient_network(mut self, retries: u32) -> Self {
+        self.retries = retries;
+        self.retry_transient_network_only = true;
         self
     }
 
@@ -331,6 +456,7 @@ impl CommandSpec {
                         status: None,
                         attempts: attempt.saturating_sub(1),
                         duration: started.elapsed(),
+                        network_failure: None,
                     }),
                 });
             }
@@ -346,6 +472,9 @@ impl CommandSpec {
             }
 
             let result = self.run_attempt(&mut on_line)?;
+            let attempt_network_failure =
+                captured_network_failure(&result.captured.stdout, &result.captured.stderr);
+            let retryable = self.should_retry(result.outcome, &result.captured);
             stdout.extend_from_slice(&result.captured.stdout);
             stderr.extend_from_slice(&result.captured.stderr);
 
@@ -361,11 +490,12 @@ impl CommandSpec {
                         status: Some(status),
                         attempts: attempt,
                         duration: started.elapsed(),
+                        network_failure: attempt_network_failure,
                     });
                 }
             }
 
-            if attempt >= max_attempts {
+            if attempt >= max_attempts || !retryable {
                 let output = Box::new(ProcessOutput {
                     stdout: String::from_utf8_lossy(&stdout).into_owned(),
                     stderr: String::from_utf8_lossy(&stderr).into_owned(),
@@ -375,6 +505,7 @@ impl CommandSpec {
                     },
                     attempts: attempt,
                     duration: started.elapsed(),
+                    network_failure: attempt_network_failure,
                 });
                 return Err(match outcome {
                     AttemptOutcome::Exited(status) => ProcessError::Failed {
@@ -397,6 +528,21 @@ impl CommandSpec {
             }
 
             attempt += 1;
+        }
+    }
+
+    fn should_retry(&self, outcome: AttemptOutcome, captured: &Captured) -> bool {
+        if !self.retry_transient_network_only {
+            return true;
+        }
+
+        match outcome {
+            AttemptOutcome::Interrupted => false,
+            AttemptOutcome::TimedOut => true,
+            AttemptOutcome::Exited(_) => {
+                captured_network_failure(&captured.stdout, &captured.stderr)
+                    == Some(NetworkFailure::Transient)
+            }
         }
     }
 
@@ -663,6 +809,7 @@ pub struct ProcessOutput {
     status: Option<ExitStatus>,
     attempts: u32,
     duration: Duration,
+    network_failure: Option<NetworkFailure>,
 }
 
 impl ProcessOutput {
@@ -700,6 +847,12 @@ impl ProcessOutput {
     #[must_use]
     pub fn duration(&self) -> Duration {
         self.duration
+    }
+
+    /// Network failure found in the final attempt's output, when there was one.
+    #[must_use]
+    pub fn network_failure(&self) -> Option<NetworkFailure> {
+        self.network_failure
     }
 }
 
@@ -778,11 +931,25 @@ impl ProcessError {
             | Self::Capture { .. } => None,
         }
     }
+
+    /// Network failure found in the captured output, when there is one.
+    #[must_use]
+    pub fn network_failure(&self) -> Option<NetworkFailure> {
+        self.output()?.network_failure()
+    }
+
+    /// Returns `true` when the captured output describes a network failure.
+    #[must_use]
+    pub fn is_network_failure(&self) -> bool {
+        self.network_failure().is_some()
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Backoff, CommandSpec, OutputStream, ProcessError};
+    use super::{
+        network_failure, Backoff, CommandSpec, NetworkFailure, OutputStream, ProcessError,
+    };
     use std::time::{Duration, Instant};
 
     fn backoff() -> Backoff {
@@ -823,6 +990,39 @@ mod tests {
 
         assert_eq!(backoff.max(), Duration::from_millis(50));
         assert_eq!(backoff.delay_before(2), Duration::from_millis(50));
+    }
+
+    #[test]
+    fn classifies_transient_and_unreachable_network_errors() {
+        for message in [
+            "curl: (56) Failure when receiving data from the peer",
+            "HTTP 503 Service Unavailable",
+            "curl: (28) Operation timed out",
+            "Temporary failure in name resolution",
+            "connection reset by peer",
+            "Too Many Requests (429)",
+        ] {
+            assert_eq!(
+                network_failure(message),
+                Some(NetworkFailure::Transient),
+                "{message}"
+            );
+        }
+
+        for message in [
+            "curl: (6) Could not resolve host: formulae.brew.sh",
+            "curl: (7) Failed to connect to github.com port 443",
+            "Network is unreachable",
+            "connect: Connection refused",
+        ] {
+            assert_eq!(
+                network_failure(message),
+                Some(NetworkFailure::Unreachable),
+                "{message}"
+            );
+        }
+
+        assert_eq!(network_failure("Error: formula not found"), None);
     }
 
     #[test]
@@ -988,6 +1188,93 @@ mod tests {
                 assert_eq!(status.code(), Some(7));
                 assert_eq!(output.attempts(), 3);
                 assert_eq!(output.stderr().matches("boom").count(), 3);
+            }
+            other => panic!("expected a failure, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retries_transient_network_failures_until_they_succeed() {
+        let marker = std::env::temp_dir().join(format!(
+            "freshen-process-network-retry-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&marker);
+        let script = format!(
+            "if [ -f '{marker}' ]; then printf 'ok\\n'; else : > '{marker}'; printf 'HTTP 503 Service Unavailable\\n' >&2; exit 1; fi",
+            marker = marker.display()
+        );
+        let spec = shell(&script)
+            .retry_transient_network(2)
+            .backoff(Backoff::NONE);
+
+        let result = spec.run();
+        let _ = std::fs::remove_file(&marker);
+
+        let output = match result {
+            Ok(output) => output,
+            Err(error) => panic!("command failed: {error}"),
+        };
+        assert_eq!(output.attempts(), 2);
+        assert_eq!(output.stdout(), "ok\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreachable_registry_is_not_retried() {
+        let spec = shell("printf 'Could not resolve host: formulae.brew.sh\\n' >&2; exit 1")
+            .retry_transient_network(3)
+            .backoff(Backoff::NONE);
+
+        match spec.run() {
+            Err(error @ ProcessError::Failed { .. }) => {
+                assert_eq!(error.network_failure(), Some(NetworkFailure::Unreachable));
+                assert_eq!(error.output().map(super::ProcessOutput::attempts), Some(1));
+            }
+            other => panic!("expected a failure, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_non_network_failure_is_not_retried_by_the_network_policy() {
+        let spec = shell("printf 'Error: formula not found\\n' >&2; exit 1")
+            .retry_transient_network(3)
+            .backoff(Backoff::NONE);
+
+        match spec.run() {
+            Err(error @ ProcessError::Failed { .. }) => {
+                assert_eq!(error.network_failure(), None);
+                assert_eq!(error.output().map(super::ProcessOutput::attempts), Some(1));
+            }
+            other => panic!("expected a failure, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_network_failure_is_cleared_when_the_final_attempt_fails_for_another_reason() {
+        let marker = std::env::temp_dir().join(format!(
+            "freshen-process-network-then-error-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&marker);
+        let script = format!(
+            "if [ -f '{marker}' ]; then printf 'Error: formula not found\\n' >&2; else : > '{marker}'; printf 'HTTP 503 Service Unavailable\\n' >&2; fi; exit 1",
+            marker = marker.display()
+        );
+        let spec = shell(&script)
+            .retry_transient_network(2)
+            .backoff(Backoff::NONE);
+
+        let result = spec.run();
+        let _ = std::fs::remove_file(&marker);
+
+        match result {
+            Err(error @ ProcessError::Failed { .. }) => {
+                assert_eq!(error.network_failure(), None);
+                assert_eq!(error.output().map(super::ProcessOutput::attempts), Some(2));
             }
             other => panic!("expected a failure, got {other:?}"),
         }

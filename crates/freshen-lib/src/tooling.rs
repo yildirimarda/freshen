@@ -15,7 +15,7 @@ use std::path::Path;
 
 use crate::homebrew::BREW;
 use crate::platform::Platform;
-use crate::process::CommandSpec;
+use crate::process::{CommandSpec, NETWORK_RETRIES};
 use crate::registry::Registry;
 use crate::snapshot::{SnapshotCommand, SnapshotSection};
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
@@ -59,17 +59,18 @@ impl Step for UvStep {
         println!("uv: tool upgrade --all");
         if let Err(error) = CommandSpec::new("uv")
             .args(["tool", "upgrade", "--all"])
+            .retry_transient_network(NETWORK_RETRIES)
             .run()
         {
-            failures.push(error.to_string());
+            failures.push(StepError::run_from_process(UV, &error));
         }
 
         println!("uv: cache prune");
         if let Err(error) = CommandSpec::new("uv").args(["cache", "prune"]).run() {
-            failures.push(error.to_string());
+            failures.push(StepError::run_from_process(UV, &error));
         }
 
-        finish(UV, failures)
+        finish(failures)
     }
 
     fn snapshot(&self) -> Option<SnapshotSection> {
@@ -112,24 +113,32 @@ impl Step for MiseStep {
 
         if !mise_installed_with_brew() {
             println!("mise: self-update");
-            if let Err(error) = CommandSpec::new("mise").args(["self-update", "-y"]).run() {
+            if let Err(error) = CommandSpec::new("mise")
+                .args(["self-update", "-y"])
+                .retry_transient_network(NETWORK_RETRIES)
+                .run()
+            {
                 println!("warning: mise self-update skipped/failed: {error}");
             }
         }
 
         println!("mise: upgrade (node and other tools)");
-        if let Err(error) = CommandSpec::new("mise").arg("upgrade").run() {
-            failures.push(error.to_string());
+        if let Err(error) = CommandSpec::new("mise")
+            .arg("upgrade")
+            .retry_transient_network(NETWORK_RETRIES)
+            .run()
+        {
+            failures.push(StepError::run_from_process(MISE, &error));
         }
 
         println!("mise: prune (remove unused old versions)");
         if let Err(error) = CommandSpec::new("mise").args(["prune", "-y"]).run() {
-            failures.push(error.to_string());
+            failures.push(StepError::run_from_process(MISE, &error));
         }
 
         warn_about_stale_node_processes();
 
-        finish(MISE, failures)
+        finish(failures)
     }
 
     fn snapshot(&self) -> Option<SnapshotSection> {
@@ -148,9 +157,9 @@ impl Step for MiseStep {
     }
 }
 
-fn finish(step: StepId, failures: Vec<String>) -> Result<(), StepError> {
+fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
     match failures.into_iter().next() {
-        Some(message) => Err(StepError::run(step, message)),
+        Some(error) => Err(error),
         None => Ok(()),
     }
 }

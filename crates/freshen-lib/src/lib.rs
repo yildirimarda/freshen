@@ -46,7 +46,10 @@ pub use preflight::{
     BatteryStatus, HostPreflightProbe, PreflightCheck, PreflightConfig, PreflightIssue,
     PreflightProbe, PreflightReport,
 };
-pub use process::{Backoff, CommandSpec, OutputStream, ProcessError, ProcessOutput};
+pub use process::{
+    Backoff, CommandSpec, NetworkFailure, OutputStream, ProcessError, ProcessOutput,
+    NETWORK_RETRIES,
+};
 pub use registry::{Registry, RegistryError};
 pub use runner::{RunSummary, Runner, SkipReason, StepResult, StepStatus, VersionChange};
 pub use signals::{install as install_interrupt_handler, requested as interrupted, SignalError};

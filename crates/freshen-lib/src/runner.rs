@@ -80,6 +80,8 @@ pub enum SkipReason {
     NotSelected(SelectionFlag),
     /// The step conflicts with an earlier step that is part of the run.
     Conflict(StepId),
+    /// The package registry the step needs could not be reached.
+    RegistryUnreachable,
     /// The run was interrupted before the step started.
     Interrupted,
 }
@@ -94,6 +96,7 @@ impl SkipReason {
             Self::NotSelected(SelectionFlag::Only) => "not selected by --only",
             Self::NotSelected(SelectionFlag::Skip) => "excluded by --skip",
             Self::Conflict(_) => "conflicts with another step",
+            Self::RegistryUnreachable => "registry unreachable",
             Self::Interrupted => "interrupted before it started",
         }
     }
@@ -744,8 +747,14 @@ fn check_step(step: &dyn Step) -> CheckResult {
                 CheckResult::up_to_date(step, started.elapsed())
             }
             Ok(report) => CheckResult::outdated(step, report, started.elapsed()),
+            Err(error) if error.is_registry_unreachable() => {
+                CheckResult::skipped(step, SkipReason::RegistryUnreachable, started.elapsed())
+            }
             Err(error) => CheckResult::failed(step, error, started.elapsed()),
         },
+        Err(error) if error.is_registry_unreachable() => {
+            CheckResult::skipped(step, SkipReason::RegistryUnreachable, started.elapsed())
+        }
         Err(error) => CheckResult::failed(step, error, started.elapsed()),
     }
 }
@@ -786,24 +795,33 @@ fn run_step(
                     Err(error) => StepResult::failed(step, started.elapsed(), error),
                 },
                 Err(_error) if interrupt() => StepResult::interrupted(step, started.elapsed()),
+                Err(error) if error.is_registry_unreachable() => StepResult::skipped_because(
+                    step,
+                    SkipReason::RegistryUnreachable,
+                    started.elapsed(),
+                ),
                 Err(error) => StepResult::failed(step, started.elapsed(), error),
             };
 
-            let changes = if result.status() == StepStatus::Interrupted {
-                Vec::new()
-            } else {
-                match before {
-                    Some(before) if !before.is_up_to_date() => match step.check() {
-                        Ok(after) => diff_reports(&before, &after),
-                        Err(_) => Vec::new(),
-                    },
-                    _ => Vec::new(),
-                }
-            };
+            let changes =
+                if result.status() == StepStatus::Interrupted || result.skip_reason().is_some() {
+                    Vec::new()
+                } else {
+                    match before {
+                        Some(before) if !before.is_up_to_date() => match step.check() {
+                            Ok(after) => diff_reports(&before, &after),
+                            Err(_) => Vec::new(),
+                        },
+                        _ => Vec::new(),
+                    }
+                };
 
             result.with_changes(changes)
         }
         Err(_error) if interrupt() => StepResult::interrupted(step, started.elapsed()),
+        Err(error) if error.is_registry_unreachable() => {
+            StepResult::skipped_because(step, SkipReason::RegistryUnreachable, started.elapsed())
+        }
         Err(error) => StepResult::failed(step, started.elapsed(), error),
     }
 }
@@ -908,7 +926,9 @@ mod tests {
         report: CheckReport,
         fail_detect: bool,
         fail_check: bool,
+        check_error: &'static str,
         fail_run: bool,
+        run_error: &'static str,
         fail_cleanup: bool,
         conflicts: &'static [StepId],
         sleep: Duration,
@@ -925,7 +945,9 @@ mod tests {
                 report: CheckReport::up_to_date(),
                 fail_detect: false,
                 fail_check: false,
+                check_error: "cannot check",
                 fail_run: false,
+                run_error: "upgrade failed",
                 fail_cleanup: false,
                 conflicts: &[],
                 sleep: Duration::ZERO,
@@ -959,8 +981,20 @@ mod tests {
             self
         }
 
+        fn fail_check_with(mut self, message: &'static str) -> Self {
+            self.fail_check = true;
+            self.check_error = message;
+            self
+        }
+
         fn fail_run(mut self) -> Self {
             self.fail_run = true;
+            self
+        }
+
+        fn fail_run_with(mut self, message: &'static str) -> Self {
+            self.fail_run = true;
+            self.run_error = message;
             self
         }
 
@@ -1004,7 +1038,7 @@ mod tests {
         fn check(&self) -> Result<CheckReport, StepError> {
             self.calls.check.set(self.calls.check.get() + 1);
             if self.fail_check {
-                return Err(StepError::check(self.id, "cannot check"));
+                return Err(StepError::check(self.id, self.check_error));
             }
             Ok(self.report.clone())
         }
@@ -1018,7 +1052,7 @@ mod tests {
                 INTERRUPT.store(true, Ordering::SeqCst);
             }
             if self.fail_run {
-                return Err(StepError::run(self.id, "upgrade failed"));
+                return Err(StepError::run(self.id, self.run_error));
             }
             Ok(())
         }
@@ -1339,6 +1373,34 @@ mod tests {
         assert_eq!(healthy_calls.run.get(), 1);
         assert_eq!(healthy_calls.cleanup.get(), 1);
         assert_eq!(summary.steps()[1].status(), StepStatus::Ok);
+    }
+
+    #[test]
+    fn an_unreachable_registry_skips_the_step_instead_of_failing_it() {
+        let step = FakeStep::new("brew", "Homebrew")
+            .fail_run_with("curl: (6) Could not resolve host: formulae.brew.sh");
+
+        let summary = run(&[&step]);
+
+        let result = &summary.steps()[0];
+        assert_eq!(result.status(), StepStatus::Skipped);
+        assert_eq!(result.skip_reason(), Some(SkipReason::RegistryUnreachable));
+        assert_eq!(result.error(), None);
+        assert!(!summary.has_failures());
+        assert_exit_code(summary.exit_code(), ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn an_unreachable_registry_skips_the_step_during_check() {
+        let step = FakeStep::new("brew", "Homebrew")
+            .fail_check_with("curl: (6) Could not resolve host: formulae.brew.sh");
+
+        let summary = Runner::new([&step as &dyn Step]).check();
+
+        let result = &summary.steps()[0];
+        assert_eq!(result.status(), CheckStatus::Skipped);
+        assert_eq!(result.skip_reason(), Some(SkipReason::RegistryUnreachable));
+        assert!(!summary.has_failures());
     }
 
     #[test]
