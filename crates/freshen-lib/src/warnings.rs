@@ -10,6 +10,8 @@
 //!   place, so new clients and existing sessions disagree on the version.
 //! * Upgrading OpenSSH while SSH sessions are active keeps those sessions on
 //!   the old server until they reconnect.
+//! * Upgrading GNU screen, byobu, dtach, abduco or mosh while one of its
+//!   sessions is running leaves the running session on the old binary.
 //! * Stopping Colima while a Docker build is running interrupts the build.
 //! * `mise prune` cannot remove an old toolchain version while a process
 //!   started by another application (an MCP server, for example) still runs
@@ -39,6 +41,26 @@ pub const TMUX_WARNING: &str =
 /// Warning shown before OpenSSH is upgraded while SSH sessions are active.
 pub const SSH_WARNING: &str =
     "OpenSSH will be upgraded while SSH sessions are active. Existing sessions keep the old server; reconnect afterwards.";
+
+/// Warning shown before GNU screen is upgraded while sessions are running.
+pub const SCREEN_WARNING: &str =
+    "GNU screen will be upgraded while screen sessions are running. Restart the server and recreate your sessions afterwards.";
+
+/// Warning shown before byobu is upgraded while a session is running.
+pub const BYOBU_WARNING: &str =
+    "byobu will be upgraded while a byobu session is running. Close and recreate your sessions afterwards.";
+
+/// Warning shown before dtach is upgraded while sessions are running.
+pub const DTACH_WARNING: &str =
+    "dtach will be upgraded while dtach sessions are running. Restart the sessions afterwards.";
+
+/// Warning shown before abduco is upgraded while sessions are running.
+pub const ABDUCO_WARNING: &str =
+    "abduco will be upgraded while abduco sessions are running. Restart the sessions afterwards.";
+
+/// Warning shown before mosh is upgraded while mosh-server sessions are running.
+pub const MOSH_WARNING: &str =
+    "mosh will be upgraded while mosh-server sessions are running. Reconnect afterwards.";
 
 /// Warning shown before Colima is stopped while Docker builds are running.
 pub const DOCKER_BUILD_WARNING: &str =
@@ -139,6 +161,41 @@ const SESSION_GUARDS: &[SessionGuard] = &[
         is_server: is_ssh_process,
         inside_warning: SSH_WARNING,
         server_warning: SSH_WARNING,
+    },
+    SessionGuard {
+        packages: &["screen", "gnu-screen"],
+        environment: &["STY"],
+        is_server: is_screen_process,
+        inside_warning: SCREEN_WARNING,
+        server_warning: SCREEN_WARNING,
+    },
+    SessionGuard {
+        packages: &["byobu"],
+        environment: &["BYOBU_CONFIG_DIR", "BYOBU_BACKEND", "BYOBU_PREFIX"],
+        is_server: is_byobu_process,
+        inside_warning: BYOBU_WARNING,
+        server_warning: BYOBU_WARNING,
+    },
+    SessionGuard {
+        packages: &["dtach"],
+        environment: &[],
+        is_server: is_dtach_process,
+        inside_warning: DTACH_WARNING,
+        server_warning: DTACH_WARNING,
+    },
+    SessionGuard {
+        packages: &["abduco"],
+        environment: &["ABDUCO_SESSION", "ABDUCO_SOCKET"],
+        is_server: is_abduco_process,
+        inside_warning: ABDUCO_WARNING,
+        server_warning: ABDUCO_WARNING,
+    },
+    SessionGuard {
+        packages: &["mosh"],
+        environment: &[],
+        is_server: is_mosh_process,
+        inside_warning: MOSH_WARNING,
+        server_warning: MOSH_WARNING,
     },
 ];
 
@@ -332,6 +389,27 @@ fn is_ssh_process(command: &str) -> bool {
             .any(|marker| command.contains(marker)),
         _ => false,
     }
+}
+
+fn is_screen_process(command: &str) -> bool {
+    program_name(command).eq_ignore_ascii_case("screen")
+}
+
+fn is_byobu_process(command: &str) -> bool {
+    let program = program_name(command);
+    program == "byobu" || program.starts_with("byobu-") || command.contains("byobu")
+}
+
+fn is_dtach_process(command: &str) -> bool {
+    program_name(command) == "dtach"
+}
+
+fn is_abduco_process(command: &str) -> bool {
+    program_name(command) == "abduco"
+}
+
+fn is_mosh_process(command: &str) -> bool {
+    program_name(command) == "mosh-server"
 }
 
 fn is_docker_build(command: &str) -> bool {
@@ -551,11 +629,13 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        basename, is_docker_build, is_outdated, is_ssh_process, is_tmux_process, is_zellij_process,
-        parse_process_table, parse_prunable_tool_versions, parse_windows_process_table,
-        program_name, session_warnings, stale_tool_entries, stale_tool_warning, ProcessEntry,
-        ProcessProbe, PrunableTool, StaleToolProcess, SESSION_GUARDS, SSH_WARNING, TMUX_WARNING,
-        ZELLIJ_SERVER_WARNING, ZELLIJ_WARNING,
+        basename, is_abduco_process, is_byobu_process, is_docker_build, is_dtach_process,
+        is_mosh_process, is_outdated, is_screen_process, is_ssh_process, is_tmux_process,
+        is_zellij_process, parse_process_table, parse_prunable_tool_versions,
+        parse_windows_process_table, program_name, session_warnings, stale_tool_entries,
+        stale_tool_warning, ProcessEntry, ProcessProbe, PrunableTool, StaleToolProcess,
+        ABDUCO_WARNING, BYOBU_WARNING, DTACH_WARNING, MOSH_WARNING, SCREEN_WARNING, SESSION_GUARDS,
+        SSH_WARNING, TMUX_WARNING, ZELLIJ_SERVER_WARNING, ZELLIJ_WARNING,
     };
 
     const ACTIVE_NODE: &str = "/home/user/.local/share/mise/installs/node/22.1.0";
@@ -574,8 +654,21 @@ mod tests {
         let inside = [true; SESSION_GUARDS.len()];
 
         assert_eq!(
-            session_warnings("zellij\ntmux\nopenssh\n", &inside, &[]),
-            [ZELLIJ_WARNING, TMUX_WARNING, SSH_WARNING]
+            session_warnings(
+                "zellij\ntmux\nopenssh\nscreen\nbyobu\ndtach\nabduco\nmosh\n",
+                &inside,
+                &[]
+            ),
+            [
+                ZELLIJ_WARNING,
+                TMUX_WARNING,
+                SSH_WARNING,
+                SCREEN_WARNING,
+                BYOBU_WARNING,
+                DTACH_WARNING,
+                ABDUCO_WARNING,
+                MOSH_WARNING,
+            ]
         );
     }
 
@@ -585,12 +678,30 @@ mod tests {
             process(1, "zellij --server /tmp/zellij-1000"),
             process(2, "/opt/homebrew/bin/tmux new-session -d -s work"),
             process(3, "sshd: user@pts/0"),
+            process(4, "SCREEN -S work"),
+            process(5, "/usr/bin/byobu-tmux new-session"),
+            process(6, "dtach -n /tmp/work bash"),
+            process(7, "abduco -n work bash"),
+            process(8, "mosh-server new -s -c 256"),
         ];
         let outside = [false; SESSION_GUARDS.len()];
 
         assert_eq!(
-            session_warnings("zellij\ntmux\nopenssh\n", &outside, &processes),
-            [ZELLIJ_SERVER_WARNING, TMUX_WARNING, SSH_WARNING]
+            session_warnings(
+                "zellij\ntmux\nopenssh\nscreen\nbyobu\ndtach\nabduco\nmosh\n",
+                &outside,
+                &processes
+            ),
+            [
+                ZELLIJ_SERVER_WARNING,
+                TMUX_WARNING,
+                SSH_WARNING,
+                SCREEN_WARNING,
+                BYOBU_WARNING,
+                DTACH_WARNING,
+                ABDUCO_WARNING,
+                MOSH_WARNING,
+            ]
         );
     }
 
@@ -607,10 +718,10 @@ mod tests {
 
     #[test]
     fn the_session_guard_table_has_an_entry_per_tool() {
-        assert_eq!(SESSION_GUARDS.len(), 3);
+        assert_eq!(SESSION_GUARDS.len(), 8);
         for guard in SESSION_GUARDS {
             assert!(!guard.packages.is_empty());
-            assert!(!guard.environment.is_empty());
+            assert!(guard.environment.iter().all(|name| !name.is_empty()));
         }
     }
 
@@ -641,6 +752,27 @@ mod tests {
         assert!(is_ssh_process("ssh user@example.com"));
         assert!(!is_ssh_process("/usr/sbin/sshd -D"));
         assert!(!is_ssh_process("ssh-agent"));
+    }
+
+    #[test]
+    fn screen_byobu_dtach_abduco_and_mosh_sessions_are_detected() {
+        assert!(is_screen_process("/usr/bin/SCREEN -S work"));
+        assert!(is_screen_process("screen -ls"));
+        assert!(!is_screen_process("screenplay"));
+
+        assert!(is_byobu_process("/usr/bin/byobu"));
+        assert!(is_byobu_process("/usr/bin/byobu-tmux new-session"));
+        assert!(is_byobu_process("tmux -L byobu new-session"));
+        assert!(!is_byobu_process("/opt/homebrew/bin/tmux new-session"));
+
+        assert!(is_dtach_process("dtach -n /tmp/work bash"));
+        assert!(!is_dtach_process("dtach-helper"));
+
+        assert!(is_abduco_process("abduco -n work bash"));
+        assert!(!is_abduco_process("abduco-helper"));
+
+        assert!(is_mosh_process("mosh-server new -s -c 256"));
+        assert!(!is_mosh_process("mosh user@example.com"));
     }
 
     #[test]

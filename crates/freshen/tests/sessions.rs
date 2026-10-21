@@ -11,7 +11,8 @@ mod support;
 use std::process::Output;
 
 use freshen_lib::warnings::{
-    DOCKER_BUILD_WARNING, SSH_WARNING, TMUX_WARNING, ZELLIJ_SERVER_WARNING,
+    ABDUCO_WARNING, BYOBU_WARNING, DOCKER_BUILD_WARNING, DTACH_WARNING, MOSH_WARNING,
+    SCREEN_WARNING, SSH_WARNING, TMUX_WARNING, ZELLIJ_SERVER_WARNING,
 };
 use support::StubTools;
 
@@ -53,6 +54,16 @@ fn run_formulae(tools: &StubTools) -> Output {
     tools
         .command()
         .env_remove("ZELLIJ")
+        .env_remove("TMUX")
+        .env_remove("STY")
+        .env_remove("BYOBU_CONFIG_DIR")
+        .env_remove("BYOBU_BACKEND")
+        .env_remove("BYOBU_PREFIX")
+        .env_remove("ABDUCO_SESSION")
+        .env_remove("ABDUCO_SOCKET")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_CLIENT")
+        .env_remove("SSH_TTY")
         .args(["--only", "brew,brew-formulae"])
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
@@ -146,6 +157,107 @@ fn warns_about_a_zellij_server_outside_the_current_session() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(
         stdout(&output).contains(ZELLIJ_SERVER_WARNING),
+        "output: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn warns_when_screen_is_upgraded_while_a_server_is_running() {
+    let tools = StubTools::new(&["brew", "ps"]);
+    install_outdated_formulae(&tools, "screen");
+    install_process_table(&tools, "'  710     1 SCREEN -S work'");
+
+    let output = run_formulae(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains(SCREEN_WARNING),
+        "output: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn warns_about_a_screen_session_even_when_the_process_table_is_unavailable() {
+    let tools = StubTools::new(&["brew"]);
+    install_outdated_formulae(&tools, "screen");
+
+    let output = tools
+        .command()
+        .env_remove("ZELLIJ")
+        .env("STY", "12345.pts-0.host")
+        .args(["--only", "brew,brew-formulae"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains(SCREEN_WARNING),
+        "output: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn warns_when_byobu_is_upgraded_while_a_session_is_running() {
+    let tools = StubTools::new(&["brew", "ps"]);
+    install_outdated_formulae(&tools, "byobu");
+    install_process_table(&tools, "'  720     1 /usr/bin/byobu-tmux new-session'");
+
+    let output = run_formulae(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains(BYOBU_WARNING),
+        "output: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn warns_when_dtach_is_upgraded_while_a_session_is_running() {
+    let tools = StubTools::new(&["brew", "ps"]);
+    install_outdated_formulae(&tools, "dtach");
+    install_process_table(&tools, "'  730     1 dtach -n /tmp/work bash'");
+
+    let output = run_formulae(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains(DTACH_WARNING),
+        "output: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn warns_when_abduco_is_upgraded_while_a_session_is_running() {
+    let tools = StubTools::new(&["brew", "ps"]);
+    install_outdated_formulae(&tools, "abduco");
+    install_process_table(&tools, "'  740     1 abduco -n work bash'");
+
+    let output = run_formulae(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains(ABDUCO_WARNING),
+        "output: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn warns_when_mosh_is_upgraded_while_a_mosh_server_is_running() {
+    let tools = StubTools::new(&["brew", "ps"]);
+    install_outdated_formulae(&tools, "mosh");
+    install_process_table(&tools, "'  750     1 mosh-server new -s -c 256'");
+
+    let output = run_formulae(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains(MOSH_WARNING),
         "output: {}",
         stdout(&output)
     );
