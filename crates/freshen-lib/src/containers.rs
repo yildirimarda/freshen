@@ -718,6 +718,7 @@ mod tests {
                     "colima-stop",
                     "brew-formulae",
                     "colima-start",
+                    "brew-services",
                     "brew-casks",
                     "brew-autoremove",
                     "brew-cleanup",

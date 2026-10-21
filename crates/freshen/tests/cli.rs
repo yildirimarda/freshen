@@ -95,7 +95,7 @@ fn list_steps_lists_every_builtin_step() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
-    assert!(text.contains("Steps (11):"), "listing: {text}");
+    assert!(text.contains("Steps (12):"), "listing: {text}");
     assert!(text.contains("brew"), "listing: {text}");
     assert!(text.contains("brew-casks"), "listing: {text}");
     assert!(text.contains("colima-stop"), "listing: {text}");
@@ -117,7 +117,7 @@ fn dry_run_with_every_builtin_step_excluded_plans_nothing() {
     let output = run(&[
         "--dry-run",
         "--skip",
-        "brew,brew-formulae,brew-casks,brew-autoremove,brew-cleanup,brew-reopen,colima-stop,colima-start,docker,uv,mise",
+        "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-reopen,colima-stop,colima-start,docker,uv,mise",
     ]);
 
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
@@ -129,7 +129,7 @@ fn check_with_every_builtin_step_excluded_reports_up_to_date() {
     let output = run(&[
         "--check",
         "--skip",
-        "brew,brew-formulae,brew-casks,brew-autoremove,brew-cleanup,brew-reopen,colima-stop,colima-start,docker,uv,mise",
+        "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-reopen,colima-stop,colima-start,docker,uv,mise",
     ]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));

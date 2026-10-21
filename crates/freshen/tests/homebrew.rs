@@ -18,7 +18,7 @@ const CASK_INFO_WITH_ADMINISTRATOR: &str =
 const CASK_INFO_WITH_GREEDY: &str =
     include_str!("../../freshen-lib/tests/fixtures/brew-info-casks-greedy.json");
 const HOMEBREW_STEPS: &str =
-    "brew,brew-formulae,brew-casks,brew-autoremove,brew-cleanup,brew-reopen";
+    "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-reopen";
 
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
@@ -56,6 +56,7 @@ fn command_transcript_matches_the_zsh_homebrew_block() {
             StubOutput::new(),
             StubOutput::new(),
             StubOutput::new(),
+            StubOutput::new(),
             StubOutput::stdout("firefox\ngoogle-chrome\n"),
             StubOutput::stdout(CASK_INFO),
             StubOutput::new(),
@@ -78,6 +79,7 @@ fn command_transcript_matches_the_zsh_homebrew_block() {
             "brew outdated --formula",
             "brew outdated --formula --quiet",
             "brew list --pinned --formula",
+            "brew services list",
             "brew upgrade --formula",
             "brew outdated --cask --greedy",
             "brew outdated --cask --greedy --quiet",
@@ -140,6 +142,132 @@ fn no_outdated_casks_skips_the_cask_upgrade() {
 }
 
 #[test]
+fn restarts_running_services_whose_formulae_were_upgraded_and_reports_them() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_script(
+        "brew",
+        r#"case "$*" in
+  "outdated --formula")
+    printf 'postgresql@16 (15.2) < 15.3\nredis (7.0) < 7.2\n'
+    ;;
+  "outdated --formula --quiet")
+    printf 'postgresql@16\nredis\n'
+    ;;
+  "services list")
+    printf 'Name              Status  User File\n'
+    printf 'postgresql@16     started user ~/Library/LaunchAgents/homebrew.mxcl.postgresql@16.plist\n'
+    printf 'redis             stopped user ~/Library/LaunchAgents/homebrew.mxcl.redis.plist\n'
+    printf 'mysql             started user ~/Library/LaunchAgents/homebrew.mxcl.mysql.plist\n'
+    ;;
+esac"#,
+    );
+
+    let output = run(&tools, &["--only", "brew,brew-formulae,brew-services"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(
+        calls.contains(&"brew services list".to_owned()),
+        "calls: {calls:?}"
+    );
+    assert!(
+        calls.contains(&"brew services restart postgresql@16".to_owned()),
+        "calls: {calls:?}"
+    );
+    assert!(
+        !calls.contains(&"brew services restart redis".to_owned()),
+        "a stopped service was started: {calls:?}"
+    );
+    assert!(
+        !calls.contains(&"brew services restart mysql".to_owned()),
+        "a service whose formula was not upgraded was restarted: {calls:?}"
+    );
+
+    let text = stdout(&output);
+    assert!(
+        text.contains("Restarting Homebrew services: postgresql@16"),
+        "output: {text}"
+    );
+    assert!(
+        text.contains("Restarted Homebrew services: postgresql@16"),
+        "output: {text}"
+    );
+}
+
+#[test]
+fn a_failing_services_list_does_not_stop_the_formula_upgrade() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_script(
+        "brew",
+        r#"case "$*" in
+  "outdated --formula --quiet")
+    printf 'jq\n'
+    ;;
+  "services list")
+    exit 1
+    ;;
+esac"#,
+    );
+
+    let output = run(&tools, &["--only", "brew,brew-formulae,brew-services"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(
+        calls.contains(&"brew upgrade --formula".to_owned()),
+        "calls: {calls:?}"
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.starts_with("brew services restart")),
+        "calls: {calls:?}"
+    );
+    assert!(
+        stderr(&output).contains("could not list Homebrew services"),
+        "stderr: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_failing_restart_is_reported_and_does_not_stop_the_other_services() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_script(
+        "brew",
+        r#"case "$*" in
+  "outdated --formula --quiet")
+    printf 'postgresql@16\nredis\n'
+    ;;
+  "services list")
+    printf 'Name Status\npostgresql@16 started\nredis started\n'
+    ;;
+  "services restart postgresql@16")
+    exit 1
+    ;;
+esac"#,
+    );
+
+    let output = run(&tools, &["--only", "brew,brew-formulae,brew-services"]);
+
+    assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(
+        calls.contains(&"brew services restart postgresql@16".to_owned()),
+        "calls: {calls:?}"
+    );
+    assert!(
+        calls.contains(&"brew services restart redis".to_owned()),
+        "calls: {calls:?}"
+    );
+    let text = stdout(&output);
+    assert!(
+        text.contains("Restarted Homebrew services: redis"),
+        "output: {text}"
+    );
+}
+
+#[test]
 fn a_missing_brew_skips_every_homebrew_step_without_calling_anything() {
     let tools = StubTools::new(&[]);
 
@@ -148,7 +276,7 @@ fn a_missing_brew_skips_every_homebrew_step_without_calling_anything() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(tools.step_calls().is_empty());
     assert!(
-        stdout(&output).contains("0 ok, 0 planned, 6 skipped, 0 failed"),
+        stdout(&output).contains("0 ok, 0 planned, 7 skipped, 0 failed"),
         "summary: {}",
         stdout(&output)
     );
@@ -163,6 +291,7 @@ fn invalid_cask_metadata_does_not_stop_the_cask_upgrade() {
             StubOutput::new(),
             StubOutput::new(),
             StubOutput::stdout("jq\n"),
+            StubOutput::new(),
             StubOutput::new(),
             StubOutput::new(),
             StubOutput::new(),
@@ -186,6 +315,7 @@ fn invalid_cask_metadata_does_not_stop_the_cask_upgrade() {
             "brew outdated --formula",
             "brew outdated --formula --quiet",
             "brew list --pinned --formula",
+            "brew services list",
             "brew upgrade --formula",
             "brew outdated --cask --greedy",
             "brew outdated --cask --greedy --quiet",
@@ -214,6 +344,7 @@ fn a_failing_formula_upgrade_does_not_stop_the_cask_steps() {
             StubOutput::new(),
             StubOutput::stdout("jq\n"),
             StubOutput::new(),
+            StubOutput::new(),
             StubOutput::new().with_status(1),
             StubOutput::new(),
             StubOutput::stdout("firefox\n"),
@@ -236,6 +367,7 @@ fn a_failing_formula_upgrade_does_not_stop_the_cask_steps() {
             "brew outdated --formula",
             "brew outdated --formula --quiet",
             "brew list --pinned --formula",
+            "brew services list",
             "brew upgrade --formula",
             "brew outdated --cask --greedy",
             "brew outdated --cask --greedy --quiet",
@@ -249,7 +381,7 @@ fn a_failing_formula_upgrade_does_not_stop_the_cask_steps() {
     );
     let text = stdout(&output);
     assert!(
-        text.contains("5 ok, 0 planned, 0 skipped, 1 failed"),
+        text.contains("6 ok, 0 planned, 0 skipped, 1 failed"),
         "summary: {text}"
     );
     assert!(text.contains("failed"), "summary: {text}");
@@ -264,6 +396,7 @@ fn a_cask_that_needs_an_administrator_password_is_skipped_without_a_terminal() {
             StubOutput::new(),
             StubOutput::new(),
             StubOutput::stdout("jq\n"),
+            StubOutput::new(),
             StubOutput::new(),
             StubOutput::new(),
             StubOutput::new(),
@@ -287,6 +420,7 @@ fn a_cask_that_needs_an_administrator_password_is_skipped_without_a_terminal() {
             "brew outdated --formula",
             "brew outdated --formula --quiet",
             "brew list --pinned --formula",
+            "brew services list",
             "brew upgrade --formula",
             "brew outdated --cask --greedy",
             "brew outdated --cask --greedy --quiet",
@@ -316,6 +450,7 @@ fn no_cask_is_upgraded_when_every_cask_needs_an_administrator_password() {
             StubOutput::new(),
             StubOutput::new(),
             StubOutput::stdout("jq\n"),
+            StubOutput::new(),
             StubOutput::new(),
             StubOutput::new(),
             StubOutput::new(),
@@ -453,6 +588,7 @@ fn quits_running_cask_apps_before_the_upgrade_and_reopens_after_cleanup() {
             "brew outdated --formula".to_owned(),
             "brew outdated --formula --quiet".to_owned(),
             "brew list --pinned --formula".to_owned(),
+            "brew services list".to_owned(),
             "brew upgrade --formula".to_owned(),
             "brew outdated --cask --greedy".to_owned(),
             "brew outdated --cask --greedy --quiet".to_owned(),
@@ -503,6 +639,7 @@ fn yes_at_the_prompt_quits_apps_and_upgrades_casks() {
             "brew outdated --formula".to_owned(),
             "brew outdated --formula --quiet".to_owned(),
             "brew list --pinned --formula".to_owned(),
+            "brew services list".to_owned(),
             "brew upgrade --formula".to_owned(),
             "brew outdated --cask --greedy".to_owned(),
             "brew outdated --cask --greedy --quiet".to_owned(),
@@ -552,6 +689,7 @@ fn skip_quitting_at_the_prompt_upgrades_casks_without_quitting_apps() {
             "brew outdated --formula".to_owned(),
             "brew outdated --formula --quiet".to_owned(),
             "brew list --pinned --formula".to_owned(),
+            "brew services list".to_owned(),
             "brew upgrade --formula".to_owned(),
             "brew outdated --cask --greedy".to_owned(),
             "brew outdated --cask --greedy --quiet".to_owned(),
@@ -595,6 +733,7 @@ fn skip_casks_at_the_prompt_skips_the_cask_upgrade() {
             "brew outdated --formula".to_owned(),
             "brew outdated --formula --quiet".to_owned(),
             "brew list --pinned --formula".to_owned(),
+            "brew services list".to_owned(),
             "brew upgrade --formula".to_owned(),
             "brew outdated --cask --greedy".to_owned(),
             "brew outdated --cask --greedy --quiet".to_owned(),
@@ -644,6 +783,7 @@ fn never_quits_the_terminal_running_the_script() {
             "brew outdated --formula".to_owned(),
             "brew outdated --formula --quiet".to_owned(),
             "brew list --pinned --formula".to_owned(),
+            "brew services list".to_owned(),
             "brew upgrade --formula".to_owned(),
             "brew outdated --cask --greedy".to_owned(),
             "brew outdated --cask --greedy --quiet".to_owned(),
@@ -864,6 +1004,7 @@ fn run_formulae(outdated: &str, inside_zellij: bool) -> (Output, Vec<String>) {
             StubOutput::stdout(outdated),
             StubOutput::new(),
             StubOutput::new(),
+            StubOutput::new(),
         ]),
     );
 
@@ -893,6 +1034,7 @@ fn warns_when_zellij_is_upgraded_from_inside_a_zellij_session() {
             "brew outdated --formula",
             "brew outdated --formula --quiet",
             "brew list --pinned --formula",
+            "brew services list",
             "brew upgrade --formula",
         ]
     );

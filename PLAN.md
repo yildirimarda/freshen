@@ -130,7 +130,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Detect casks whose installer needs an administrator password (pkg installers, `sudo` prompts) and skip them with a clear reason in non-interactive runs instead of hanging, covered by tests
 - [x] Handle `version :latest` casks and `auto_updates true` casks correctly: decide per cask whether `--greedy` is needed, and show the reason in the check output
 - [x] Respect pinned formulae (`brew pin`) and report them as "held back" instead of failing
-- [ ] Restart Homebrew services (`brew services`) whose formulae were upgraded, and report which ones were restarted
+- [x] Restart Homebrew services (`brew services`) whose formulae were upgraded, and report which ones were restarted
 - [ ] Support casks whose artifacts are not `.app` (pkg installers, menu-bar helpers, `uninstall quit:` bundle ids) by reading the cask's `uninstall` stanza for the bundle ids to quit
 - [ ] Detect apps that update themselves (Sparkle, Electron auto-update) and are mid-update, and wait instead of quitting them
 - [ ] Preserve window/session state where possible: reopen apps in the same Space/display, hidden state preserved (`open -g -j`)
@@ -157,6 +157,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Report why an AppleScript quit failed when the failure is not a denied Automation request (for example error -600 "application isn't running"), instead of the generic "did not quit" message, covered by tests with injected osascript output
 - [ ] Report the casks that were skipped because their installer needs an administrator password in the run summary and in the `--json`/`--markdown` reports, so a structured report names them instead of only printing a human-readable warning
 - [ ] Respect pinned casks (`brew pin --cask`) as held back too, so a pinned cask is skipped and reported instead of being shown as upgradable, covered by tests
+- [ ] Report the Homebrew services that were restarted in the run summary and in the `--json`/`--markdown` reports, so a structured report names them instead of only printing a human-readable line, covered by tests
 
 ## Milestone 5: Linux
 

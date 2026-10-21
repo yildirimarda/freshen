@@ -105,6 +105,7 @@ fn json_report_contains_the_before_and_after_versions() {
             "brew list --pinned --formula",
             "brew outdated --formula --quiet",
             "brew list --pinned --formula",
+            "brew services list",
             "brew upgrade --formula",
             "brew outdated --formula",
         ]

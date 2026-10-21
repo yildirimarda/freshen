@@ -12,7 +12,7 @@ use std::process::Output;
 
 use support::StubTools;
 
-const ALL_STEPS: &str = "brew,brew-formulae,brew-casks,brew-autoremove,brew-cleanup,brew-reopen,colima-stop,colima-start,docker";
+const ALL_STEPS: &str = "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-reopen,colima-stop,colima-start,docker";
 
 const PS_CALL: &str =
     "docker ps --format {{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.project\"}}";
@@ -171,6 +171,7 @@ fn stops_colima_and_restores_containers_around_the_formula_upgrade() {
             "brew outdated --formula",
             "brew outdated --formula --quiet",
             "brew list --pinned --formula",
+            "brew services list",
             "brew upgrade --formula",
             "colima start",
             "docker start def",
@@ -289,6 +290,7 @@ fn a_stopped_colima_is_not_started_and_docker_updates_are_skipped() {
             "brew outdated --formula",
             "brew outdated --formula --quiet",
             "brew list --pinned --formula",
+            "brew services list",
             "brew upgrade --formula",
             "brew outdated --cask --greedy",
             "brew outdated --cask --greedy --quiet",
@@ -333,6 +335,7 @@ fn colima_is_stopped_without_docker_and_the_docker_step_is_skipped() {
             "brew outdated --formula",
             "brew outdated --formula --quiet",
             "brew list --pinned --formula",
+            "brew services list",
             "brew upgrade --formula",
             "colima start",
             "brew outdated --cask --greedy",

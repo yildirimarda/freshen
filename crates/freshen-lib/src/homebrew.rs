@@ -38,6 +38,7 @@ const CASKS: StepId = "brew-casks";
 const AUTOREMOVE: StepId = "brew-autoremove";
 const CLEANUP: StepId = "brew-cleanup";
 pub(crate) const REOPEN: StepId = "brew-reopen";
+const SERVICES: StepId = "brew-services";
 
 const HOMEBREW_PLATFORMS: [Platform; 2] = [Platform::Macos, Platform::Linux];
 
@@ -56,6 +57,30 @@ impl ReopenQueue {
 
     fn clear(&self) {
         lock(&self.0).clear();
+    }
+}
+
+/// Homebrew services that were running before their formula was upgraded and
+/// still need to be restarted.
+#[derive(Clone, Default)]
+struct ServiceQueue(Arc<Mutex<Vec<String>>>);
+
+impl ServiceQueue {
+    fn extend(&self, services: impl IntoIterator<Item = String>) {
+        let mut queued = lock(&self.0);
+        for service in services {
+            if !queued.contains(&service) {
+                queued.push(service);
+            }
+        }
+    }
+
+    fn names(&self) -> Vec<String> {
+        lock(&self.0).clone()
+    }
+
+    fn remove(&self, service: &str) {
+        lock(&self.0).retain(|queued| queued != service);
     }
 }
 
@@ -87,9 +112,11 @@ fn reopen_queued(queue: &ReopenQueue, system: &dyn AppSystem, message: &str, int
 #[must_use]
 pub fn register(registry: Registry) -> Registry {
     let reopen = ReopenQueue::default();
+    let services = ServiceQueue::default();
     registry
         .with(UpdateStep)
-        .with(FormulaeStep)
+        .with(FormulaeStep::new(services.clone()))
+        .with(ServicesStep::new(services))
         .with(CasksStep::new(reopen.clone()))
         .with(AutoremoveStep)
         .with(CleanupStep)
@@ -470,6 +497,54 @@ fn with_pinned_reasons(report: CheckReport, pinned: &[String]) -> CheckReport {
     }))
 }
 
+/// Parses the services `brew services list` reports as running.
+///
+/// The output is a table with a `Name Status ...` header. Only services that
+/// are currently running are returned, so a stopped service is not started
+/// behind the user's back.
+fn running_services(output: &str) -> Vec<String> {
+    lines(output)
+        .into_iter()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let name = fields.next()?;
+            let status = fields.next()?;
+            (name != "Name" && matches!(status, "started" | "running")).then(|| name.to_owned())
+        })
+        .collect()
+}
+
+/// The running services whose formula is about to be upgraded.
+fn services_for_formulae(output: &str, formulae: &[String]) -> Vec<String> {
+    running_services(output)
+        .into_iter()
+        .filter(|service| {
+            formulae
+                .iter()
+                .any(|formula| short_name(formula) == short_name(service))
+        })
+        .collect()
+}
+
+/// Records the services that were running before `formulae` are upgraded.
+///
+/// A failure is not fatal: the formula upgrade can still proceed, and the
+/// warning keeps the missing service restart visible.
+fn capture_running_services(formulae: &[String], queue: &ServiceQueue) {
+    if formulae.is_empty() {
+        return;
+    }
+
+    match CommandSpec::new("brew")
+        .args(["services", "list"])
+        .neutral_locale()
+        .run()
+    {
+        Ok(output) => queue.extend(services_for_formulae(output.stdout(), formulae)),
+        Err(error) => eprintln!("freshen: could not list Homebrew services: {error}"),
+    }
+}
+
 /// Parses one line of `brew outdated` output.
 ///
 /// Homebrew prints `name (current) < latest` for formulae and
@@ -559,7 +634,15 @@ impl Step for UpdateStep {
     }
 }
 
-struct FormulaeStep;
+struct FormulaeStep {
+    services: ServiceQueue,
+}
+
+impl FormulaeStep {
+    fn new(services: ServiceQueue) -> Self {
+        Self { services }
+    }
+}
 
 impl Step for FormulaeStep {
     fn id(&self) -> StepId {
@@ -654,6 +737,7 @@ impl Step for FormulaeStep {
             }
         }
 
+        capture_running_services(&upgradable, &self.services);
         run_brew(FORMULAE, spec).map(|_| ())
     }
 
@@ -663,6 +747,84 @@ impl Step for FormulaeStep {
 
     fn prerequisites(&self) -> &'static [StepId] {
         &[BREW]
+    }
+
+    fn platforms(&self) -> &'static [Platform] {
+        &HOMEBREW_PLATFORMS
+    }
+}
+
+struct ServicesStep {
+    services: ServiceQueue,
+}
+
+impl ServicesStep {
+    fn new(services: ServiceQueue) -> Self {
+        Self { services }
+    }
+
+    fn restart_queued(&self, message: &str) -> Result<(), StepError> {
+        let services = self.services.names();
+        if services.is_empty() {
+            return Ok(());
+        }
+
+        human!("{message}: {}", services.join(" "));
+        let mut restarted = Vec::new();
+        let mut failures = Vec::new();
+
+        for service in services {
+            let result = run_brew(
+                SERVICES,
+                CommandSpec::new("brew").args(["services", "restart", &service]),
+            );
+            match result {
+                Ok(_) => {
+                    self.services.remove(&service);
+                    restarted.push(service);
+                }
+                Err(error) => failures.push(error),
+            }
+        }
+
+        if !restarted.is_empty() {
+            human!("Restarted Homebrew services: {}", restarted.join(" "));
+        }
+
+        match failures.into_iter().next() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Step for ServicesStep {
+    fn id(&self) -> StepId {
+        SERVICES
+    }
+
+    fn display_name(&self) -> &str {
+        "Homebrew services"
+    }
+
+    fn detect(&self) -> Result<Detection, StepError> {
+        Ok(detect_brew())
+    }
+
+    fn check(&self) -> Result<CheckReport, StepError> {
+        Ok(CheckReport::up_to_date())
+    }
+
+    fn run(&self) -> Result<(), StepError> {
+        self.restart_queued("Restarting Homebrew services")
+    }
+
+    fn restore(&self) -> Result<(), StepError> {
+        self.restart_queued("Restoring Homebrew services")
+    }
+
+    fn prerequisites(&self) -> &'static [StepId] {
+        &[FORMULAE]
     }
 
     fn platforms(&self) -> &'static [Platform] {
@@ -1193,7 +1355,8 @@ mod tests {
     use super::{
         administrator_skip_message, apps_of, cask_app_artifacts, cask_metadata,
         installed_app_paths, is_pinned, own_bundle_id, parse_outdated, quit_plan, register,
-        CaskError, CasksStep, ReopenQueue, ReopenStep, CASKS, FORMULAE, REOPEN,
+        running_services, services_for_formulae, CaskError, CasksStep, ReopenQueue, ReopenStep,
+        CASKS, FORMULAE, REOPEN, SERVICES,
     };
     use crate::apps::{AppScan, AppSystem, QuitOutcome, RunningApp};
     use crate::platform::Platform;
@@ -1291,12 +1454,13 @@ mod tests {
     }
 
     #[test]
-    fn registry_runs_formulae_before_casks_and_cleanup_last() {
+    fn registry_runs_formulae_before_services_before_casks_and_cleanup_last() {
         assert_eq!(
             ordered_ids(Platform::Macos),
             [
                 "brew",
                 "brew-formulae",
+                "brew-services",
                 "brew-casks",
                 "brew-autoremove",
                 "brew-cleanup",
@@ -1308,12 +1472,51 @@ mod tests {
             [
                 "brew",
                 "brew-formulae",
+                "brew-services",
                 "brew-casks",
                 "brew-autoremove",
                 "brew-cleanup",
                 "brew-reopen",
             ]
         );
+    }
+
+    #[test]
+    fn parses_only_running_services_from_the_brew_services_table() {
+        let output = "Name              Status  User File\n\
+                      postgresql@16     started user ~/Library/LaunchAgents/homebrew.mxcl.postgresql@16.plist\n\
+                      redis             stopped user ~/Library/LaunchAgents/homebrew.mxcl.redis.plist\n\
+                      mysql             running user ~/Library/LaunchAgents/homebrew.mxcl.mysql.plist\n\
+                      memcached         none\n\
+                      broken            error   user ~/Library/LaunchAgents/homebrew.mxcl.broken.plist\n";
+
+        assert_eq!(
+            running_services(output),
+            ["postgresql@16", "mysql"],
+            "only started or running services need a restart"
+        );
+    }
+
+    #[test]
+    fn matches_running_services_to_upgraded_formulae_without_the_tap() {
+        let output = "Name      Status\nuser/tap/tool  started\nother     started\n";
+        let formulae = vec!["tool".to_owned(), "other".to_owned()];
+
+        assert_eq!(
+            services_for_formulae(output, &formulae),
+            ["user/tap/tool", "other"]
+        );
+    }
+
+    #[test]
+    fn services_declare_formulae_as_a_prerequisite() {
+        let registry = register(Registry::new());
+        let services = registry
+            .steps()
+            .find(|step| step.id() == SERVICES)
+            .unwrap_or_else(|| panic!("services step is not registered"));
+
+        assert_eq!(services.prerequisites(), [FORMULAE]);
     }
 
     #[test]
