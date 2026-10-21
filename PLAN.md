@@ -88,7 +88,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Detect long-running interactive sessions that an upgrade would break (zellij, tmux server, SSH sessions, running docker builds) and warn or defer
 - [x] Never run destructive cleanup (volume prune, cache wipe) unless explicitly enabled; log everything a cleanup removed and the space reclaimed
 - [x] Exit codes documented and stable: 0 ok, 1 step failure, 2 updates pending (check mode), 3 preflight failed, 130 interrupted
-- [ ] Kill the whole process tree on timeout or interrupt (process group on Unix, job object on Windows) so grandchildren that keep output pipes open cannot outlive the step, covered by a test using a shell that spawns a child
+- [x] Kill the whole process tree on timeout or interrupt (process group on Unix, job object on Windows) so grandchildren that keep output pipes open cannot outlive the step, covered by a test using a shell that spawns a child
 - [ ] Prune old pre-upgrade snapshots with a configurable retention count (default keeps a small recent window) so automatic snapshots do not grow without bound, covered by tests
 - [ ] Record cask versions in the pre-upgrade snapshot (`brew list --cask --versions`) so rollback hints can cover upgraded casks, covered by tests
 - [ ] Guard `brew autoremove` and `brew cleanup` with their dry-run listings so a run with nothing to remove does not invoke the mutating command, covered by tests
