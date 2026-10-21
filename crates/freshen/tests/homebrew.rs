@@ -55,6 +55,7 @@ fn command_transcript_matches_the_zsh_homebrew_block() {
             StubOutput::stdout("jq\n"),
             StubOutput::new(),
             StubOutput::new(),
+            StubOutput::new(),
             StubOutput::stdout("firefox\ngoogle-chrome\n"),
             StubOutput::stdout(CASK_INFO),
             StubOutput::new(),
@@ -76,6 +77,7 @@ fn command_transcript_matches_the_zsh_homebrew_block() {
             "brew update",
             "brew outdated --formula",
             "brew outdated --formula --quiet",
+            "brew list --pinned --formula",
             "brew upgrade --formula",
             "brew outdated --cask --greedy",
             "brew outdated --cask --greedy --quiet",
@@ -163,6 +165,7 @@ fn invalid_cask_metadata_does_not_stop_the_cask_upgrade() {
             StubOutput::stdout("jq\n"),
             StubOutput::new(),
             StubOutput::new(),
+            StubOutput::new(),
             StubOutput::stdout("firefox\n"),
             StubOutput::stdout("not json\n"),
             StubOutput::new(),
@@ -182,6 +185,7 @@ fn invalid_cask_metadata_does_not_stop_the_cask_upgrade() {
             "brew update",
             "brew outdated --formula",
             "brew outdated --formula --quiet",
+            "brew list --pinned --formula",
             "brew upgrade --formula",
             "brew outdated --cask --greedy",
             "brew outdated --cask --greedy --quiet",
@@ -209,6 +213,7 @@ fn a_failing_formula_upgrade_does_not_stop_the_cask_steps() {
             StubOutput::new(),
             StubOutput::new(),
             StubOutput::stdout("jq\n"),
+            StubOutput::new(),
             StubOutput::new().with_status(1),
             StubOutput::new(),
             StubOutput::stdout("firefox\n"),
@@ -230,6 +235,7 @@ fn a_failing_formula_upgrade_does_not_stop_the_cask_steps() {
             "brew update",
             "brew outdated --formula",
             "brew outdated --formula --quiet",
+            "brew list --pinned --formula",
             "brew upgrade --formula",
             "brew outdated --cask --greedy",
             "brew outdated --cask --greedy --quiet",
@@ -260,6 +266,7 @@ fn a_cask_that_needs_an_administrator_password_is_skipped_without_a_terminal() {
             StubOutput::stdout("jq\n"),
             StubOutput::new(),
             StubOutput::new(),
+            StubOutput::new(),
             StubOutput::stdout("firefox\n1password\n"),
             StubOutput::stdout(CASK_INFO_WITH_ADMINISTRATOR),
             StubOutput::new(),
@@ -279,6 +286,7 @@ fn a_cask_that_needs_an_administrator_password_is_skipped_without_a_terminal() {
             "brew update",
             "brew outdated --formula",
             "brew outdated --formula --quiet",
+            "brew list --pinned --formula",
             "brew upgrade --formula",
             "brew outdated --cask --greedy",
             "brew outdated --cask --greedy --quiet",
@@ -308,6 +316,7 @@ fn no_cask_is_upgraded_when_every_cask_needs_an_administrator_password() {
             StubOutput::new(),
             StubOutput::new(),
             StubOutput::stdout("jq\n"),
+            StubOutput::new(),
             StubOutput::new(),
             StubOutput::new(),
             StubOutput::stdout("1password\n"),
@@ -443,6 +452,7 @@ fn quits_running_cask_apps_before_the_upgrade_and_reopens_after_cleanup() {
             "brew update".to_owned(),
             "brew outdated --formula".to_owned(),
             "brew outdated --formula --quiet".to_owned(),
+            "brew list --pinned --formula".to_owned(),
             "brew upgrade --formula".to_owned(),
             "brew outdated --cask --greedy".to_owned(),
             "brew outdated --cask --greedy --quiet".to_owned(),
@@ -492,6 +502,7 @@ fn yes_at_the_prompt_quits_apps_and_upgrades_casks() {
             "brew update".to_owned(),
             "brew outdated --formula".to_owned(),
             "brew outdated --formula --quiet".to_owned(),
+            "brew list --pinned --formula".to_owned(),
             "brew upgrade --formula".to_owned(),
             "brew outdated --cask --greedy".to_owned(),
             "brew outdated --cask --greedy --quiet".to_owned(),
@@ -540,6 +551,7 @@ fn skip_quitting_at_the_prompt_upgrades_casks_without_quitting_apps() {
             "brew update".to_owned(),
             "brew outdated --formula".to_owned(),
             "brew outdated --formula --quiet".to_owned(),
+            "brew list --pinned --formula".to_owned(),
             "brew upgrade --formula".to_owned(),
             "brew outdated --cask --greedy".to_owned(),
             "brew outdated --cask --greedy --quiet".to_owned(),
@@ -582,6 +594,7 @@ fn skip_casks_at_the_prompt_skips_the_cask_upgrade() {
             "brew update".to_owned(),
             "brew outdated --formula".to_owned(),
             "brew outdated --formula --quiet".to_owned(),
+            "brew list --pinned --formula".to_owned(),
             "brew upgrade --formula".to_owned(),
             "brew outdated --cask --greedy".to_owned(),
             "brew outdated --cask --greedy --quiet".to_owned(),
@@ -630,6 +643,7 @@ fn never_quits_the_terminal_running_the_script() {
             "brew update".to_owned(),
             "brew outdated --formula".to_owned(),
             "brew outdated --formula --quiet".to_owned(),
+            "brew list --pinned --formula".to_owned(),
             "brew upgrade --formula".to_owned(),
             "brew outdated --cask --greedy".to_owned(),
             "brew outdated --cask --greedy --quiet".to_owned(),
@@ -731,6 +745,115 @@ fn force_kill_terminates_an_app_that_does_not_quit_gracefully() {
     );
 }
 
+#[test]
+fn pinned_formulae_are_held_back_and_not_upgraded() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_script(
+        "brew",
+        r#"case "$*" in
+  "outdated --formula")
+    printf 'jq (1.7.1) < 1.8.0\nnode (20.10.0) < 20.11.0\n'
+    ;;
+  "outdated --formula --quiet")
+    printf 'jq\nnode\n'
+    ;;
+  "list --pinned --formula")
+    printf 'node\n'
+    ;;
+esac"#,
+    );
+
+    let output = run(&tools, &["--only", "brew,brew-formulae"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(
+        calls.contains(&"brew upgrade --formula jq".to_owned()),
+        "calls: {calls:?}"
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call == "brew upgrade --formula" || call == "brew upgrade --formula node"),
+        "the pinned formula was passed to brew upgrade: {calls:?}"
+    );
+
+    let text = stdout(&output);
+    assert!(text.contains("Held back (pinned): node"), "output: {text}");
+}
+
+#[test]
+fn a_run_with_only_pinned_formulae_skips_the_upgrade() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_script(
+        "brew",
+        r#"case "$*" in
+  "outdated --formula")
+    printf 'node (20.10.0) < 20.11.0\n'
+    ;;
+  "outdated --formula --quiet")
+    printf 'node\n'
+    ;;
+  "list --pinned --formula")
+    printf 'node\n'
+    ;;
+esac"#,
+    );
+
+    let output = run(&tools, &["--only", "brew,brew-formulae"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        !tools
+            .step_calls()
+            .iter()
+            .any(|call| call.starts_with("brew upgrade")),
+        "the pinned formula was upgraded: {:?}",
+        tools.step_calls()
+    );
+
+    let text = stdout(&output);
+    assert!(text.contains("Held back (pinned): node"), "output: {text}");
+    assert!(
+        text.contains("every outdated formula is held back (pinned)"),
+        "output: {text}"
+    );
+}
+
+#[test]
+fn check_reports_pinned_formulae_as_held_back() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_script(
+        "brew",
+        r#"case "$*" in
+  "outdated --formula")
+    printf 'jq (1.7.1) < 1.8.0\nnode (20.10.0) < 20.11.0\n'
+    ;;
+  "list --pinned --formula")
+    printf 'node\n'
+    ;;
+esac"#,
+    );
+
+    let output = run(
+        &tools,
+        &["--check", "--jobs", "1", "--only", "brew-formulae"],
+    );
+
+    assert_eq!(output.status.code(), Some(2), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        ["brew outdated --formula", "brew list --pinned --formula"]
+    );
+
+    let text = stdout(&output);
+    assert!(text.contains("jq 1.7.1 -> 1.8.0"), "output: {text}");
+    assert!(
+        text.contains("node 20.10.0 -> 20.11.0 (held back (pinned))"),
+        "output: {text}"
+    );
+}
+
 fn run_formulae(outdated: &str, inside_zellij: bool) -> (Output, Vec<String>) {
     let tools = StubTools::new(&["brew"]);
     tools.set_responses(
@@ -739,6 +862,7 @@ fn run_formulae(outdated: &str, inside_zellij: bool) -> (Output, Vec<String>) {
             StubOutput::new(),
             StubOutput::new(),
             StubOutput::stdout(outdated),
+            StubOutput::new(),
             StubOutput::new(),
         ]),
     );
@@ -768,6 +892,7 @@ fn warns_when_zellij_is_upgraded_from_inside_a_zellij_session() {
             "brew update",
             "brew outdated --formula",
             "brew outdated --formula --quiet",
+            "brew list --pinned --formula",
             "brew upgrade --formula",
         ]
     );
@@ -801,6 +926,7 @@ fn check_reports_outdated_versions_and_exits_2() {
         "brew",
         &[
             StubOutput::stdout("jq (1.7.1) < 1.8.0\nnode (20.10.0) < 20.11.0\n"),
+            StubOutput::new(),
             StubOutput::stdout("firefox (121.0) != 122.0\n"),
             StubOutput::stdout(CASK_INFO),
         ],
@@ -822,6 +948,7 @@ fn check_reports_outdated_versions_and_exits_2() {
         tools.step_calls(),
         [
             "brew outdated --formula",
+            "brew list --pinned --formula",
             "brew outdated --cask --greedy",
             "brew info --cask --json=v2 firefox",
         ]

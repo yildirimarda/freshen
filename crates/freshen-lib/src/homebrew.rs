@@ -418,6 +418,58 @@ fn outdated(step: StepId, args: &[&str]) -> Result<CheckReport, StepError> {
     ))
 }
 
+/// The reason shown for an outdated formula the user pinned with `brew pin`.
+const PINNED_REASON: &str = "held back (pinned)";
+
+/// Lists the formulae pinned with `brew pin`.
+///
+/// A failure is not fatal: Homebrew itself skips pinned formulae during an
+/// upgrade, so the run can continue without the list. The warning keeps the
+/// missing information visible.
+fn pinned_formulae() -> Option<Vec<String>> {
+    match CommandSpec::new("brew")
+        .args(["list", "--pinned", "--formula"])
+        .neutral_locale()
+        .run()
+    {
+        Ok(output) => Some(lines(output.stdout())),
+        Err(error) => {
+            eprintln!("freshen: could not list pinned formulae: {error}");
+            None
+        }
+    }
+}
+
+/// The last path segment of a formula name, without its tap.
+fn short_name(name: &str) -> &str {
+    name.rsplit('/').next().unwrap_or(name)
+}
+
+/// Returns `true` when `name` is in the pinned list.
+///
+/// `brew outdated` can print a tapped formula as `user/tap/tool`, while
+/// `brew list --pinned` prints the rack name `tool`. Both forms name the same
+/// pin, so the comparison uses the last path segment on both sides.
+fn is_pinned(name: &str, pinned: &[String]) -> bool {
+    let name = short_name(name);
+    pinned.iter().any(|pinned| short_name(pinned) == name)
+}
+
+/// Adds the held-back reason to the outdated items the user pinned.
+fn with_pinned_reasons(report: CheckReport, pinned: &[String]) -> CheckReport {
+    if pinned.is_empty() {
+        return report;
+    }
+
+    CheckReport::from_items(report.items().iter().map(|item| {
+        if is_pinned(item.name(), pinned) {
+            item.clone().with_reason(PINNED_REASON)
+        } else {
+            item.clone()
+        }
+    }))
+}
+
 /// Parses one line of `brew outdated` output.
 ///
 /// Homebrew prints `name (current) < latest` for formulae and
@@ -527,8 +579,14 @@ impl Step for FormulaeStep {
     }
 
     fn check_with_options(&self, options: &RunOptions) -> Result<CheckReport, StepError> {
-        let report = outdated(FORMULAE, &["--formula"])?;
-        Ok(report.filtered(|name| options.filters().packages().includes(name)))
+        let report = outdated(FORMULAE, &["--formula"])?
+            .filtered(|name| options.filters().packages().includes(name));
+        if report.is_up_to_date() {
+            return Ok(report);
+        }
+
+        let pinned = pinned_formulae().unwrap_or_default();
+        Ok(with_pinned_reasons(report, &pinned))
     }
 
     fn run(&self) -> Result<(), StepError> {
@@ -564,8 +622,6 @@ impl Step for FormulaeStep {
             .cloned()
             .collect();
 
-        warn_about_breakable_sessions(&selected.join("\n"));
-
         if selected.is_empty() {
             if formulae.is_empty() {
                 human!("No outdated formulae.");
@@ -575,9 +631,25 @@ impl Step for FormulaeStep {
             return Ok(());
         }
 
+        let pinned = pinned_formulae().unwrap_or_default();
+        let (held_back, upgradable): (Vec<String>, Vec<String>) = selected
+            .into_iter()
+            .partition(|name| is_pinned(name, &pinned));
+
+        if !held_back.is_empty() {
+            human!("Held back (pinned): {}", held_back.join(" "));
+        }
+
+        warn_about_breakable_sessions(&upgradable.join("\n"));
+
+        if upgradable.is_empty() {
+            human!("No formulae upgraded: every outdated formula is held back (pinned).");
+            return Ok(());
+        }
+
         let mut spec = CommandSpec::new("brew").args(["upgrade", "--formula"]);
-        if !filter.is_empty() {
-            for name in &selected {
+        if !filter.is_empty() || !held_back.is_empty() {
+            for name in &upgradable {
                 spec = spec.arg(name);
             }
         }
@@ -1120,8 +1192,8 @@ impl Step for ReopenStep {
 mod tests {
     use super::{
         administrator_skip_message, apps_of, cask_app_artifacts, cask_metadata,
-        installed_app_paths, own_bundle_id, parse_outdated, quit_plan, register, CaskError,
-        CasksStep, ReopenQueue, ReopenStep, CASKS, FORMULAE, REOPEN,
+        installed_app_paths, is_pinned, own_bundle_id, parse_outdated, quit_plan, register,
+        CaskError, CasksStep, ReopenQueue, ReopenStep, CASKS, FORMULAE, REOPEN,
     };
     use crate::apps::{AppScan, AppSystem, QuitOutcome, RunningApp};
     use crate::platform::Platform;
@@ -1205,6 +1277,17 @@ mod tests {
         assert_eq!(item.name(), "user/tap/tool");
         assert_eq!(item.current(), Some("0.9.0"));
         assert_eq!(item.latest(), Some("1.0.0"));
+    }
+
+    #[test]
+    fn matches_pinned_formulae_with_and_without_the_tap() {
+        let pinned = vec!["tool".to_owned(), "user/tap/other".to_owned()];
+
+        assert!(is_pinned("tool", &pinned));
+        assert!(is_pinned("user/tap/tool", &pinned));
+        assert!(is_pinned("user/tap/other", &pinned));
+        assert!(is_pinned("other", &pinned));
+        assert!(!is_pinned("unpinned", &pinned));
     }
 
     #[test]
