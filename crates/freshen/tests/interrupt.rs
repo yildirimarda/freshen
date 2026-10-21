@@ -195,6 +195,67 @@ fn sigterm_stops_the_running_step_too() {
 }
 
 #[test]
+fn sigint_stops_a_retry_backoff_without_waiting_for_it() {
+    let tools = StubTools::new(&["flaky"]);
+    tools.set_script(
+        "flaky",
+        r#"printf 'temporary failure\n' >&2
+: > "$FRESHEN_STUB_STATE/first-attempt"
+exit 1"#,
+    );
+
+    let child = tools
+        .command()
+        .env("FRESHEN_TEST_STEPS", "flaky")
+        .env("FRESHEN_TEST_STEP_RETRIES", "3")
+        .env("FRESHEN_TEST_STEP_BACKOFF_MS", "10000")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    let marker = tools.home().join("first-attempt");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !marker.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the first attempt never ran; calls: {:?}",
+            tools.calls()
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    thread::sleep(Duration::from_millis(100));
+
+    let interrupted_at = Instant::now();
+    send_signal(&child, "-INT");
+    let output = child
+        .wait_with_output()
+        .unwrap_or_else(|error| panic!("failed to wait for freshen: {error}"));
+    let elapsed = interrupted_at.elapsed();
+
+    assert_eq!(
+        output.status.code(),
+        Some(130),
+        "stderr: {}",
+        stderr(&output)
+    );
+    assert!(
+        stdout(&output).contains("interrupted"),
+        "summary: {}",
+        stdout(&output)
+    );
+    assert_eq!(
+        tools.calls(),
+        ["flaky"],
+        "a retry started after the interrupt"
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "SIGINT waited for the retry backoff: {elapsed:?}"
+    );
+}
+
+#[test]
 fn sigint_kills_grandchildren_started_by_the_running_step() {
     let tools = StubTools::new(&["slow"]);
     tools.set_script(
