@@ -117,7 +117,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Make `tests/run-tests.sh` accept each proposed workflow in either `ci-proposals/<name>.yml` or `.github/workflows/<name>.yml` (rust.yml, ci.yml, real-tools.yml), so that a human applying a proposal with `git mv` does not break the repository checks, covered by a test that runs the checks in both layouts
 - [x] Retry stub execution when the kernel returns `ETXTBSY` (text file busy), so parallel test threads that write and execute a stub cannot fail spuriously, with a test for the retry helper
 - [x] Make `preflight::tests::tcp_reachability_detects_open_and_closed_ports` robust against another process reusing the just-released port, so the suite does not fail spuriously on shared CI runners
-- [ ] CI matrix: macOS, Ubuntu and Windows runners for lint, unit tests and the stub-based integration tests
+- [x] CI matrix: macOS, Ubuntu and Windows runners for lint, unit tests and the stub-based integration tests
 - [ ] Propose a CI job (as `ci-proposals/real-tools.yml`) that runs `freshen --check` and `freshen --dry-run` read-only against the real Homebrew on `macos-latest` and fails on parser errors, so the recorded transcripts are verified against real output
 - [ ] Extend the proposed real-tool job to `windows-latest` (real Chocolatey and winget, read-only) and `ubuntu-latest` (real apt, read-only), with the same failure rule
 - [ ] Add a config file (TOML) at the OS-appropriate location (`~/.config/<name>/config.toml`, `%APPDATA%`) with a documented schema and validation errors that point at the offending line
