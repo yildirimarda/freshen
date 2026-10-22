@@ -50,7 +50,7 @@ use crate::xcode;
 
 pub(crate) const BREW: StepId = "brew";
 pub(crate) const FORMULAE: StepId = "brew-formulae";
-const CASKS: StepId = "brew-casks";
+pub(crate) const CASKS: StepId = "brew-casks";
 const AUTOREMOVE: StepId = "brew-autoremove";
 const CLEANUP: StepId = "brew-cleanup";
 const DOCTOR: StepId = "brew-doctor";

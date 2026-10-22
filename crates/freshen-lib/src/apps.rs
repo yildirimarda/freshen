@@ -1403,7 +1403,7 @@ fn restore_window_command(bundle_id: &str, window: &WindowState) -> CommandSpec 
         .timeout(SESSION_STATE_TIMEOUT)
 }
 
-fn quit_command(bundle_id: &str) -> CommandSpec {
+pub(crate) fn quit_command(bundle_id: &str) -> CommandSpec {
     CommandSpec::new("osascript")
         .arg("-e")
         .arg(format!(

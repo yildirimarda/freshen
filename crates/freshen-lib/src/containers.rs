@@ -19,8 +19,9 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
+use crate::apps::quit_command;
 use crate::cleanup;
-use crate::homebrew::{BREW, FORMULAE, REOPEN};
+use crate::homebrew::{BREW, CASKS, FORMULAE, REOPEN};
 use crate::options::RunOptions;
 use crate::output::human;
 use crate::platform::Platform;
@@ -512,6 +513,84 @@ impl ContainerRuntime for ColimaRuntime {
     }
 }
 
+/// The bundle id of the Docker Desktop application.
+const DOCKER_DESKTOP_BUNDLE_ID: &str = "com.docker.docker";
+
+/// Docker Desktop on macOS.
+///
+/// Docker Desktop ships as the `docker-desktop` cask, so its cask upgrade
+/// triggers the stop/start cycle. The `docker desktop` CLI is preferred;
+/// older releases do not have it, so stopping falls back to the AppleScript
+/// quit that freshen uses for every other app.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct DockerDesktopRuntime;
+
+impl DockerDesktopRuntime {
+    /// Creates the Docker Desktop runtime.
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl ContainerRuntime for DockerDesktopRuntime {
+    fn name(&self) -> &'static str {
+        "docker-desktop"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Docker Desktop"
+    }
+
+    fn command(&self) -> &'static str {
+        "docker desktop"
+    }
+
+    fn detect(&self) -> Detection {
+        if command_exists("docker") {
+            Detection::Installed
+        } else {
+            Detection::NotInstalled
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        match CommandSpec::new("docker").args(["desktop", "status"]).run() {
+            Ok(output) => {
+                let status = output.stdout().trim().to_ascii_lowercase();
+                status.is_empty()
+                    || (!status.contains("stopped") && !status.contains("not running"))
+            }
+            Err(_) => false,
+        }
+    }
+
+    fn stop(&self) -> Result<(), ProcessError> {
+        match CommandSpec::new("docker").args(["desktop", "stop"]).run() {
+            Ok(_) => Ok(()),
+            Err(error) => quit_command(DOCKER_DESKTOP_BUNDLE_ID)
+                .run()
+                .map(|_| ())
+                .map_err(|_| error),
+        }
+    }
+
+    fn start(&self) -> Result<(), ProcessError> {
+        CommandSpec::new("docker")
+            .args(["desktop", "start"])
+            .run()
+            .map(|_| ())
+    }
+
+    fn restart_formulae(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn restart_casks(&self) -> &'static [&'static str] {
+        &["docker-desktop"]
+    }
+}
+
 /// A compose project and the config files needed to address it again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComposeProject {
@@ -661,6 +740,21 @@ pub fn register_with_runtime(
         .with(DockerStep::new(runtime))
 }
 
+/// Registers the container steps for the detected runtime.
+///
+/// A runtime that has no implementation yet keeps the Colima/lima steps, so
+/// detection never removes container handling from a run. Docker Desktop is
+/// the only runtime besides Colima/lima that has its own implementation.
+#[must_use]
+pub fn register_for(registry: Registry, kind: Option<ContainerRuntimeKind>) -> Registry {
+    match kind {
+        Some(ContainerRuntimeKind::DockerDesktop) => {
+            register_with_runtime(registry, DockerDesktopRuntime)
+        }
+        _ => register(registry),
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 struct Snapshot {
     compose: Vec<ComposeProject>,
@@ -706,6 +800,30 @@ impl ContainerStopStep {
             display_name,
         }
     }
+
+    fn upgrade_triggers_restart(&self) -> Result<bool, StepError> {
+        let mut outdated = Vec::new();
+        if !self.runtime.restart_formulae().is_empty() {
+            outdated.extend(self.outdated(&["outdated", "--formula", "--quiet"])?);
+        }
+        if !self.runtime.restart_casks().is_empty() {
+            outdated.extend(self.outdated(&["outdated", "--cask", "--greedy", "--quiet"])?);
+        }
+
+        Ok(outdated
+            .iter()
+            .any(|name| self.runtime.triggers_restart(name)))
+    }
+
+    fn outdated(&self, arguments: &[&str]) -> Result<Vec<String>, StepError> {
+        let output = CommandSpec::new("brew")
+            .args(arguments)
+            .neutral_locale()
+            .retry_transient_network(NETWORK_RETRIES)
+            .run()
+            .map_err(|error| StepError::run_from_process(COLIMA_STOP, &error))?;
+        Ok(lines(output.stdout()))
+    }
 }
 
 impl Step for ContainerStopStep {
@@ -730,16 +848,7 @@ impl Step for ContainerStopStep {
     }
 
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
-        let outdated = CommandSpec::new("brew")
-            .args(["outdated", "--formula", "--quiet"])
-            .neutral_locale()
-            .retry_transient_network(NETWORK_RETRIES)
-            .run()
-            .map_err(|error| StepError::run_from_process(COLIMA_STOP, &error))?;
-        let upgrade_stops_runtime = lines(outdated.stdout())
-            .iter()
-            .any(|name| self.runtime.triggers_restart(name));
-        if !upgrade_stops_runtime || !self.runtime.is_running() {
+        if !self.upgrade_triggers_restart()? || !self.runtime.is_running() {
             return Ok(());
         }
 
@@ -791,7 +900,11 @@ impl Step for ContainerStopStep {
     }
 
     fn prerequisites(&self) -> &'static [StepId] {
-        &[BREW]
+        if self.runtime.restart_formulae().is_empty() && !self.runtime.restart_casks().is_empty() {
+            &[FORMULAE]
+        } else {
+            &[BREW]
+        }
     }
 
     fn platforms(&self) -> &'static [Platform] {
@@ -922,7 +1035,11 @@ impl Step for ContainerStartStep {
     }
 
     fn prerequisites(&self) -> &'static [StepId] {
-        &[FORMULAE, COLIMA_STOP]
+        if self.runtime.restart_casks().is_empty() {
+            &[FORMULAE, COLIMA_STOP]
+        } else {
+            &[CASKS, COLIMA_STOP]
+        }
     }
 
     fn platforms(&self) -> &'static [Platform] {
@@ -1133,10 +1250,10 @@ fn command_exists(program: &str) -> bool {
 mod tests {
     use super::{
         compose_command, detect_active_runtime, parse_compose_projects,
-        parse_standalone_containers, register, register_with_runtime, ActiveContainerRuntime,
-        ColimaRuntime, ComposeProject, ContainerRuntime, ContainerRuntimeKind,
-        ContainerRuntimeProbe, ContainerRuntimeSource, StandaloneContainer, COLIMA_START,
-        COLIMA_STOP, DOCKER, PS_FORMAT,
+        parse_standalone_containers, register, register_for, register_with_runtime,
+        ActiveContainerRuntime, ColimaRuntime, ComposeProject, ContainerRuntime,
+        ContainerRuntimeKind, ContainerRuntimeProbe, ContainerRuntimeSource, DockerDesktopRuntime,
+        StandaloneContainer, COLIMA_START, COLIMA_STOP, DOCKER, PS_FORMAT,
     };
     use crate::homebrew;
     use crate::options::RunOptions;
@@ -1387,6 +1504,66 @@ mod tests {
         assert!(runtime.triggers_restart("colima"));
         assert!(runtime.triggers_restart("lima"));
         assert!(!runtime.triggers_restart("docker"));
+    }
+
+    #[test]
+    fn docker_desktop_runtime_declares_its_cask_as_the_restart_trigger() {
+        let runtime = DockerDesktopRuntime::new();
+
+        assert_eq!(runtime.name(), "docker-desktop");
+        assert_eq!(runtime.display_name(), "Docker Desktop");
+        assert_eq!(runtime.command(), "docker desktop");
+        assert!(runtime.restart_formulae().is_empty());
+        assert_eq!(runtime.restart_casks(), ["docker-desktop"]);
+        assert!(runtime.triggers_restart("docker-desktop"));
+        assert!(!runtime.triggers_restart("docker"));
+        assert!(!runtime.triggers_restart("colima"));
+    }
+
+    #[test]
+    fn docker_desktop_stops_before_casks_and_starts_after_them() {
+        let registry = homebrew::register(register_for(
+            Registry::new(),
+            Some(ContainerRuntimeKind::DockerDesktop),
+        ));
+        let ordered: Vec<StepId> = registry
+            .ordered_for(Platform::Macos)
+            .unwrap_or_else(|error| panic!("registry order failed: {error}"))
+            .iter()
+            .map(|step| step.id())
+            .collect();
+
+        assert_eq!(
+            ordered,
+            [
+                "brew",
+                "brew-formulae",
+                "colima-stop",
+                "brew-services",
+                "brew-casks",
+                "colima-start",
+                "brew-autoremove",
+                "brew-cleanup",
+                "brew-doctor",
+                "brew-bundle-cleanup",
+                "brew-reopen",
+                "docker",
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unknown_runtime_keeps_the_colima_steps() {
+        let registry = register_for(Registry::new(), Some(ContainerRuntimeKind::OrbStack));
+        let names: Vec<_> = registry
+            .steps()
+            .map(|step| step.display_name().to_owned())
+            .collect();
+
+        assert_eq!(
+            names,
+            ["Colima/lima stop", "Colima/lima start", "Docker images"]
+        );
     }
 
     struct FakeRuntime;
