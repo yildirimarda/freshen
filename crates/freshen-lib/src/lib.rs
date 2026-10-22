@@ -54,7 +54,8 @@ pub use config::{
 pub use containers::{
     detect_active_runtime, parse_compose_projects, parse_standalone_containers,
     ActiveContainerRuntime, ColimaRuntime, ComposeProject, ContainerRuntime, ContainerRuntimeKind,
-    ContainerRuntimeProbe, ContainerRuntimeSource, HostContainerRuntimeProbe, StandaloneContainer,
+    ContainerRuntimeProbe, ContainerRuntimeSource, DockerDesktopRuntime, HostContainerRuntimeProbe,
+    StandaloneContainer,
 };
 pub use listing::{list_steps, DetectionState, StepList, StepListing};
 pub use lock::{LockError, RunLock};

@@ -46,7 +46,11 @@ fn main() -> ExitCode {
     let options = options
         .with_app_lists(app_lists)
         .with_container_runtime(active_container_runtime(cli.container_runtime));
-    let registry = build_registry();
+    let registry = build_registry(
+        options
+            .container_runtime()
+            .map(ActiveContainerRuntime::kind),
+    );
 
     let steps = match options.plan(&registry, platform) {
         Ok(steps) => steps,
@@ -133,7 +137,7 @@ fn active_container_runtime(
         .or_else(|| detect_active_runtime(&HostContainerRuntimeProbe))
 }
 
-fn build_registry() -> Registry {
+fn build_registry(runtime: Option<ContainerRuntimeKind>) -> Registry {
     #[cfg(feature = "test-harness")]
     if test_steps::requested() {
         return test_steps::with_probe_steps(Registry::new());
@@ -141,7 +145,7 @@ fn build_registry() -> Registry {
 
     freshen_lib::macos_updates::register(freshen_lib::appstore::register(
         freshen_lib::tooling::register(freshen_lib::homebrew::register(
-            freshen_lib::containers::register(Registry::new()),
+            freshen_lib::containers::register_for(Registry::new(), runtime),
         )),
     ))
 }
