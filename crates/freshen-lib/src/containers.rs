@@ -12,6 +12,9 @@
 //! steps, exactly like `colima_was_running`, `compose_projects` and
 //! `standalone_containers` in `update-all.sh`.
 
+use std::fmt;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
@@ -38,6 +41,371 @@ const CONTAINER_PLATFORMS: [Platform; 2] = [Platform::Macos, Platform::Linux];
 /// The `docker ps --format` argument, with the literal tabs the zsh script
 /// produces with `$'...'`.
 const PS_FORMAT: &str = "{{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.project\"}}";
+
+/// A container runtime that freshen can identify from the host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ContainerRuntimeKind {
+    /// Colima (including the Lima VM it manages).
+    Colima,
+    /// OrbStack.
+    OrbStack,
+    /// Docker Desktop.
+    DockerDesktop,
+    /// Rancher Desktop.
+    RancherDesktop,
+    /// Podman, including its machine on macOS and Windows.
+    Podman,
+    /// A native Docker Engine socket, or another Docker-compatible endpoint.
+    NativeDocker,
+}
+
+impl ContainerRuntimeKind {
+    /// Every known runtime.
+    pub const ALL: [Self; 6] = [
+        Self::Colima,
+        Self::OrbStack,
+        Self::DockerDesktop,
+        Self::RancherDesktop,
+        Self::Podman,
+        Self::NativeDocker,
+    ];
+
+    /// Canonical name accepted by `--container-runtime` and used in reports.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Colima => "colima",
+            Self::OrbStack => "orbstack",
+            Self::DockerDesktop => "docker-desktop",
+            Self::RancherDesktop => "rancher-desktop",
+            Self::Podman => "podman",
+            Self::NativeDocker => "docker",
+        }
+    }
+
+    /// Human-readable name used in the listing and the run summary.
+    #[must_use]
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Colima => "Colima",
+            Self::OrbStack => "OrbStack",
+            Self::DockerDesktop => "Docker Desktop",
+            Self::RancherDesktop => "Rancher Desktop",
+            Self::Podman => "Podman",
+            Self::NativeDocker => "Docker Engine",
+        }
+    }
+}
+
+impl fmt::Display for ContainerRuntimeKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ContainerRuntimeKind {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let normalized = value.trim().to_ascii_lowercase().replace('_', "-");
+        match normalized.as_str() {
+            "colima" | "lima" => Ok(Self::Colima),
+            "orbstack" | "orb-stack" => Ok(Self::OrbStack),
+            "docker-desktop" | "dockerdesktop" | "desktop" => Ok(Self::DockerDesktop),
+            "rancher-desktop" | "rancher" | "rd" => Ok(Self::RancherDesktop),
+            "podman" | "podman-machine" => Ok(Self::Podman),
+            "docker" | "native" | "native-docker" | "docker-engine" => Ok(Self::NativeDocker),
+            _ => Err(format!(
+                "unknown container runtime `{value}` (known: {})",
+                Self::ALL
+                    .iter()
+                    .map(|kind| kind.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
+    }
+}
+
+/// Where the active container runtime was found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContainerRuntimeSource {
+    /// The `DOCKER_HOST` environment variable.
+    Environment,
+    /// `docker context show`.
+    DockerContext,
+    /// A well-known socket path.
+    Socket(PathBuf),
+    /// The `--container-runtime` flag.
+    Override,
+}
+
+impl fmt::Display for ContainerRuntimeSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Environment => f.write_str("DOCKER_HOST"),
+            Self::DockerContext => f.write_str("docker context"),
+            Self::Socket(path) => write!(f, "{}", path.display()),
+            Self::Override => f.write_str("--container-runtime"),
+        }
+    }
+}
+
+/// The container runtime freshen will talk to, and where that choice came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveContainerRuntime {
+    kind: ContainerRuntimeKind,
+    source: ContainerRuntimeSource,
+}
+
+impl ActiveContainerRuntime {
+    /// Creates a runtime detected from `source`.
+    #[must_use]
+    pub fn new(kind: ContainerRuntimeKind, source: ContainerRuntimeSource) -> Self {
+        Self { kind, source }
+    }
+
+    /// Creates a runtime forced by `--container-runtime`.
+    #[must_use]
+    pub fn overridden(kind: ContainerRuntimeKind) -> Self {
+        Self {
+            kind,
+            source: ContainerRuntimeSource::Override,
+        }
+    }
+
+    /// The detected runtime.
+    #[must_use]
+    pub fn kind(&self) -> ContainerRuntimeKind {
+        self.kind
+    }
+
+    /// Where the runtime was detected.
+    #[must_use]
+    pub fn source(&self) -> &ContainerRuntimeSource {
+        &self.source
+    }
+}
+
+impl fmt::Display for ActiveContainerRuntime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} ({})", self.kind.display_name(), self.source)
+    }
+}
+
+/// The environment and filesystem facts used to detect the active runtime.
+///
+/// Reading them through a trait keeps the detection rules testable without a
+/// real Docker installation: a test injects `DOCKER_HOST`, a context name and
+/// a set of existing socket paths.
+pub trait ContainerRuntimeProbe {
+    /// Reads an environment variable, returning `None` when it is unset or
+    /// empty.
+    fn variable(&self, name: &str) -> Option<String>;
+
+    /// Returns the name printed by `docker context show`.
+    fn docker_context(&self) -> Option<String>;
+
+    /// Returns `true` when `path` exists.
+    fn socket_exists(&self, path: &Path) -> bool;
+}
+
+/// Reads the container runtime facts from the running host.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct HostContainerRuntimeProbe;
+
+impl ContainerRuntimeProbe for HostContainerRuntimeProbe {
+    fn variable(&self, name: &str) -> Option<String> {
+        std::env::var(name)
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    }
+
+    fn docker_context(&self) -> Option<String> {
+        if !command_exists("docker") {
+            return None;
+        }
+
+        CommandSpec::new("docker")
+            .args(["context", "show"])
+            .neutral_locale()
+            .run()
+            .ok()
+            .map(|output| output.stdout().trim().to_owned())
+            .filter(|name| !name.is_empty())
+    }
+
+    fn socket_exists(&self, path: &Path) -> bool {
+        path.exists()
+    }
+}
+
+/// Detects the active container runtime from the injected facts.
+///
+/// `DOCKER_HOST` wins over `docker context show`, which wins over the
+/// well-known socket paths. Returns `None` when none of them identifies a
+/// runtime, so the caller can leave the runtime line out instead of guessing.
+#[must_use]
+pub fn detect_active_runtime(probe: &dyn ContainerRuntimeProbe) -> Option<ActiveContainerRuntime> {
+    if let Some(host) = probe.variable("DOCKER_HOST") {
+        return Some(ActiveContainerRuntime::new(
+            kind_from_docker_host(&host),
+            ContainerRuntimeSource::Environment,
+        ));
+    }
+
+    if let Some(context) = probe.docker_context() {
+        if let Some(kind) = kind_from_context(&context) {
+            return Some(ActiveContainerRuntime::new(
+                kind,
+                ContainerRuntimeSource::DockerContext,
+            ));
+        }
+    }
+
+    for (path, kind) in socket_candidates(probe) {
+        if probe.socket_exists(&path) {
+            return Some(ActiveContainerRuntime::new(
+                kind,
+                ContainerRuntimeSource::Socket(path),
+            ));
+        }
+    }
+
+    None
+}
+
+fn kind_from_docker_host(host: &str) -> ContainerRuntimeKind {
+    let lower = host.to_ascii_lowercase();
+    if lower.contains("podman") {
+        return ContainerRuntimeKind::Podman;
+    }
+    if lower.contains("orbstack") {
+        return ContainerRuntimeKind::OrbStack;
+    }
+    if lower.contains("colima") {
+        return ContainerRuntimeKind::Colima;
+    }
+    if lower.contains("rancher") || lower.contains("/.rd/") {
+        return ContainerRuntimeKind::RancherDesktop;
+    }
+    if lower.contains("com.docker.docker")
+        || lower.contains("/.docker/")
+        || lower.contains("docker-desktop")
+        || (lower.contains("npipe") && lower.contains("docker_engine"))
+    {
+        return ContainerRuntimeKind::DockerDesktop;
+    }
+
+    ContainerRuntimeKind::NativeDocker
+}
+
+fn kind_from_context(context: &str) -> Option<ContainerRuntimeKind> {
+    let name = context.trim().to_ascii_lowercase();
+    if name.is_empty() || name == "default" {
+        return None;
+    }
+
+    if name == "colima" || name.starts_with("colima-") {
+        Some(ContainerRuntimeKind::Colima)
+    } else if name == "orbstack" || name.starts_with("orbstack-") {
+        Some(ContainerRuntimeKind::OrbStack)
+    } else if name == "desktop-linux"
+        || name == "desktop-windows"
+        || name == "docker-desktop"
+        || name.starts_with("desktop-")
+    {
+        Some(ContainerRuntimeKind::DockerDesktop)
+    } else if name == "rancher-desktop" || name.starts_with("rancher-") {
+        Some(ContainerRuntimeKind::RancherDesktop)
+    } else if name == "podman" || name.starts_with("podman-") || name == "rootless" {
+        Some(ContainerRuntimeKind::Podman)
+    } else {
+        None
+    }
+}
+
+fn socket_candidates(probe: &dyn ContainerRuntimeProbe) -> Vec<(PathBuf, ContainerRuntimeKind)> {
+    let home = probe
+        .variable("HOME")
+        .or_else(|| probe.variable("USERPROFILE"))
+        .map(PathBuf::from);
+    let runtime_dir = probe.variable("XDG_RUNTIME_DIR").map(PathBuf::from);
+    let mut candidates = Vec::new();
+
+    if let Some(home) = &home {
+        candidates.extend([
+            (
+                home.join(".colima/default/docker.sock"),
+                ContainerRuntimeKind::Colima,
+            ),
+            (
+                home.join(".colima/docker.sock"),
+                ContainerRuntimeKind::Colima,
+            ),
+            (
+                home.join(".orbstack/run/docker.sock"),
+                ContainerRuntimeKind::OrbStack,
+            ),
+            (
+                home.join(".docker/run/docker.sock"),
+                ContainerRuntimeKind::DockerDesktop,
+            ),
+            (
+                home.join("Library/Containers/com.docker.docker/Data/docker.raw.sock"),
+                ContainerRuntimeKind::DockerDesktop,
+            ),
+            (
+                home.join(".rd/docker.sock"),
+                ContainerRuntimeKind::RancherDesktop,
+            ),
+            (
+                home.join(".local/share/containers/podman/machine/podman.sock"),
+                ContainerRuntimeKind::Podman,
+            ),
+            (
+                home.join(".local/share/containers/podman/machine/qemu/podman.sock"),
+                ContainerRuntimeKind::Podman,
+            ),
+            (
+                home.join(".local/share/containers/podman/machine/applehv/podman.sock"),
+                ContainerRuntimeKind::Podman,
+            ),
+        ]);
+    }
+
+    if let Some(runtime_dir) = &runtime_dir {
+        candidates.push((
+            runtime_dir.join("podman/podman.sock"),
+            ContainerRuntimeKind::Podman,
+        ));
+    }
+
+    if let Some(uid) = probe.variable("UID") {
+        candidates.push((
+            PathBuf::from(format!("/run/user/{uid}/podman/podman.sock")),
+            ContainerRuntimeKind::Podman,
+        ));
+    }
+
+    candidates.extend([
+        (
+            PathBuf::from("/run/podman/podman.sock"),
+            ContainerRuntimeKind::Podman,
+        ),
+        (
+            PathBuf::from("/var/run/docker.sock"),
+            ContainerRuntimeKind::NativeDocker,
+        ),
+        (
+            PathBuf::from("/run/docker.sock"),
+            ContainerRuntimeKind::NativeDocker,
+        ),
+    ]);
+
+    candidates
+}
 
 /// A container runtime that has to be stopped around an upgrade of its own
 /// packages and started again afterwards.
@@ -764,9 +1132,11 @@ fn command_exists(program: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        compose_command, parse_compose_projects, parse_standalone_containers, register,
-        register_with_runtime, ColimaRuntime, ComposeProject, ContainerRuntime,
-        StandaloneContainer, COLIMA_START, COLIMA_STOP, DOCKER, PS_FORMAT,
+        compose_command, detect_active_runtime, parse_compose_projects,
+        parse_standalone_containers, register, register_with_runtime, ActiveContainerRuntime,
+        ColimaRuntime, ComposeProject, ContainerRuntime, ContainerRuntimeKind,
+        ContainerRuntimeProbe, ContainerRuntimeSource, StandaloneContainer, COLIMA_START,
+        COLIMA_STOP, DOCKER, PS_FORMAT,
     };
     use crate::homebrew;
     use crate::options::RunOptions;
@@ -774,7 +1144,9 @@ mod tests {
     use crate::process::ProcessError;
     use crate::registry::Registry;
     use crate::step::{Detection, StepId};
+    use std::collections::{HashMap, HashSet};
     use std::ffi::OsString;
+    use std::path::{Path, PathBuf};
 
     fn ordered_ids(platform: Platform) -> Vec<StepId> {
         homebrew::register(register(Registry::new()))
@@ -1076,5 +1448,227 @@ mod tests {
             .collect();
 
         assert_eq!(names, ["Fake stop", "Fake start", "Docker images"]);
+    }
+
+    #[derive(Default)]
+    struct FakeProbe {
+        variables: HashMap<String, String>,
+        context: Option<String>,
+        sockets: HashSet<PathBuf>,
+    }
+
+    impl FakeProbe {
+        fn with_var(mut self, name: &str, value: &str) -> Self {
+            self.variables.insert(name.to_owned(), value.to_owned());
+            self
+        }
+
+        fn with_context(mut self, context: &str) -> Self {
+            self.context = Some(context.to_owned());
+            self
+        }
+
+        fn with_socket(mut self, path: impl Into<PathBuf>) -> Self {
+            self.sockets.insert(path.into());
+            self
+        }
+    }
+
+    impl ContainerRuntimeProbe for FakeProbe {
+        fn variable(&self, name: &str) -> Option<String> {
+            self.variables.get(name).cloned()
+        }
+
+        fn docker_context(&self) -> Option<String> {
+            self.context.clone()
+        }
+
+        fn socket_exists(&self, path: &Path) -> bool {
+            self.sockets.contains(path)
+        }
+    }
+
+    fn detected(probe: &FakeProbe) -> Option<ActiveContainerRuntime> {
+        detect_active_runtime(probe)
+    }
+
+    #[test]
+    fn docker_host_identifies_each_supported_runtime() {
+        for (host, expected) in [
+            (
+                "unix:///Users/me/.colima/default/docker.sock",
+                ContainerRuntimeKind::Colima,
+            ),
+            (
+                "unix:///Users/me/.orbstack/run/docker.sock",
+                ContainerRuntimeKind::OrbStack,
+            ),
+            (
+                "unix:///Users/me/.docker/run/docker.sock",
+                ContainerRuntimeKind::DockerDesktop,
+            ),
+            (
+                "unix:///Users/me/.rd/docker.sock",
+                ContainerRuntimeKind::RancherDesktop,
+            ),
+            (
+                "unix:///run/user/501/podman/podman.sock",
+                ContainerRuntimeKind::Podman,
+            ),
+            (
+                "unix:///var/run/docker.sock",
+                ContainerRuntimeKind::NativeDocker,
+            ),
+        ] {
+            let probe = FakeProbe::default().with_var("DOCKER_HOST", host);
+            let runtime = detected(&probe).unwrap_or_else(|| panic!("{host} was not detected"));
+
+            assert_eq!(runtime.kind(), expected, "{host}");
+            assert_eq!(runtime.source(), &ContainerRuntimeSource::Environment);
+        }
+    }
+
+    #[test]
+    fn docker_context_identifies_the_runtime_when_docker_host_is_unset() {
+        for (context, expected) in [
+            ("colima", ContainerRuntimeKind::Colima),
+            ("colima-dev", ContainerRuntimeKind::Colima),
+            ("orbstack", ContainerRuntimeKind::OrbStack),
+            ("desktop-linux", ContainerRuntimeKind::DockerDesktop),
+            ("rancher-desktop", ContainerRuntimeKind::RancherDesktop),
+            ("podman-machine-default", ContainerRuntimeKind::Podman),
+        ] {
+            let probe = FakeProbe::default().with_context(context);
+            let runtime = detected(&probe).unwrap_or_else(|| panic!("{context} was not detected"));
+
+            assert_eq!(runtime.kind(), expected, "{context}");
+            assert_eq!(runtime.source(), &ContainerRuntimeSource::DockerContext);
+        }
+    }
+
+    #[test]
+    fn the_default_context_falls_through_to_the_socket_paths() {
+        let probe = FakeProbe::default()
+            .with_context("default")
+            .with_socket("/var/run/docker.sock");
+
+        let runtime =
+            detected(&probe).unwrap_or_else(|| panic!("default context was not detected"));
+
+        assert_eq!(runtime.kind(), ContainerRuntimeKind::NativeDocker);
+        assert_eq!(
+            runtime.source(),
+            &ContainerRuntimeSource::Socket(PathBuf::from("/var/run/docker.sock"))
+        );
+    }
+
+    #[test]
+    fn well_known_socket_paths_identify_the_runtime() {
+        let home = PathBuf::from("/Users/me");
+        for (relative, expected) in [
+            (".colima/default/docker.sock", ContainerRuntimeKind::Colima),
+            (".orbstack/run/docker.sock", ContainerRuntimeKind::OrbStack),
+            (
+                ".docker/run/docker.sock",
+                ContainerRuntimeKind::DockerDesktop,
+            ),
+            (".rd/docker.sock", ContainerRuntimeKind::RancherDesktop),
+            (
+                ".local/share/containers/podman/machine/podman.sock",
+                ContainerRuntimeKind::Podman,
+            ),
+        ] {
+            let path = home.join(relative);
+            let probe = FakeProbe::default()
+                .with_var("HOME", "/Users/me")
+                .with_socket(&path);
+            let runtime = detected(&probe).unwrap_or_else(|| panic!("{relative} was not detected"));
+
+            assert_eq!(runtime.kind(), expected, "{relative}");
+            assert_eq!(
+                runtime.source(),
+                &ContainerRuntimeSource::Socket(path.clone()),
+                "{relative}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_xdg_runtime_directory_identifies_podman() {
+        let path = PathBuf::from("/run/user/1000/podman/podman.sock");
+        let probe = FakeProbe::default()
+            .with_var("XDG_RUNTIME_DIR", "/run/user/1000")
+            .with_socket(&path);
+
+        let runtime = detected(&probe).unwrap_or_else(|| panic!("podman was not detected"));
+
+        assert_eq!(runtime.kind(), ContainerRuntimeKind::Podman);
+        assert_eq!(runtime.source(), &ContainerRuntimeSource::Socket(path));
+    }
+
+    #[test]
+    fn docker_host_wins_over_the_context_and_the_sockets() {
+        let probe = FakeProbe::default()
+            .with_var("DOCKER_HOST", "unix:///Users/me/.orbstack/run/docker.sock")
+            .with_context("desktop-linux")
+            .with_socket("/var/run/docker.sock");
+
+        let runtime = detected(&probe).unwrap_or_else(|| panic!("runtime was not detected"));
+
+        assert_eq!(runtime.kind(), ContainerRuntimeKind::OrbStack);
+        assert_eq!(runtime.source(), &ContainerRuntimeSource::Environment);
+    }
+
+    #[test]
+    fn the_context_wins_over_the_socket_paths() {
+        let probe = FakeProbe::default()
+            .with_context("rancher-desktop")
+            .with_socket("/var/run/docker.sock");
+
+        let runtime = detected(&probe).unwrap_or_else(|| panic!("runtime was not detected"));
+
+        assert_eq!(runtime.kind(), ContainerRuntimeKind::RancherDesktop);
+        assert_eq!(runtime.source(), &ContainerRuntimeSource::DockerContext);
+    }
+
+    #[test]
+    fn no_facts_means_no_detected_runtime() {
+        assert_eq!(detected(&FakeProbe::default()), None);
+    }
+
+    #[test]
+    fn an_override_replaces_the_detected_runtime() {
+        let runtime = ActiveContainerRuntime::overridden(ContainerRuntimeKind::Podman);
+
+        assert_eq!(runtime.kind(), ContainerRuntimeKind::Podman);
+        assert_eq!(runtime.source(), &ContainerRuntimeSource::Override);
+        assert_eq!(runtime.to_string(), "Podman (--container-runtime)");
+    }
+
+    #[test]
+    fn runtime_names_parse_with_aliases() {
+        for (name, expected) in [
+            ("colima", ContainerRuntimeKind::Colima),
+            ("lima", ContainerRuntimeKind::Colima),
+            ("orbstack", ContainerRuntimeKind::OrbStack),
+            ("docker_desktop", ContainerRuntimeKind::DockerDesktop),
+            ("rancher", ContainerRuntimeKind::RancherDesktop),
+            ("podman-machine", ContainerRuntimeKind::Podman),
+            ("docker-engine", ContainerRuntimeKind::NativeDocker),
+        ] {
+            assert_eq!(name.parse::<ContainerRuntimeKind>(), Ok(expected), "{name}");
+        }
+
+        assert!("nope".parse::<ContainerRuntimeKind>().is_err());
+    }
+
+    #[test]
+    fn the_runtime_display_names_the_kind_and_the_source() {
+        let runtime = ActiveContainerRuntime::new(
+            ContainerRuntimeKind::DockerDesktop,
+            ContainerRuntimeSource::DockerContext,
+        );
+
+        assert_eq!(runtime.to_string(), "Docker Desktop (docker context)");
     }
 }

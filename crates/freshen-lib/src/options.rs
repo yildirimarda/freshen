@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::time::Duration;
 
+use crate::containers::ActiveContainerRuntime;
 use crate::package_manager::PackageManagerConfig;
 use crate::platform::Platform;
 use crate::policy::{AppLists, ItemFilters};
@@ -222,6 +223,7 @@ pub struct RunOptions {
     step_overrides: BTreeMap<String, bool>,
     filters: ItemFilters,
     app_lists: AppLists,
+    container_runtime: Option<ActiveContainerRuntime>,
 }
 
 impl RunOptions {
@@ -345,6 +347,17 @@ impl RunOptions {
         self
     }
 
+    /// Sets the active container runtime shown in the listing and the run
+    /// summary.
+    #[must_use]
+    pub fn with_container_runtime(
+        mut self,
+        container_runtime: Option<ActiveContainerRuntime>,
+    ) -> Self {
+        self.container_runtime = container_runtime;
+        self
+    }
+
     /// Returns `true` when `--dry-run` is set.
     #[must_use]
     pub fn is_dry_run(&self) -> bool {
@@ -446,6 +459,12 @@ impl RunOptions {
     #[must_use]
     pub fn app_lists(&self) -> &AppLists {
         &self.app_lists
+    }
+
+    /// The active container runtime, when one was detected or overridden.
+    #[must_use]
+    pub fn container_runtime(&self) -> Option<&ActiveContainerRuntime> {
+        self.container_runtime.as_ref()
     }
 
     /// Builds the ordered list of steps this run should execute on `platform`.

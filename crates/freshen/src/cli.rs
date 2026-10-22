@@ -14,9 +14,9 @@ use std::time::Duration;
 
 use clap::{ArgAction, Parser};
 use freshen_lib::{
-    Config, PackageManagerConfig, PreflightCheck, PreflightConfig, RunOptions, StepSelection,
-    DEFAULT_JOBS, DEFAULT_MIN_BATTERY_PERCENT, DEFAULT_MIN_FREE_DISK_GIB,
-    DEFAULT_SNAPSHOT_RETENTION, DEFAULT_WAIT,
+    Config, ContainerRuntimeKind, PackageManagerConfig, PreflightCheck, PreflightConfig,
+    RunOptions, StepSelection, DEFAULT_JOBS, DEFAULT_MIN_BATTERY_PERCENT,
+    DEFAULT_MIN_FREE_DISK_GIB, DEFAULT_SNAPSHOT_RETENTION, DEFAULT_WAIT,
 };
 
 /// Keep a developer machine up to date: package managers, language toolchains
@@ -52,6 +52,11 @@ pub struct Cli {
     /// Read the configuration from this file instead of the default location.
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
+
+    /// Use this container runtime instead of detecting the active one
+    /// (colima, orbstack, docker-desktop, rancher-desktop, podman, docker).
+    #[arg(long, value_name = "RUNTIME", value_parser = parse_container_runtime)]
+    pub container_runtime: Option<ContainerRuntimeKind>,
 
     /// Only run the named steps (comma-separated, repeatable).
     #[arg(long, value_name = "STEP", value_delimiter = ',', action = ArgAction::Append)]
@@ -232,6 +237,11 @@ impl Cli {
             .with_filters(config.item_filters())
             .with_app_lists(config.app_lists())
     }
+}
+
+/// Parses `--container-runtime`.
+fn parse_container_runtime(value: &str) -> Result<ContainerRuntimeKind, String> {
+    value.parse()
 }
 
 /// Resolves a check that the command line can skip and the configuration file

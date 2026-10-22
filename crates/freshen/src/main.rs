@@ -5,8 +5,9 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use freshen_lib::{
-    exit, install_interrupt_handler, list_steps, wait_for_package_managers, AppLists, Config,
-    ConfigEnvironment, HostPackageManagerProbe, HostPreflightProbe, PackageManagerConfig,
+    detect_active_runtime, exit, install_interrupt_handler, list_steps, wait_for_package_managers,
+    ActiveContainerRuntime, AppLists, Config, ConfigEnvironment, ContainerRuntimeKind,
+    HostContainerRuntimeProbe, HostPackageManagerProbe, HostPreflightProbe, PackageManagerConfig,
     PackageManagerProbe, Platform, PreflightReport, Registry, RunLock, Runner, WaitOutcome,
 };
 
@@ -42,7 +43,9 @@ fn main() -> ExitCode {
     };
     let options = cli.run_options_with(&config);
     let app_lists = config.app_lists().merged_with(AppLists::from_env());
-    let options = options.with_app_lists(app_lists);
+    let options = options
+        .with_app_lists(app_lists)
+        .with_container_runtime(active_container_runtime(cli.container_runtime));
     let registry = build_registry();
 
     let steps = match options.plan(&registry, platform) {
@@ -118,6 +121,16 @@ fn load_config(cli: &Cli, platform: Platform) -> Result<Config, freshen_lib::Con
 
     let path = ConfigEnvironment::from_env().config_path(platform);
     Ok(Config::load_optional(&path)?.unwrap_or_default())
+}
+
+/// Resolves the runtime from `--container-runtime`, falling back to the
+/// runtime detected on the host.
+fn active_container_runtime(
+    overridden: Option<ContainerRuntimeKind>,
+) -> Option<ActiveContainerRuntime> {
+    overridden
+        .map(ActiveContainerRuntime::overridden)
+        .or_else(|| detect_active_runtime(&HostContainerRuntimeProbe))
 }
 
 fn build_registry() -> Registry {
