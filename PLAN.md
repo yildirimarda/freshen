@@ -134,7 +134,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Support casks whose artifacts are not `.app` (pkg installers, menu-bar helpers, `uninstall quit:` bundle ids) by reading the cask's `uninstall` stanza for the bundle ids to quit
 - [x] Detect apps that update themselves (Sparkle, Electron auto-update) and are mid-update, and wait instead of quitting them
 - [x] Preserve window/session state where possible: reopen apps in the same Space/display, hidden state preserved (`open -g -j`)
-- [ ] Handle apps that were running as login items or menu-bar-only agents without a Dock icon
+- [x] Handle apps that were running as login items or menu-bar-only agents without a Dock icon
 - [ ] Add Mac App Store updates via `mas outdated` / `mas upgrade`, with a skip when not signed in
 - [ ] Add macOS system updates: list via `softwareupdate --list` (report-only by default), opt-in `--install-macos-updates`, and detect pending reboot
 - [ ] Update Xcode Command Line Tools when `softwareupdate` lists them, and handle the common "CLT out of date after macOS update" brew error
