@@ -137,7 +137,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Handle apps that were running as login items or menu-bar-only agents without a Dock icon
 - [x] Add Mac App Store updates via `mas outdated` / `mas upgrade`, with a skip when not signed in
 - [x] Add macOS system updates: list via `softwareupdate --list` (report-only by default), opt-in `--install-macos-updates`, and detect pending reboot
-- [ ] Update Xcode Command Line Tools when `softwareupdate` lists them, and handle the common "CLT out of date after macOS update" brew error
+- [x] Update Xcode Command Line Tools when `softwareupdate` lists them, and handle the common "CLT out of date after macOS update" brew error
 - [ ] Add `brew doctor` and `brew bundle cleanup` (when a Brewfile exists) as report-only checks
 - [ ] Handle Rosetta / dual-arch Homebrew installs (`/opt/homebrew` and `/usr/local`)
 - [ ] Introduce a `ContainerRuntime` abstraction (detect, is_running, stop, start, and which formulae or casks trigger a restart) and move the existing Colima/lima logic behind it as the first implementation without changing behaviour, covered by the existing parity and idempotency tests
@@ -172,6 +172,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Detect a missing App Store account on `mas` 5 and newer, which have no `account` command, so the Mac App Store step is skipped instead of failing, covered by tests with recorded transcripts
 - [ ] Decide what the Mac App Store step does when `mas upgrade` needs a password: skip the upgrade in a non-interactive run or hand the terminal to `sudo`, so a scheduled run does not fail on a missing credential, covered by tests
 - [ ] Detect a macOS restart that is still pending from an update that was installed earlier, not only in the run that installed it, so `freshen --check` tells the user that the machine has to restart before it is up to date, covered by tests with the recorded output of a machine with a staged update
+- [ ] Update the Xcode Command Line Tools before the Homebrew steps run, so that a run which installs them also upgrades the packages in the same run instead of failing on the outdated tools, covered by tests
 
 ## Milestone 5: Linux
 

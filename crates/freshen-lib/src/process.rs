@@ -172,6 +172,17 @@ fn wait_before_retry(delay: Duration) -> RetryWait {
 /// How many times a network command is retried after its first attempt.
 pub const NETWORK_RETRIES: u32 = 2;
 
+/// How often a command is started again while its executable is busy.
+///
+/// A file that is open for writing cannot be executed, so a tool that is
+/// being replaced at that very moment answers "Text file busy". That is a
+/// moment in time and not a broken installation, so the command is started
+/// again after a short pause instead of failing the step.
+const BUSY_RETRIES: u32 = 40;
+
+/// How long to wait before a command that was busy is started again.
+const BUSY_RETRY_DELAY: Duration = Duration::from_millis(50);
+
 /// The kind of network failure found in a command's output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetworkFailure {
@@ -738,10 +749,7 @@ impl CommandSpec {
             crate::locale::with_neutral_locale(&mut command);
         }
 
-        let mut child = command.spawn().map_err(|source| ProcessError::Spawn {
-            program: program.clone(),
-            source,
-        })?;
+        let mut child = spawn_child(&mut command, &program)?;
         let mut tree = match ProcessTree::new(&child) {
             Ok(tree) => tree,
             Err(source) => {
@@ -852,6 +860,52 @@ impl CommandSpec {
             captured: Captured { stdout, stderr },
         })
     }
+}
+
+/// Starts the command, retrying while its executable is busy.
+///
+/// A file that is open for writing cannot be executed, so a tool that is
+/// being replaced at that moment answers "Text file busy". The window is
+/// tiny, so the command is started again after a short pause instead of
+/// failing the step. Every other error is reported right away, and the retry
+/// stops as soon as the step runs out of time or the run is interrupted.
+fn spawn_child(command: &mut Command, program: &str) -> Result<Child, ProcessError> {
+    let mut attempt = 0;
+    loop {
+        match command.spawn() {
+            Ok(child) => return Ok(child),
+            Err(source)
+                if is_busy(&source)
+                    && attempt < BUSY_RETRIES
+                    && !deadline::expired()
+                    && !signals::requested() =>
+            {
+                attempt += 1;
+                thread::sleep(BUSY_RETRY_DELAY);
+            }
+            Err(source) => {
+                return Err(ProcessError::Spawn {
+                    program: program.to_owned(),
+                    source,
+                });
+            }
+        }
+    }
+}
+
+/// Whether the error says that the executable was busy.
+#[cfg(unix)]
+fn is_busy(error: &std::io::Error) -> bool {
+    error.raw_os_error() == Some(nix::errno::Errno::ETXTBSY as i32)
+}
+
+/// Whether the error says that the executable was busy.
+///
+/// Windows reports a locked executable as a sharing violation.
+#[cfg(windows)]
+fn is_busy(error: &std::io::Error) -> bool {
+    let sharing_violation = windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
+    error.raw_os_error() == Some(sharing_violation as i32)
 }
 
 /// A chunk of output sent from a reader thread to the parent.
@@ -1845,6 +1899,51 @@ mod tests {
         assert_eq!(output.attempts(), 2);
         assert_eq!(output.stdout(), "ok\n");
         assert_eq!(output.stderr(), "retry\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_command_whose_executable_is_busy_is_started_again() {
+        use std::fs::OpenOptions;
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory =
+            std::env::temp_dir().join(format!("freshen-process-busy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory)
+            .unwrap_or_else(|error| panic!("failed to create {directory:?}: {error}"));
+        let tool = directory.join("busy-tool");
+        std::fs::write(&tool, "#!/bin/sh\nprintf 'ran\\n'\n")
+            .unwrap_or_else(|error| panic!("failed to write the tool: {error}"));
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755))
+            .unwrap_or_else(|error| panic!("failed to make the tool executable: {error}"));
+
+        // Hold the tool open for writing, the way an installer that replaces
+        // it does, and let go of it again a moment later. An executable that
+        // is open for writing cannot be started, so the first attempt fails
+        // with "Text file busy".
+        let held = OpenOptions::new()
+            .write(true)
+            .open(&tool)
+            .unwrap_or_else(|error| panic!("failed to hold the tool open: {error}"));
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            drop(held);
+        });
+
+        let result = CommandSpec::new(&tool).run();
+        release
+            .join()
+            .unwrap_or_else(|error| panic!("the holder panicked: {error:?}"));
+
+        let output = match result {
+            Ok(output) => output,
+            Err(error) => panic!("command failed: {error}"),
+        };
+        assert!(output.success());
+        assert_eq!(output.stdout(), "ran\n");
+
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     #[cfg(unix)]

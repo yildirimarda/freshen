@@ -44,12 +44,6 @@ const COMMON_STEPS: &str = "brew,brew-formulae,brew-services,brew-casks,brew-aut
 /// The built-in steps that only exist on macOS.
 const MACOS_STEPS: &str = "mas,macos-updates";
 
-/// Number of built-in steps that are part of a run on this platform.
-#[cfg(target_os = "macos")]
-const PLATFORM_STEPS: usize = 2;
-#[cfg(not(target_os = "macos"))]
-const PLATFORM_STEPS: usize = 0;
-
 #[test]
 fn help_lists_every_flag() {
     let output = run(&["--help"]);
@@ -135,10 +129,11 @@ fn dry_run_with_every_builtin_step_excluded_plans_nothing() {
     ]);
 
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    // A step that `--skip` excludes is not part of the run at all, so it is
+    // neither planned nor counted as skipped. That is the same on every
+    // platform: the macOS-only steps are excluded here as well.
     assert!(
-        stdout(&output).contains(&format!(
-            "0 ok, 0 planned, {PLATFORM_STEPS} skipped, 0 failed"
-        )),
+        stdout(&output).contains("0 ok, 0 planned, 0 skipped, 0 failed"),
         "summary: {}",
         stdout(&output)
     );

@@ -1833,3 +1833,52 @@ fn check_reports_a_failed_query_with_exit_1() {
         stdout(&output)
     );
 }
+
+/// The error Homebrew prints when the Command Line Tools are too old, which is
+/// what happens right after a macOS update.
+const OUTDATED_COMMAND_LINE_TOOLS: &str = "Error: Your Command Line Tools are too outdated. \
+     Update them from Software Update in the App Store.\n";
+
+#[test]
+fn the_error_about_the_outdated_command_line_tools_names_the_fix() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_responses(
+        "brew",
+        &homebrew_responses(&[StubOutput::stderr(OUTDATED_COMMAND_LINE_TOOLS).with_status(1)]),
+    );
+
+    let output = run(&tools, &["--only", "brew"]);
+
+    assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("the Xcode Command Line Tools are out of date"),
+        "output: {text}"
+    );
+    assert!(
+        text.contains("softwareupdate --install \"Command Line Tools for Xcode\""),
+        "output: {text}"
+    );
+}
+
+#[test]
+fn a_failed_check_about_the_outdated_command_line_tools_names_the_fix() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_responses(
+        "brew",
+        &[StubOutput::stderr(OUTDATED_COMMAND_LINE_TOOLS).with_status(1)],
+    );
+
+    let output = run(&tools, &["--check", "--only", "brew-formulae"]);
+
+    assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("the Xcode Command Line Tools are out of date"),
+        "output: {text}"
+    );
+    assert!(
+        text.contains("softwareupdate --install \"Command Line Tools for Xcode\""),
+        "output: {text}"
+    );
+}

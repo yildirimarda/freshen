@@ -35,6 +35,7 @@ pub mod step;
 pub mod system;
 pub mod tooling;
 pub mod warnings;
+pub mod xcode;
 
 pub use apps::{
     automation_denied_message, find_running_apps, is_automation_denied, is_menu_bar_app_from_info,
