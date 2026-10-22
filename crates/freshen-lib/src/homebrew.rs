@@ -1496,8 +1496,8 @@ mod tests {
 
         fn force_kill(&self, _pids: &[u32]) {}
 
-        fn open(&self, bundle_id: &str, _hidden: bool) -> bool {
-            super::lock(&self.opened).push(bundle_id.to_owned());
+        fn open(&self, app: &Reopen) -> bool {
+            super::lock(&self.opened).push(app.bundle_id().to_owned());
             true
         }
     }

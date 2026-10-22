@@ -35,10 +35,11 @@ pub mod tooling;
 pub mod warnings;
 
 pub use apps::{
-    automation_denied_message, find_running_apps, is_automation_denied, quit_apps, quit_choice,
-    reopen_apps, running_updater, self_updater_from_bundle, wait_for_self_update, AppScan,
-    AppSystem, MacAppSystem, QuitChoice, QuitOutcome, QuitPolicy, Reopen, RunningApp, SelfUpdater,
-    SessionState, UpdateState, WindowState,
+    automation_denied_message, find_running_apps, is_automation_denied, is_menu_bar_app_from_info,
+    login_item_helpers_in, quit_apps, quit_choice, reopen_apps, running_updater,
+    self_updater_from_bundle, wait_for_self_update, AppKind, AppScan, AppSystem, MacAppSystem,
+    QuitChoice, QuitOutcome, QuitPolicy, Relaunch, Reopen, RunningApp, SelfUpdater, SessionState,
+    UpdateState, WindowState,
 };
 pub use check::{CheckResult, CheckStatus, CheckSummary};
 pub use cleanup::{CleanupReport, ENABLE_FLAG as CLEANUP_FLAG};

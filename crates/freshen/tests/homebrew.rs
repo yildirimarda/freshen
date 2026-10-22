@@ -635,6 +635,7 @@ fn quits_running_cask_apps_before_the_upgrade_and_reopens_after_cleanup() {
             "brew info --cask --json=v2 firefox".to_owned(),
             format!("defaults read {} CFBundleIdentifier", info.display()),
             "ps -axo command=".to_owned(),
+            format!("defaults read {} LSUIElement", info.display()),
             "osascript -e tell application \"System Events\" -e set appProcess to first process whose bundle identifier is \"com.example.firefox\" -e get value of attribute \"AXHidden\" of appProcess -e end tell".to_owned(),
             "osascript -e tell application \"System Events\" -e set appProcess to first process whose bundle identifier is \"com.example.firefox\" -e tell appProcess -e get {position of window 1, size of window 1} -e end tell -e end tell".to_owned(),
             "osascript -e with timeout of 3 seconds -e tell application id \"com.example.firefox\" to quit -e end timeout".to_owned(),
@@ -758,6 +759,7 @@ fn yes_at_the_prompt_quits_apps_and_upgrades_casks() {
             "brew info --cask --json=v2 firefox".to_owned(),
             format!("defaults read {} CFBundleIdentifier", info.display()),
             "ps -axo command=".to_owned(),
+            format!("defaults read {} LSUIElement", info.display()),
             "osascript -e tell application \"System Events\" -e set appProcess to first process whose bundle identifier is \"com.example.firefox\" -e get value of attribute \"AXHidden\" of appProcess -e end tell".to_owned(),
             "osascript -e tell application \"System Events\" -e set appProcess to first process whose bundle identifier is \"com.example.firefox\" -e tell appProcess -e get {position of window 1, size of window 1} -e end tell -e end tell".to_owned(),
             "osascript -e with timeout of 3 seconds -e tell application id \"com.example.firefox\" to quit -e end timeout".to_owned(),
@@ -887,6 +889,7 @@ fn skip_quitting_at_the_prompt_upgrades_casks_without_quitting_apps() {
             "brew info --cask --json=v2 firefox".to_owned(),
             format!("defaults read {} CFBundleIdentifier", info.display()),
             "ps -axo command=".to_owned(),
+            format!("defaults read {} LSUIElement", info.display()),
             "brew upgrade --cask".to_owned(),
             "brew autoremove --dry-run".to_owned(),
             "brew autoremove".to_owned(),
@@ -931,6 +934,7 @@ fn skip_casks_at_the_prompt_skips_the_cask_upgrade() {
             "brew info --cask --json=v2 firefox".to_owned(),
             format!("defaults read {} CFBundleIdentifier", info.display()),
             "ps -axo command=".to_owned(),
+            format!("defaults read {} LSUIElement", info.display()),
             "brew autoremove --dry-run".to_owned(),
             "brew autoremove".to_owned(),
             "brew cleanup --dry-run --prune=all".to_owned(),
@@ -1209,6 +1213,203 @@ fn force_kill_terminates_an_app_that_does_not_quit_gracefully() {
     let text = stdout(&output);
     assert!(
         text.contains("did not quit, force-killing"),
+        "output: {text}"
+    );
+}
+
+/// A cask that installs a menu-bar app: the app lives in the menu bar, so it
+/// has no icon in the Dock.
+#[cfg(unix)]
+const CASK_INFO_WITH_MENU_BAR_APP: &str = r#"{
+    "casks": [
+        {
+            "token": "menu-bar",
+            "artifacts": [
+                {
+                    "app": [
+                        "MenuBar.app"
+                    ]
+                }
+            ]
+        }
+    ]
+}"#;
+
+/// The stub tools for a cask that installs an app without a Dock icon.
+///
+/// The `defaults` stub answers the bundle id and the `LSUIElement` key, which
+/// is what tells freshen that the app lives in the menu bar. The `kill` stub
+/// empties the process table, so the app is gone after it was ended.
+#[cfg(unix)]
+fn background_app_tools(
+    app_name: &str,
+    bundle_id: &str,
+    processes: &[(&str, u32)],
+) -> (StubTools, std::path::PathBuf, std::path::PathBuf) {
+    let tools = StubTools::new(&["brew", "defaults", "ps", "osascript", "open", "kill"]);
+    tools.set_script(
+        "brew",
+        r#"case "$*" in
+  "outdated --formula --quiet")
+    printf 'jq\n'
+    ;;
+  "outdated --cask --greedy --quiet")
+    printf 'menu-bar\n'
+    ;;
+  "info --cask --json=v2 menu-bar")
+    printf '%s\n' "$FRESHEN_BREW_INFO_JSON"
+    ;;
+esac"#,
+    );
+
+    let app = tools.home().join("Applications").join(app_name);
+    std::fs::create_dir_all(&app)
+        .unwrap_or_else(|error| panic!("failed to create test app: {error}"));
+
+    tools.set_script(
+        "defaults",
+        &format!(
+            r#"case "$*" in
+  *CFBundleIdentifier) printf '{bundle_id}\n' ;;
+  *LSUIElement) printf '1\n' ;;
+esac"#
+        ),
+    );
+
+    let state = tools.home().join("ps.txt");
+    let table: String = processes
+        .iter()
+        .map(|(executable, pid)| format!("{pid} {}\n", app.join(executable).display()))
+        .collect();
+    std::fs::write(&state, table)
+        .unwrap_or_else(|error| panic!("failed to write process table: {error}"));
+
+    // The stubs may only use shell builtins, so the killed processes are
+    // remembered in a file next to the process table.
+    tools.set_script(
+        "ps",
+        r#"killed="$FRESHEN_PS_STATE.killed"
+while IFS=' ' read -r pid rest; do
+  gone=0
+  if [ -f "$killed" ]; then
+    while IFS=' ' read -r dead; do
+      if [ "$pid" = "$dead" ]; then gone=1; fi
+    done < "$killed"
+  fi
+  if [ "$gone" = 0 ]; then printf '%s %s\n' "$pid" "$rest"; fi
+done < "$FRESHEN_PS_STATE""#,
+    );
+    tools.set_script(
+        "kill",
+        r#"killed="$FRESHEN_PS_STATE.killed"
+for arg in "$@"; do
+  case "$arg" in -*) continue ;; esac
+  printf '%s\n' "$arg" >> "$killed"
+done"#,
+    );
+
+    (tools, app, state)
+}
+
+#[cfg(unix)]
+#[test]
+fn a_menu_bar_app_is_ended_and_reopened_in_the_background() {
+    let (tools, app, state) = background_app_tools(
+        "MenuBar.app",
+        "com.example.menubar",
+        &[("Contents/MacOS/menubar", 123)],
+    );
+
+    let mut command = tools.command();
+    command
+        .env("FRESHEN_BREW_INFO_JSON", CASK_INFO_WITH_MENU_BAR_APP)
+        .env("FRESHEN_PS_STATE", &state)
+        .args(["--only", HOMEBREW_STEPS, "--yes", "--cleanup"]);
+    let output = command
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(
+        calls.contains(&"kill -TERM 123".to_owned()),
+        "the app was not ended: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call.contains("to quit")),
+        "the app was quit through an Apple event: {calls:?}"
+    );
+    assert_eq!(
+        calls.last().map(String::as_str),
+        Some("open -g -j -b com.example.menubar")
+    );
+
+    let text = stdout(&output);
+    assert!(text.contains("Quitting: MenuBar.app"), "output: {text}");
+    assert!(
+        text.contains("Opening: com.example.menubar (hidden)"),
+        "output: {text}"
+    );
+    assert!(text.contains(&app.display().to_string()), "output: {text}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_login_item_is_ended_and_reopened_by_its_path() {
+    let (tools, app, state) = background_app_tools(
+        "MenuBar.app",
+        "com.example.menubar",
+        &[("Contents/MacOS/menubar", 123)],
+    );
+    // The app starts a helper at login; the helper runs without a Dock icon.
+    let helper = app.join("Contents/Library/LoginItems/Helper.app");
+    std::fs::create_dir_all(helper.join("Contents/MacOS"))
+        .unwrap_or_else(|error| panic!("failed to create test helper: {error}"));
+    tools.set_script(
+        "defaults",
+        r#"case "$*" in
+  *CFBundleIdentifier)
+    case "$*" in
+      *Helper.app*) printf 'com.example.helper\n' ;;
+      *) printf 'com.example.menubar\n' ;;
+    esac
+    ;;
+  *LSUIElement) printf '1\n' ;;
+esac"#,
+    );
+    let mut table = std::fs::read_to_string(&state)
+        .unwrap_or_else(|error| panic!("failed to read process table: {error}"));
+    table.push_str(&format!(
+        "  124 {}\n",
+        helper.join("Contents/MacOS/Helper").display()
+    ));
+    std::fs::write(&state, table)
+        .unwrap_or_else(|error| panic!("failed to write process table: {error}"));
+
+    let mut command = tools.command();
+    command
+        .env("FRESHEN_BREW_INFO_JSON", CASK_INFO_WITH_MENU_BAR_APP)
+        .env("FRESHEN_PS_STATE", &state)
+        .args(["--only", HOMEBREW_STEPS, "--yes", "--cleanup"]);
+    let output = command
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(
+        calls.contains(&"kill -TERM 124".to_owned()),
+        "the login item was not ended: {calls:?}"
+    );
+    assert!(
+        calls.contains(&format!("open -g -j -a {}", helper.display())),
+        "the login item was not reopened by its path: {calls:?}"
+    );
+
+    let text = stdout(&output);
+    assert!(text.contains("Quitting: Helper.app"), "output: {text}");
+    assert!(
+        text.contains("Opening: com.example.helper (login item)"),
         "output: {text}"
     );
 }
