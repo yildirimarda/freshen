@@ -201,6 +201,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Make the Homebrew steps work with Homebrew on Linux (`/home/linuxbrew/.linuxbrew`, no casks), covered by tests with injected paths
 - [ ] Add image-based distributions: `rpm-ostree upgrade` (Fedora Silverblue/Kinoite) and `bootc upgrade` as staged upgrades that announce the pending reboot, covered by recorded transcripts
 - [ ] (Optional, low priority) Detect Termux on Android (`TERMUX_VERSION`, `PREFIX` under `/data/data/com.termux`) and treat it as a Linux variant that upgrades with `pkg update` and `pkg upgrade` without root, covered by tests with injected environment
+- [ ] Trigger the native Docker Engine stop/restart cycle when apt, dnf, pacman or zypper upgrades the Docker package (`docker.io`/`docker-ce`), not only when the Homebrew `docker` formula is outdated, covered by stub-based tests
 
 ## Milestone 6: Windows
 
@@ -279,6 +280,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Build cache and volume reporting with `docker system df`, and opt-in `docker builder prune`
 - [ ] Support Docker contexts and remote engines safely (never touch a non-local context unless selected)
 - [ ] Restart containers that were running before a runtime restart even if they were started with `docker run --restart no`, using the recorded snapshot
+- [ ] Detect and control a rootless Docker Engine (`$XDG_RUNTIME_DIR/docker.sock`, `systemctl --user restart docker`), so it is not mistaken for an unreachable system daemon, covered by tests with injected facts
 
 ## Milestone 9: Configuration and UX
 
