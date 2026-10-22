@@ -22,9 +22,11 @@ use crate::check::{CheckResult, CheckSummary};
 use crate::cleanup::{self, CleanupReport};
 use crate::containers::{COLIMA_STOP, DOCKER};
 use crate::deadline::{self, Deadline};
-use crate::options::{RunOptions, SelectionFlag};
+use crate::options::RunOptions;
 use crate::snapshot::{RollbackCommand, SnapshotRecorder};
 use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
+
+pub use crate::step::SkipReason;
 
 /// The outcome of one step in a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -70,51 +72,6 @@ impl StepStatus {
 impl fmt::Display for StepStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
-    }
-}
-
-/// Why a step was skipped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SkipReason {
-    /// The tool managed by the step is not installed on this machine.
-    NotInstalled,
-    /// The step does not support the platform of the run.
-    UnsupportedPlatform,
-    /// `--only` or `--skip` excluded the step from the run.
-    NotSelected(SelectionFlag),
-    /// The configuration file disabled the step.
-    Disabled,
-    /// The step conflicts with an earlier step that is part of the run.
-    Conflict(StepId),
-    /// The package registry the step needs could not be reached.
-    RegistryUnreachable,
-    /// The run was interrupted before the step started.
-    Interrupted,
-}
-
-impl SkipReason {
-    /// Human-readable explanation shown in the summary.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::NotInstalled => "not installed",
-            Self::UnsupportedPlatform => "not supported on this platform",
-            Self::NotSelected(SelectionFlag::Only) => "not selected by --only",
-            Self::NotSelected(SelectionFlag::Skip) => "excluded by --skip",
-            Self::Disabled => "disabled in the configuration file",
-            Self::Conflict(_) => "conflicts with another step",
-            Self::RegistryUnreachable => "registry unreachable",
-            Self::Interrupted => "interrupted before it started",
-        }
-    }
-}
-
-impl fmt::Display for SkipReason {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Conflict(conflict) => write!(f, "conflicts with `{conflict}`"),
-            other => f.write_str(other.as_str()),
-        }
     }
 }
 
@@ -853,6 +810,7 @@ fn check_step(step: &dyn Step, options: &RunOptions) -> CheckResult {
         Ok(Detection::NotInstalled) => {
             CheckResult::skipped(step, SkipReason::NotInstalled, started.elapsed())
         }
+        Ok(Detection::Unavailable(reason)) => CheckResult::skipped(step, reason, started.elapsed()),
         Ok(Detection::Installed) => match step.check_with_options(options) {
             Ok(report) if report.is_up_to_date() => {
                 CheckResult::up_to_date(step, started.elapsed())
@@ -883,6 +841,9 @@ fn run_step(
 
     match step.detect() {
         Ok(Detection::NotInstalled) => StepResult::skipped(step, started.elapsed()),
+        Ok(Detection::Unavailable(reason)) => {
+            StepResult::skipped_because(step, reason, started.elapsed())
+        }
         Ok(Detection::Installed) if options.is_dry_run() => {
             StepResult::planned(step, started.elapsed())
         }
@@ -1270,6 +1231,47 @@ mod tests {
         assert_eq!(calls.detect.load(Ordering::SeqCst), 1);
         assert_eq!(calls.run.load(Ordering::SeqCst), 0);
         assert_eq!(calls.cleanup.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_step_that_is_installed_but_blocked_is_skipped_with_its_reason() {
+        let step = FakeStep::new("mas", "Mac App Store")
+            .detection(Detection::Unavailable(SkipReason::NotSignedIn));
+        let calls = step.calls();
+
+        let summary = run(&[&step]);
+
+        let result = &summary.steps()[0];
+        assert_eq!(result.status(), StepStatus::Skipped);
+        assert_eq!(result.skip_reason(), Some(SkipReason::NotSignedIn));
+        assert_eq!(result.error(), None);
+        assert_eq!(summary.skipped_count(), 1);
+        assert_eq!(summary.failed_count(), 0);
+        assert_exit_code(summary.exit_code(), ExitCode::SUCCESS);
+
+        assert_eq!(calls.detect.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.run.load(Ordering::SeqCst), 0);
+        assert_eq!(calls.check.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_blocked_step_is_skipped_in_check_mode_too() {
+        let step = FakeStep::new("mas", "Mac App Store")
+            .detection(Detection::Unavailable(SkipReason::NotSignedIn));
+        let calls = step.calls();
+        let steps: [&dyn Step; 1] = [&step];
+
+        let summary = Runner::new(steps).check();
+
+        assert_eq!(summary.steps()[0].status(), CheckStatus::Skipped);
+        assert_eq!(
+            summary.steps()[0].skip_reason(),
+            Some(SkipReason::NotSignedIn)
+        );
+        assert_eq!(summary.skipped_count(), 1);
+        assert_exit_code(summary.exit_code(), ExitCode::SUCCESS);
+
+        assert_eq!(calls.check.load(Ordering::SeqCst), 0);
     }
 
     #[test]

@@ -135,7 +135,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Detect apps that update themselves (Sparkle, Electron auto-update) and are mid-update, and wait instead of quitting them
 - [x] Preserve window/session state where possible: reopen apps in the same Space/display, hidden state preserved (`open -g -j`)
 - [x] Handle apps that were running as login items or menu-bar-only agents without a Dock icon
-- [ ] Add Mac App Store updates via `mas outdated` / `mas upgrade`, with a skip when not signed in
+- [x] Add Mac App Store updates via `mas outdated` / `mas upgrade`, with a skip when not signed in
 - [ ] Add macOS system updates: list via `softwareupdate --list` (report-only by default), opt-in `--install-macos-updates`, and detect pending reboot
 - [ ] Update Xcode Command Line Tools when `softwareupdate` lists them, and handle the common "CLT out of date after macOS update" brew error
 - [ ] Add `brew doctor` and `brew bundle cleanup` (when a Brewfile exists) as report-only checks
@@ -168,6 +168,9 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Detect an app that sets `LSBackgroundOnly` in its `Info.plist` and treat it like a menu-bar app, so an app without any icon at all is ended instead of quit through an Apple event, covered by tests
 - [ ] Find the app bundle of a bundle id that is only known by its id (a cask `uninstall` stanza), so an app without a Dock icon is detected, ended and reopened like any other app, covered by tests
 - [ ] Handle a cask that installs a LaunchAgent (a login item without an app bundle): stop the agent before the upgrade and start it again afterwards with `launchctl kickstart -k`, covered by stub-based tests
+- [ ] Apply the include and exclude lists to the Mac App Store apps, upgrading only the selected apps by their App Store id (`mas upgrade <id>`), so a listed app is neither upgraded nor reported as outdated, covered by tests
+- [ ] Detect a missing App Store account on `mas` 5 and newer, which have no `account` command, so the Mac App Store step is skipped instead of failing, covered by tests with recorded transcripts
+- [ ] Decide what the Mac App Store step does when `mas upgrade` needs a password: skip the upgrade in a non-interactive run or hand the terminal to `sudo`, so a scheduled run does not fail on a missing credential, covered by tests
 
 ## Milestone 5: Linux
 

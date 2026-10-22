@@ -21,6 +21,8 @@ pub enum DetectionState {
     Installed,
     /// The tool managed by the step is missing.
     NotInstalled,
+    /// The tool is installed, but the step cannot run in the current state.
+    Unavailable,
     /// The step does not support the platform, so detection was not attempted.
     Unsupported,
     /// Detection itself failed.
@@ -34,6 +36,7 @@ impl DetectionState {
         match self {
             Self::Installed => "installed",
             Self::NotInstalled => "not installed",
+            Self::Unavailable => "unavailable",
             Self::Unsupported => "not checked",
             Self::Failed(_) => "detection failed",
         }
@@ -181,10 +184,11 @@ fn list_step(
         };
     }
 
-    let detection = match step.detect() {
-        Ok(Detection::Installed) => DetectionState::Installed,
-        Ok(Detection::NotInstalled) => DetectionState::NotInstalled,
-        Err(error) => DetectionState::Failed(error),
+    let (detection, blocked) = match step.detect() {
+        Ok(Detection::Installed) => (DetectionState::Installed, None),
+        Ok(Detection::NotInstalled) => (DetectionState::NotInstalled, None),
+        Ok(Detection::Unavailable(reason)) => (DetectionState::Unavailable, Some(reason)),
+        Err(error) => (DetectionState::Failed(error), None),
     };
 
     let skip_reason = selection_reason(options.selection(), id)
@@ -194,6 +198,7 @@ fn list_step(
                 .get(&id)
                 .map(|&earlier| SkipReason::Conflict(earlier))
         })
+        .or(blocked)
         .or((detection == DetectionState::NotInstalled).then_some(SkipReason::NotInstalled));
 
     StepListing {
@@ -417,6 +422,24 @@ mod tests {
             Some(SkipReason::UnsupportedPlatform)
         );
         assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_step_that_is_installed_but_blocked_says_why_it_is_skipped() {
+        let registry = registry([TestStep::new("mas", &Platform::ALL)
+            .detection(Detection::Unavailable(SkipReason::NotSignedIn))]);
+
+        let listed = list(&registry, &StepSelection::new());
+
+        assert_eq!(listed.steps()[0].detection(), &DetectionState::Unavailable);
+        assert_eq!(
+            listed.steps()[0].skip_reason(),
+            Some(SkipReason::NotSignedIn)
+        );
+        assert!(
+            listed.to_string().contains("not signed in"),
+            "listing: {listed}"
+        );
     }
 
     #[test]

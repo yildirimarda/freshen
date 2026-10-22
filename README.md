@@ -1,6 +1,6 @@
 # freshen
 
-One command to keep a developer machine current: **Homebrew**, **Docker (Colima) images**, **uv tools** and **mise** (Node & friends) — in the right order, without babysitting.
+One command to keep a developer machine current: **Homebrew**, **Docker (Colima) images**, **uv tools**, **mise** (Node & friends) and **Mac App Store apps** — in the right order, without babysitting.
 
 ```bash
 freshen
@@ -16,6 +16,7 @@ The implementation is the Rust workspace under `crates/`: `freshen-lib` holds al
 | Colima / Docker | If `colima`/`lima` itself is about to be upgraded: bring compose projects down, stop standalone containers, stop Colima, upgrade, start Colima, bring everything back up. Afterwards: `docker compose pull` + `up -d` for running compose projects (only changed containers are recreated). With `--cleanup`: `docker image prune -f` |
 | uv | `uv tool upgrade --all`. With `--cleanup`: `uv cache prune` |
 | mise | `mise self-update` (only if mise was not installed via brew) → `mise upgrade`, plus a warning for processes still running on an old Node, Python, Java or Go version, naming the app that started them. With `--cleanup`: `mise prune -y` |
+| Mac App Store | `mas outdated` to list the App Store apps with a pending update → `mas upgrade` to install them. macOS only, and skipped when no Apple Account is signed in |
 
 A failing step never aborts the run. Failures are collected and listed at the end (exit code 1).
 
@@ -31,6 +32,7 @@ A failing step never aborts the run. Failures are collected and listed at the en
 - **Apps without a Dock icon are handled too.** A menu-bar app (an agent that sets `LSUIElement`) and a login item (a helper in `Contents/Library/LoginItems`) run without an icon in the Dock, so macOS does not address them with an Apple event. freshen ends their process instead (`kill -TERM`, `kill -9` with `--force-kill`), which needs no Automation permission, and starts them again in the background: a menu-bar app with `open -g -j -b`, a login item by its path (`open -g -j -a`), the way macOS starts it at login. A login item that the app started again by itself is left alone.
 - **Reopening keeps the apps the way they were.** Before an app is quit, freshen asks macOS whether the app is hidden and where its window is. A hidden app is reopened hidden (`open -g -j`), and the window of a visible app is put back where it was, so the app comes back on the display it was on (macOS decides which Space the window joins). The state is read through System Events, so macOS asks once for the permission to control it; without that permission the apps are simply reopened in the background as before.
 - **`mise upgrade` is used without `--bump`** on purpose: with `node@lts` in your config, `--bump` would pin `lts` to a fixed version.
+- **The Mac App Store is only updated when an account is signed in.** Installing an App Store app needs an Apple Account that is signed in to the App Store. When none is signed in, freshen skips the step (`not signed in`) instead of failing the run, and tells you to sign in with the App Store app and run `mas upgrade` by hand. The step needs [`mas`](https://github.com/mas-cli/mas) on `PATH`; `mas` 5 and newer have no `account` command, so on those versions freshen cannot ask and simply tries the upgrade. `mas` 5 and newer also install App Store apps with administrator rights, so the upgrade needs cached `sudo` credentials; without them freshen says so and points at `sudo mas upgrade`.
 - **Long-running sessions are never broken silently.** If an upgrade would break a session or interrupt a running Docker build, freshen prints a warning naming what will be interrupted. See [supported session managers](#supported-terminals-and-session-managers).
 - **Every run starts with preflight checks**: the network must be reachable, at least 1 GiB must be free, the battery must be at or above 20% while discharging, and the connection must not be metered or a hotspot. A failed check stops before any step runs (exit code 3) and lists every problem. Each check can be disabled with `--skip-network-check`, `--skip-disk-check`, `--skip-battery-check` or `--skip-metered-check`; `--min-free-disk-gib` and `--battery-threshold` change the thresholds. `--dry-run` and `--check` skip preflight because they change nothing.
 - **Another package manager must not be running.** Before changing anything, freshen checks for Homebrew, apt/dpkg (including a held dpkg or apt lock) and winget. It waits up to 30 seconds for the other process to finish, then stops with exit code 3 and names the process and its PID. Use `--package-manager-wait <SECONDS>` to change the wait (0 aborts immediately) or `--skip-package-manager-check` to bypass the check. `--dry-run` and `--check` skip it because they change nothing.
@@ -52,7 +54,7 @@ Session managers checked before an upgrade: zellij, tmux, OpenSSH, GNU screen, b
 
 - macOS, Linux or Windows; a prebuilt `freshen` binary or Rust 1.81+ to build from source
 - [Homebrew](https://brew.sh) — required for the Homebrew section
-- Optional: `colima` + `docker`, `uv`, `mise`
+- Optional: `colima` + `docker`, `uv`, `mise`, `mas` (Mac App Store, macOS only)
 
 ## Usage
 
