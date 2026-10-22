@@ -144,7 +144,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Detect the active container runtime from `DOCKER_HOST`, `docker context show` and the well-known socket paths (Colima, OrbStack, Docker Desktop, Rancher Desktop, Podman, native `/var/run/docker.sock`), show it in `--list-steps` and the run summary, and allow an override with a `--container-runtime` flag, covered by tests with injected environment and socket facts
 - [x] Add Docker Desktop on macOS: detect it, quit it with `docker desktop stop` (falling back to the AppleScript quit) before its cask is upgraded, start it again afterwards and bring compose projects and standalone containers back with the same restore logic as Colima, covered by stub-based tests
 - [x] Add OrbStack: detect it with `orbctl status`, stop and start it with `orbctl stop` and `orbctl start` around an upgrade of its cask, and restore containers, covered by stub-based tests
-- [ ] Add Rancher Desktop: stop and start it with `rdctl shutdown` and `rdctl start` around its cask upgrade and restore containers, covered by stub-based tests
+- [x] Add Rancher Desktop: stop and start it with `rdctl shutdown` and `rdctl start` around its cask upgrade and restore containers, covered by stub-based tests
 - [ ] Add Podman machine: stop and start it with `podman machine stop` and `podman machine start` around a Podman upgrade and restore containers, covered by stub-based tests
 - [ ] Add standalone Lima instances (`limactl list`, `stop`, `start`) that are not managed by Colima, covered by stub-based tests
 - [ ] Detect the compose command in use (`docker compose`, `docker-compose`, `podman compose`) and use it consistently for pull, up and down, covered by tests with injected command lookups

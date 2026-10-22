@@ -662,6 +662,77 @@ impl ContainerRuntime for OrbStackRuntime {
     }
 }
 
+/// The Homebrew cask that installs Rancher Desktop.
+const RANCHER_DESKTOP_CASK: &str = "rancher";
+
+/// Rancher Desktop on macOS.
+///
+/// Rancher Desktop ships as the `rancher` cask, so its cask upgrade triggers
+/// the stop/start cycle. `rdctl shutdown` stops the application and
+/// `rdctl start` brings it back; `rdctl list-settings` only succeeds while the
+/// application is running, which is what `is_running` relies on.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RancherDesktopRuntime;
+
+impl RancherDesktopRuntime {
+    /// Creates the Rancher Desktop runtime.
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl ContainerRuntime for RancherDesktopRuntime {
+    fn name(&self) -> &'static str {
+        "rancher-desktop"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Rancher Desktop"
+    }
+
+    fn command(&self) -> &'static str {
+        "rdctl"
+    }
+
+    fn detect(&self) -> Detection {
+        if command_exists(self.command()) {
+            Detection::Installed
+        } else {
+            Detection::NotInstalled
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        CommandSpec::new(self.command())
+            .arg("list-settings")
+            .run()
+            .is_ok()
+    }
+
+    fn stop(&self) -> Result<(), ProcessError> {
+        CommandSpec::new(self.command())
+            .arg("shutdown")
+            .run()
+            .map(|_| ())
+    }
+
+    fn start(&self) -> Result<(), ProcessError> {
+        CommandSpec::new(self.command())
+            .arg("start")
+            .run()
+            .map(|_| ())
+    }
+
+    fn restart_formulae(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn restart_casks(&self) -> &'static [&'static str] {
+        &[RANCHER_DESKTOP_CASK]
+    }
+}
+
 /// A compose project and the config files needed to address it again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComposeProject {
@@ -815,13 +886,16 @@ pub fn register_with_runtime(
 ///
 /// A runtime that has no implementation yet keeps the Colima/lima steps, so
 /// detection never removes container handling from a run. Colima/lima,
-/// OrbStack and Docker Desktop have their own implementations.
+/// OrbStack, Docker Desktop and Rancher Desktop have their own implementations.
 #[must_use]
 pub fn register_for(registry: Registry, kind: Option<ContainerRuntimeKind>) -> Registry {
     match kind {
         Some(ContainerRuntimeKind::OrbStack) => register_with_runtime(registry, OrbStackRuntime),
         Some(ContainerRuntimeKind::DockerDesktop) => {
             register_with_runtime(registry, DockerDesktopRuntime)
+        }
+        Some(ContainerRuntimeKind::RancherDesktop) => {
+            register_with_runtime(registry, RancherDesktopRuntime)
         }
         _ => register(registry),
     }
@@ -1325,7 +1399,8 @@ mod tests {
         parse_standalone_containers, register, register_for, register_with_runtime,
         ActiveContainerRuntime, ColimaRuntime, ComposeProject, ContainerRuntime,
         ContainerRuntimeKind, ContainerRuntimeProbe, ContainerRuntimeSource, DockerDesktopRuntime,
-        OrbStackRuntime, StandaloneContainer, COLIMA_START, COLIMA_STOP, DOCKER, PS_FORMAT,
+        OrbStackRuntime, RancherDesktopRuntime, StandaloneContainer, COLIMA_START, COLIMA_STOP,
+        DOCKER, PS_FORMAT,
     };
     use crate::homebrew;
     use crate::options::RunOptions;
@@ -1672,8 +1747,55 @@ mod tests {
     }
 
     #[test]
+    fn rancher_desktop_runtime_declares_its_cask_as_the_restart_trigger() {
+        let runtime = RancherDesktopRuntime::new();
+
+        assert_eq!(runtime.name(), "rancher-desktop");
+        assert_eq!(runtime.display_name(), "Rancher Desktop");
+        assert_eq!(runtime.command(), "rdctl");
+        assert!(runtime.restart_formulae().is_empty());
+        assert_eq!(runtime.restart_casks(), ["rancher"]);
+        assert!(runtime.triggers_restart("rancher"));
+        assert!(!runtime.triggers_restart("rancher-desktop"));
+        assert!(!runtime.triggers_restart("docker"));
+        assert!(!runtime.triggers_restart("colima"));
+    }
+
+    #[test]
+    fn rancher_desktop_stops_before_casks_and_starts_after_them() {
+        let registry = homebrew::register(register_for(
+            Registry::new(),
+            Some(ContainerRuntimeKind::RancherDesktop),
+        ));
+        let ordered: Vec<StepId> = registry
+            .ordered_for(Platform::Macos)
+            .unwrap_or_else(|error| panic!("registry order failed: {error}"))
+            .iter()
+            .map(|step| step.id())
+            .collect();
+
+        assert_eq!(
+            ordered,
+            [
+                "brew",
+                "brew-formulae",
+                "colima-stop",
+                "brew-services",
+                "brew-casks",
+                "colima-start",
+                "brew-autoremove",
+                "brew-cleanup",
+                "brew-doctor",
+                "brew-bundle-cleanup",
+                "brew-reopen",
+                "docker",
+            ]
+        );
+    }
+
+    #[test]
     fn a_runtime_without_an_implementation_keeps_the_colima_steps() {
-        let registry = register_for(Registry::new(), Some(ContainerRuntimeKind::RancherDesktop));
+        let registry = register_for(Registry::new(), Some(ContainerRuntimeKind::Podman));
         let names: Vec<_> = registry
             .steps()
             .map(|step| step.display_name().to_owned())
