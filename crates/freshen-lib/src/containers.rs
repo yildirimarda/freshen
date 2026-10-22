@@ -733,6 +733,95 @@ impl ContainerRuntime for RancherDesktopRuntime {
     }
 }
 
+/// The Podman machine on macOS and Windows.
+///
+/// Podman runs containers inside a virtual machine. Upgrading the `podman`
+/// formula can restart that machine, so the formula triggers the stop/start
+/// cycle. `podman machine list --format json` reports whether a machine is
+/// running, and `podman machine stop` / `podman machine start` control it.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PodmanRuntime;
+
+impl PodmanRuntime {
+    /// Creates the Podman machine runtime.
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl ContainerRuntime for PodmanRuntime {
+    fn name(&self) -> &'static str {
+        "podman-machine"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Podman machine"
+    }
+
+    fn command(&self) -> &'static str {
+        "podman machine"
+    }
+
+    fn detect(&self) -> Detection {
+        if command_exists("podman") {
+            Detection::Installed
+        } else {
+            Detection::NotInstalled
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        let Ok(output) = CommandSpec::new("podman")
+            .args(["machine", "list", "--format", "json"])
+            .neutral_locale()
+            .run()
+        else {
+            return false;
+        };
+        podman_machine_running(output.stdout())
+    }
+
+    fn stop(&self) -> Result<(), ProcessError> {
+        CommandSpec::new("podman")
+            .args(["machine", "stop"])
+            .run()
+            .map(|_| ())
+    }
+
+    fn start(&self) -> Result<(), ProcessError> {
+        CommandSpec::new("podman")
+            .args(["machine", "start"])
+            .run()
+            .map(|_| ())
+    }
+
+    fn restart_formulae(&self) -> &'static [&'static str] {
+        &["podman"]
+    }
+
+    fn restart_casks(&self) -> &'static [&'static str] {
+        &[]
+    }
+}
+
+fn podman_machine_running(json: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(json) else {
+        return false;
+    };
+    value
+        .as_array()
+        .map(|machines| {
+            machines.iter().any(|machine| {
+                machine
+                    .get("Running")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
 /// A compose project and the config files needed to address it again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComposeProject {
@@ -886,7 +975,8 @@ pub fn register_with_runtime(
 ///
 /// A runtime that has no implementation yet keeps the Colima/lima steps, so
 /// detection never removes container handling from a run. Colima/lima,
-/// OrbStack, Docker Desktop and Rancher Desktop have their own implementations.
+/// OrbStack, Docker Desktop, Rancher Desktop and Podman have their own
+/// implementations.
 #[must_use]
 pub fn register_for(registry: Registry, kind: Option<ContainerRuntimeKind>) -> Registry {
     match kind {
@@ -897,6 +987,7 @@ pub fn register_for(registry: Registry, kind: Option<ContainerRuntimeKind>) -> R
         Some(ContainerRuntimeKind::RancherDesktop) => {
             register_with_runtime(registry, RancherDesktopRuntime)
         }
+        Some(ContainerRuntimeKind::Podman) => register_with_runtime(registry, PodmanRuntime),
         _ => register(registry),
     }
 }
@@ -1396,11 +1487,11 @@ fn command_exists(program: &str) -> bool {
 mod tests {
     use super::{
         compose_command, detect_active_runtime, parse_compose_projects,
-        parse_standalone_containers, register, register_for, register_with_runtime,
-        ActiveContainerRuntime, ColimaRuntime, ComposeProject, ContainerRuntime,
-        ContainerRuntimeKind, ContainerRuntimeProbe, ContainerRuntimeSource, DockerDesktopRuntime,
-        OrbStackRuntime, RancherDesktopRuntime, StandaloneContainer, COLIMA_START, COLIMA_STOP,
-        DOCKER, PS_FORMAT,
+        parse_standalone_containers, podman_machine_running, register, register_for,
+        register_with_runtime, ActiveContainerRuntime, ColimaRuntime, ComposeProject,
+        ContainerRuntime, ContainerRuntimeKind, ContainerRuntimeProbe, ContainerRuntimeSource,
+        DockerDesktopRuntime, OrbStackRuntime, PodmanRuntime, RancherDesktopRuntime,
+        StandaloneContainer, COLIMA_START, COLIMA_STOP, DOCKER, PS_FORMAT,
     };
     use crate::homebrew;
     use crate::options::RunOptions;
@@ -1794,8 +1885,71 @@ mod tests {
     }
 
     #[test]
+    fn podman_runtime_declares_its_formula_as_the_restart_trigger() {
+        let runtime = PodmanRuntime::new();
+
+        assert_eq!(runtime.name(), "podman-machine");
+        assert_eq!(runtime.display_name(), "Podman machine");
+        assert_eq!(runtime.command(), "podman machine");
+        assert_eq!(runtime.restart_formulae(), ["podman"]);
+        assert!(runtime.restart_casks().is_empty());
+        assert!(runtime.triggers_restart("podman"));
+        assert!(!runtime.triggers_restart("podman-desktop"));
+        assert!(!runtime.triggers_restart("docker"));
+        assert!(!runtime.triggers_restart("colima"));
+    }
+
+    #[test]
+    fn podman_stops_before_formulae_and_starts_after_them() {
+        let registry = homebrew::register(register_for(
+            Registry::new(),
+            Some(ContainerRuntimeKind::Podman),
+        ));
+        let ordered: Vec<StepId> = registry
+            .ordered_for(Platform::Macos)
+            .unwrap_or_else(|error| panic!("registry order failed: {error}"))
+            .iter()
+            .map(|step| step.id())
+            .collect();
+
+        assert_eq!(
+            ordered,
+            [
+                "brew",
+                "colima-stop",
+                "brew-formulae",
+                "colima-start",
+                "brew-services",
+                "brew-casks",
+                "brew-autoremove",
+                "brew-cleanup",
+                "brew-doctor",
+                "brew-bundle-cleanup",
+                "brew-reopen",
+                "docker",
+            ]
+        );
+    }
+
+    #[test]
+    fn podman_machine_running_reads_the_running_flag() {
+        assert!(podman_machine_running(
+            r#"[{"Name":"podman-machine-default","Running":true}]"#
+        ));
+        assert!(podman_machine_running(
+            r#"[{"Name":"stopped","Running":false},{"Name":"default","Running":true}]"#
+        ));
+        assert!(!podman_machine_running(
+            r#"[{"Name":"podman-machine-default","Running":false}]"#
+        ));
+        assert!(!podman_machine_running("[]"));
+        assert!(!podman_machine_running(""));
+        assert!(!podman_machine_running("not json"));
+    }
+
+    #[test]
     fn a_runtime_without_an_implementation_keeps_the_colima_steps() {
-        let registry = register_for(Registry::new(), Some(ContainerRuntimeKind::Podman));
+        let registry = register_for(Registry::new(), Some(ContainerRuntimeKind::NativeDocker));
         let names: Vec<_> = registry
             .steps()
             .map(|step| step.display_name().to_owned())
