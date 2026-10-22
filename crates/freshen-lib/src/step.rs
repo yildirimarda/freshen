@@ -63,6 +63,11 @@ pub enum SkipReason {
     RegistryUnreachable,
     /// The account the step manages is not signed in to its service.
     NotSignedIn,
+    /// The configuration file the step works with does not exist.
+    ///
+    /// The step is skipped with this reason instead of failing, for example
+    /// because there is no Brewfile for the Homebrew bundle step.
+    MissingConfiguration,
     /// The run was interrupted before the step started.
     Interrupted,
 }
@@ -80,6 +85,7 @@ impl SkipReason {
             Self::Conflict(_) => "conflicts with another step",
             Self::RegistryUnreachable => "registry unreachable",
             Self::NotSignedIn => "not signed in",
+            Self::MissingConfiguration => "no configuration file found",
             Self::Interrupted => "interrupted before it started",
         }
     }

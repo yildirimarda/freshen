@@ -1882,3 +1882,188 @@ fn a_failed_check_about_the_outdated_command_line_tools_names_the_fix() {
         "output: {text}"
     );
 }
+
+/// The output of a `brew doctor` that found a problem.
+const DOCTOR_WARNING: &str = "Please note that these warnings are just used to help the Homebrew maintainers\n\
+                              with debugging if you file an issue. If everything you use Homebrew for\n\
+                              is working fine: please don't worry or file an issue; just ignore this. Thanks!\n\
+                              \n\
+                              Warning: Your Homebrew is outdated. Run `brew update` to update it.\n";
+
+/// The output of a `brew bundle cleanup` that found a package to remove.
+const BUNDLE_CLEANUP_LISTING: &str = "Would uninstall formulae:\n\
+                                      wget\n\
+                                      Run `brew bundle cleanup --force` to make these changes.\n";
+
+/// A directory with a Brewfile in it, so that the bundle cleanup step has
+/// something to report.
+fn project_with_brewfile(tools: &StubTools) -> std::path::PathBuf {
+    let project = tools.home().join("project");
+    std::fs::create_dir_all(&project)
+        .unwrap_or_else(|error| panic!("failed to create {}: {error}", project.display()));
+    std::fs::write(project.join("Brewfile"), "brew \"htop\"\n")
+        .unwrap_or_else(|error| panic!("failed to write the Brewfile: {error}"));
+    project
+}
+
+/// A directory without a Brewfile in it.
+fn project_without_brewfile(tools: &StubTools) -> std::path::PathBuf {
+    let project = tools.home().join("project");
+    std::fs::create_dir_all(&project)
+        .unwrap_or_else(|error| panic!("failed to create {}: {error}", project.display()));
+    project
+}
+
+#[test]
+fn brew_doctor_reports_its_warnings_without_changing_anything() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_responses("brew", &[StubOutput::stderr(DOCTOR_WARNING).with_status(1)]);
+
+    let output = run(&tools, &["--only", "brew-doctor"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(tools.step_calls(), ["brew doctor"]);
+    let text = stdout(&output);
+    assert!(
+        text.contains("Your Homebrew is outdated. Run `brew update` to update it."),
+        "output: {text}"
+    );
+    assert!(text.contains("nothing is changed"), "output: {text}");
+}
+
+#[test]
+fn brew_doctor_reports_a_healthy_installation() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_responses(
+        "brew",
+        &[StubOutput::stdout("Your system is ready to brew.\n")],
+    );
+
+    let output = run(&tools, &["--only", "brew-doctor"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(tools.step_calls(), ["brew doctor"]);
+    assert!(
+        stdout(&output).contains("found no problems"),
+        "output: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn the_check_of_brew_doctor_reports_the_warnings() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_responses("brew", &[StubOutput::stderr(DOCTOR_WARNING).with_status(1)]);
+
+    let output = run(&tools, &["--check", "--only", "brew-doctor"]);
+
+    assert_eq!(output.status.code(), Some(2), "stderr: {}", stderr(&output));
+    assert_eq!(tools.step_calls(), ["brew doctor"]);
+    let text = stdout(&output);
+    assert!(text.contains("Homebrew doctor:"), "output: {text}");
+    assert!(
+        text.contains("Your Homebrew is outdated. Run `brew update` to update it."),
+        "output: {text}"
+    );
+}
+
+#[test]
+fn a_failing_brew_doctor_without_output_fails_the_step() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_responses("brew", &[StubOutput::new().with_status(1)]);
+
+    let output = run(&tools, &["--check", "--only", "brew-doctor"]);
+
+    assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("failed during check"),
+        "output: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_broken_brew_doctor_fails_the_step() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_responses(
+        "brew",
+        &[StubOutput::stderr("Error: something went wrong\n").with_status(1)],
+    );
+
+    let output = run(&tools, &["--check", "--only", "brew-doctor"]);
+
+    assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("failed during check"),
+        "output: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn brew_bundle_cleanup_reports_the_packages_that_are_not_in_the_brewfile() {
+    let tools = StubTools::new(&["brew"]);
+    let project = project_with_brewfile(&tools);
+    tools.set_responses(
+        "brew",
+        &[StubOutput::stdout(BUNDLE_CLEANUP_LISTING).with_status(1)],
+    );
+
+    let output = tools
+        .command()
+        .env_remove("HOMEBREW_BUNDLE_FILE")
+        .current_dir(&project)
+        .args(["--only", "brew-bundle-cleanup"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(tools.step_calls(), ["brew bundle cleanup"]);
+    let text = stdout(&output);
+    assert!(
+        text.contains("wget (formula not in the Brewfile)"),
+        "output: {text}"
+    );
+    assert!(text.contains("nothing is removed"), "output: {text}");
+}
+
+#[test]
+fn the_bundle_cleanup_step_is_skipped_without_a_brewfile() {
+    let tools = StubTools::new(&["brew"]);
+    let project = project_without_brewfile(&tools);
+
+    let output = tools
+        .command()
+        .env_remove("HOMEBREW_BUNDLE_FILE")
+        .current_dir(&project)
+        .args(["--only", "brew-bundle-cleanup"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        tools.step_calls().is_empty(),
+        "calls: {:?}",
+        tools.step_calls()
+    );
+    assert!(
+        stdout(&output).contains("no configuration file found"),
+        "output: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_missing_brew_skips_the_doctor_and_the_bundle_cleanup() {
+    let tools = StubTools::new(&[]);
+
+    let output = run(&tools, &["--only", "brew-doctor,brew-bundle-cleanup"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(tools.step_calls().is_empty());
+    assert!(
+        stdout(&output).contains("0 ok, 0 planned, 2 skipped, 0 failed"),
+        "summary: {}",
+        stdout(&output)
+    );
+}

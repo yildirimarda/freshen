@@ -722,6 +722,8 @@ mod tests {
                     "brew-casks",
                     "brew-autoremove",
                     "brew-cleanup",
+                    "brew-doctor",
+                    "brew-bundle-cleanup",
                     "brew-reopen",
                     "docker",
                 ],

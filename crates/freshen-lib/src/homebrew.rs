@@ -8,6 +8,10 @@
 //! Casks are inspected with `brew info --cask --json=v2` before the upgrade so
 //! the app artifacts a cask will replace are known. Running apps are quit
 //! before the upgrade and reopened after cleanup through [`crate::apps`].
+//!
+//! The doctor and the bundle cleanup are report-only: `brew doctor` and
+//! `brew bundle cleanup` only list what they found, and the steps show that
+//! list without changing anything.
 
 use std::env;
 use std::io;
@@ -28,7 +32,9 @@ use crate::policy::AppLists;
 use crate::process::{CommandSpec, ProcessError, ProcessOutput, NETWORK_RETRIES};
 use crate::registry::Registry;
 use crate::snapshot::{self, SnapshotSection};
-use crate::step::{CheckReport, Detection, Operation, OutdatedItem, Step, StepError, StepId};
+use crate::step::{
+    CheckReport, Detection, Operation, OutdatedItem, SkipReason, Step, StepError, StepId,
+};
 use crate::system::detect_terminal_app;
 use crate::warnings::warn_about_breakable_sessions;
 use crate::xcode;
@@ -38,6 +44,8 @@ pub(crate) const FORMULAE: StepId = "brew-formulae";
 const CASKS: StepId = "brew-casks";
 const AUTOREMOVE: StepId = "brew-autoremove";
 const CLEANUP: StepId = "brew-cleanup";
+const DOCTOR: StepId = "brew-doctor";
+const BUNDLE_CLEANUP: StepId = "brew-bundle-cleanup";
 pub(crate) const REOPEN: StepId = "brew-reopen";
 const SERVICES: StepId = "brew-services";
 
@@ -112,7 +120,9 @@ fn reopen_queued(queue: &ReopenQueue, system: &dyn AppSystem, message: &str, int
 ///
 /// Prerequisites make the ordering explicit: formulae after the update, casks
 /// after formulae, autoremove and cleanup last, and the quit apps are reopened
-/// only after cleanup.
+/// only after cleanup. The doctor and the bundle cleanup report on the state
+/// the run leaves behind, so they run after the cleanup and before the apps
+/// come back.
 #[must_use]
 pub fn register(registry: Registry) -> Registry {
     let reopen = ReopenQueue::default();
@@ -124,6 +134,8 @@ pub fn register(registry: Registry) -> Registry {
         .with(CasksStep::new(reopen.clone()))
         .with(AutoremoveStep)
         .with(CleanupStep)
+        .with(DoctorStep::new())
+        .with(BundleCleanupStep::new())
         .with(ReopenStep::new(reopen))
 }
 
@@ -704,6 +716,147 @@ fn report_cask_apps(apps: &[String]) {
     let installed = installed_app_paths(apps, &app_roots());
     for path in installed {
         human!("Installed cask app: {}", path.display());
+    }
+}
+
+/// The Brewfile `brew bundle cleanup` reads.
+///
+/// Homebrew reads `Brewfile` from the working directory, unless
+/// `HOMEBREW_BUNDLE_FILE` points at another file. Returns `None` when there
+/// is no such file, because `brew bundle cleanup` then has nothing to do.
+fn brewfile() -> Option<PathBuf> {
+    let file = match env::var_os("HOMEBREW_BUNDLE_FILE") {
+        Some(file) if !file.is_empty() => Some(PathBuf::from(file)),
+        _ => None,
+    };
+
+    brewfile_in(&env::current_dir().ok()?, file)
+}
+
+/// The Brewfile in `directory`, when there is one.
+///
+/// `file` is the file `HOMEBREW_BUNDLE_FILE` points at, if it is set.
+fn brewfile_in(directory: &Path, file: Option<PathBuf>) -> Option<PathBuf> {
+    let file = file.unwrap_or_else(|| PathBuf::from("Brewfile"));
+    let path = if file.is_absolute() {
+        file
+    } else {
+        directory.join(file)
+    };
+
+    path.is_file().then_some(path)
+}
+
+/// The notice `brew doctor` prints before its first warning.
+///
+/// The notice explains that the warnings are meant for the Homebrew
+/// maintainers; it is not a finding of its own.
+const DOCTOR_NOTICE: &str = "Please note that these warnings are just used to help";
+
+/// Parses the findings of `brew doctor`.
+///
+/// Homebrew prints every finding as a `Warning: ` block, with the remedy on
+/// the lines below it. The findings are printed on stderr; older Homebrew
+/// versions printed them on stdout, so both are looked at.
+fn parse_doctor_findings(stderr: &str, stdout: &str) -> Vec<DoctorFinding> {
+    let findings = parse_doctor_warnings(stderr);
+    if findings.is_empty() {
+        return parse_doctor_warnings(stdout);
+    }
+    findings
+}
+
+/// Parses the `Warning: ` blocks of a `brew doctor` output.
+fn parse_doctor_warnings(output: &str) -> Vec<DoctorFinding> {
+    let mut findings: Vec<DoctorFinding> = Vec::new();
+    let mut block: Vec<String> = Vec::new();
+    let mut in_notice = false;
+
+    for line in output.lines() {
+        let line = line.trim();
+
+        // The notice that precedes the first warning ends at the empty line
+        // below it.
+        if in_notice && !line.starts_with("Warning: ") {
+            in_notice = !line.is_empty();
+            continue;
+        }
+        in_notice = false;
+
+        if line.starts_with(DOCTOR_NOTICE) {
+            in_notice = true;
+            continue;
+        }
+
+        if line.is_empty() {
+            continue;
+        }
+
+        if let Some(finding) = line.strip_prefix("Warning: ") {
+            if !block.is_empty() {
+                findings.push(DoctorFinding::from_block(&block));
+            }
+            block.clear();
+            block.push(finding.trim().to_owned());
+            continue;
+        }
+
+        // A line that follows a warning belongs to it: it is the remedy
+        // Homebrew suggests for the finding.
+        if !block.is_empty() {
+            block.push(line.to_owned());
+        }
+    }
+
+    if !block.is_empty() {
+        findings.push(DoctorFinding::from_block(&block));
+    }
+
+    findings
+}
+
+/// The hint `brew bundle cleanup` prints after it listed the packages.
+const BUNDLE_HINT: &str = "Run `brew bundle cleanup --force`";
+
+/// Parses the packages `brew bundle cleanup` would remove.
+///
+/// The command prints one group per package kind, with the packages of the
+/// group below it.
+fn parse_bundle_cleanup(stdout: &str) -> Vec<BundlePackage> {
+    let mut packages = Vec::new();
+    let mut kind = "package";
+
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with(BUNDLE_HINT) {
+            continue;
+        }
+
+        if let Some(header) = line.strip_suffix(':') {
+            kind = bundle_kind(header);
+            continue;
+        }
+
+        packages.push(BundlePackage {
+            name: line.to_owned(),
+            kind: kind.to_owned(),
+        });
+    }
+
+    packages
+}
+
+/// The kind of package a `brew bundle cleanup` group names.
+fn bundle_kind(header: &str) -> &'static str {
+    let header = header.to_ascii_lowercase();
+    if header.contains("cask") {
+        "cask"
+    } else if header.contains("formula") || header.contains("brew") {
+        "formula"
+    } else if header.contains("tap") {
+        "tap"
+    } else {
+        "package"
     }
 }
 
@@ -1413,6 +1566,290 @@ impl Step for CleanupStep {
     }
 }
 
+/// The `brew doctor` step: a report-only check of the Homebrew installation.
+///
+/// `brew doctor` never changes anything: it reports what it found and exits
+/// with a non-zero status when it found something. freshen shows the findings
+/// and never tries to fix them.
+struct DoctorStep {
+    /// The findings of the last `brew doctor`, so that a run does not ask the
+    /// command twice.
+    findings: Mutex<Option<Vec<DoctorFinding>>>,
+}
+
+/// One finding of `brew doctor`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DoctorFinding {
+    /// What Homebrew found.
+    message: String,
+    /// How to fix it, when Homebrew says so.
+    remedy: Option<String>,
+}
+
+impl DoctorFinding {
+    /// The item the check report shows for this finding.
+    fn item(&self) -> OutdatedItem {
+        let item = OutdatedItem::new(self.message.clone());
+        match &self.remedy {
+            Some(remedy) => item.with_reason(remedy.clone()),
+            None => item,
+        }
+    }
+
+    /// Builds a finding from the lines of one `Warning: ` block.
+    ///
+    /// The first line is what Homebrew found, the lines below it are the
+    /// remedy it suggests.
+    fn from_block(lines: &[String]) -> Self {
+        let Some((message, rest)) = lines.split_first() else {
+            return Self {
+                message: String::new(),
+                remedy: None,
+            };
+        };
+
+        let remedy = if rest.is_empty() {
+            None
+        } else {
+            Some(rest.join(" "))
+        };
+
+        Self {
+            message: message.clone(),
+            remedy,
+        }
+    }
+}
+
+impl DoctorStep {
+    fn new() -> Self {
+        Self {
+            findings: Mutex::new(None),
+        }
+    }
+
+    /// The findings of `brew doctor`.
+    ///
+    /// The command only runs when the check did not run yet, so that a run
+    /// asks Homebrew once and not twice.
+    fn findings(&self, operation: Operation) -> Result<Vec<DoctorFinding>, StepError> {
+        if let Some(findings) = lock(&self.findings).clone() {
+            return Ok(findings);
+        }
+
+        let findings = self.doctor(operation)?;
+        *lock(&self.findings) = Some(findings.clone());
+        Ok(findings)
+    }
+
+    /// Runs `brew doctor` and parses what it printed.
+    fn doctor(&self, operation: Operation) -> Result<Vec<DoctorFinding>, StepError> {
+        let output = CommandSpec::new("brew")
+            .args(["doctor"])
+            .neutral_locale()
+            .retry_transient_network(NETWORK_RETRIES)
+            .run();
+
+        match output {
+            Ok(output) => Ok(parse_doctor_findings(output.stderr(), output.stdout())),
+            Err(error) => {
+                // `brew doctor` exits with a non-zero status when it found
+                // something, so its output is the report and not a failure.
+                let Some(output) = error.output() else {
+                    return Err(brew_failure(DOCTOR, operation, &error));
+                };
+                let findings = parse_doctor_findings(output.stderr(), output.stdout());
+                if findings.is_empty() {
+                    return Err(brew_failure(DOCTOR, operation, &error));
+                }
+                Ok(findings)
+            }
+        }
+    }
+}
+
+impl Step for DoctorStep {
+    fn id(&self) -> StepId {
+        DOCTOR
+    }
+
+    fn display_name(&self) -> &str {
+        "Homebrew doctor"
+    }
+
+    fn detect(&self) -> Result<Detection, StepError> {
+        Ok(detect_brew())
+    }
+
+    fn check(&self) -> Result<CheckReport, StepError> {
+        let findings = self.findings(Operation::Check)?;
+        Ok(CheckReport::from_items(
+            findings.iter().map(DoctorFinding::item),
+        ))
+    }
+
+    fn run(&self) -> Result<(), StepError> {
+        let findings = self.findings(Operation::Run)?;
+        if findings.is_empty() {
+            human!("brew-doctor: `brew doctor` found no problems");
+            return Ok(());
+        }
+
+        human!(
+            "brew-doctor: {} warning(s) from `brew doctor` (nothing is changed)",
+            findings.len()
+        );
+        for finding in &findings {
+            human!("  - {}", finding.item());
+        }
+        Ok(())
+    }
+
+    fn prerequisites(&self) -> &'static [StepId] {
+        &[BREW]
+    }
+
+    fn platforms(&self) -> &'static [Platform] {
+        &HOMEBREW_PLATFORMS
+    }
+}
+
+/// The `brew bundle cleanup` step: a report-only check of the Brewfile.
+///
+/// `brew bundle cleanup` removes every package that is not in the Brewfile.
+/// Without `--force` it only lists what it would remove, and that is the form
+/// freshen runs: the step reports the packages, it never removes one.
+struct BundleCleanupStep {
+    /// The packages of the last `brew bundle cleanup`, so that a run does not
+    /// ask the command twice.
+    packages: Mutex<Option<Vec<BundlePackage>>>,
+}
+
+/// One package `brew bundle cleanup` would remove.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BundlePackage {
+    /// Name of the package.
+    name: String,
+    /// What kind of package it is, for example `"formula"`.
+    kind: String,
+}
+
+impl BundlePackage {
+    /// The item the check report shows for this package.
+    fn item(&self) -> OutdatedItem {
+        OutdatedItem::new(self.name.clone())
+            .with_reason(format!("{} not in the Brewfile", self.kind))
+    }
+}
+
+impl BundleCleanupStep {
+    fn new() -> Self {
+        Self {
+            packages: Mutex::new(None),
+        }
+    }
+
+    /// The packages `brew bundle cleanup` would remove.
+    ///
+    /// The command only runs when the check did not run yet, so that a run
+    /// asks Homebrew once and not twice.
+    fn packages(&self, operation: Operation) -> Result<Vec<BundlePackage>, StepError> {
+        if let Some(packages) = lock(&self.packages).clone() {
+            return Ok(packages);
+        }
+
+        let packages = self.cleanup(operation)?;
+        *lock(&self.packages) = Some(packages.clone());
+        Ok(packages)
+    }
+
+    /// Runs `brew bundle cleanup` and parses what it printed.
+    fn cleanup(&self, operation: Operation) -> Result<Vec<BundlePackage>, StepError> {
+        let output = CommandSpec::new("brew")
+            .args(["bundle", "cleanup"])
+            .neutral_locale()
+            .retry_transient_network(NETWORK_RETRIES)
+            .run();
+
+        match output {
+            Ok(output) => Ok(parse_bundle_cleanup(output.stdout())),
+            Err(error) => {
+                // `brew bundle cleanup` exits with a non-zero status when it
+                // found a package to remove, so its output is the report and
+                // not a failure.
+                let Some(output) = error.output() else {
+                    return Err(brew_failure(BUNDLE_CLEANUP, operation, &error));
+                };
+                let packages = parse_bundle_cleanup(output.stdout());
+                if packages.is_empty() {
+                    return Err(brew_failure(BUNDLE_CLEANUP, operation, &error));
+                }
+                Ok(packages)
+            }
+        }
+    }
+
+    /// The detection of the step, given what the machine offers.
+    fn detection(brew_installed: bool, has_brewfile: bool) -> Detection {
+        if !brew_installed {
+            return Detection::NotInstalled;
+        }
+        if !has_brewfile {
+            return Detection::Unavailable(SkipReason::MissingConfiguration);
+        }
+        Detection::Installed
+    }
+}
+
+impl Step for BundleCleanupStep {
+    fn id(&self) -> StepId {
+        BUNDLE_CLEANUP
+    }
+
+    fn display_name(&self) -> &str {
+        "Homebrew bundle cleanup"
+    }
+
+    fn detect(&self) -> Result<Detection, StepError> {
+        Ok(Self::detection(
+            crate::executable::command_exists("brew"),
+            brewfile().is_some(),
+        ))
+    }
+
+    fn check(&self) -> Result<CheckReport, StepError> {
+        let packages = self.packages(Operation::Check)?;
+        Ok(CheckReport::from_items(
+            packages.iter().map(BundlePackage::item),
+        ))
+    }
+
+    fn run(&self) -> Result<(), StepError> {
+        let packages = self.packages(Operation::Run)?;
+        if packages.is_empty() {
+            human!("brew-bundle-cleanup: every package is in the Brewfile");
+            return Ok(());
+        }
+
+        human!(
+            "brew-bundle-cleanup: {} package(s) are not in the Brewfile (nothing is removed)",
+            packages.len()
+        );
+        for package in &packages {
+            human!("  - {}", package.item());
+        }
+        Ok(())
+    }
+
+    fn prerequisites(&self) -> &'static [StepId] {
+        &[CLEANUP]
+    }
+
+    fn platforms(&self) -> &'static [Platform] {
+        &HOMEBREW_PLATFORMS
+    }
+}
+
 struct ReopenStep {
     reopen: ReopenQueue,
     system: Arc<dyn AppSystem>,
@@ -1485,16 +1922,18 @@ impl Step for ReopenStep {
 #[cfg(test)]
 mod tests {
     use super::{
-        administrator_skip_message, apps_of, cask_app_artifacts, cask_metadata,
-        command_line_tools_failure, installed_app_paths, is_pinned, own_bundle_id, parse_outdated,
-        quit_bundle_ids_of, quit_plan, register, running_services, services_for_formulae,
-        CaskError, CasksStep, ReopenQueue, ReopenStep, CASKS, FORMULAE, REOPEN, SERVICES,
+        administrator_skip_message, apps_of, brewfile_in, cask_app_artifacts, cask_metadata,
+        command_line_tools_failure, installed_app_paths, is_pinned, own_bundle_id,
+        parse_bundle_cleanup, parse_doctor_findings, parse_outdated, quit_bundle_ids_of, quit_plan,
+        register, running_services, services_for_formulae, BundleCleanupStep, BundlePackage,
+        CaskError, CasksStep, DoctorFinding, ReopenQueue, ReopenStep, CASKS, FORMULAE, REOPEN,
+        SERVICES,
     };
     use crate::apps::{AppScan, AppSystem, QuitOutcome, Reopen, RunningApp, SessionState};
     use crate::platform::Platform;
     use crate::policy::AppLists;
     use crate::registry::Registry;
-    use crate::step::{Operation, Step, StepId};
+    use crate::step::{CheckReport, Detection, Operation, SkipReason, Step, StepId};
     use std::path::Path;
     use std::sync::{Arc, Mutex};
 
@@ -1632,6 +2071,8 @@ mod tests {
                 "brew-casks",
                 "brew-autoremove",
                 "brew-cleanup",
+                "brew-doctor",
+                "brew-bundle-cleanup",
                 "brew-reopen",
             ]
         );
@@ -1644,6 +2085,8 @@ mod tests {
                 "brew-casks",
                 "brew-autoremove",
                 "brew-cleanup",
+                "brew-doctor",
+                "brew-bundle-cleanup",
                 "brew-reopen",
             ]
         );
@@ -2197,5 +2640,201 @@ mod tests {
         let plan = quit_plan(&scan, &AppLists::new(), true);
 
         assert!(!plan.ask);
+    }
+
+    /// The output of a `brew doctor` that found two problems.
+    const DOCTOR_OUTPUT: &str = "Please note that these warnings are just used to help the Homebrew maintainers\n\
+                                  with debugging if you file an issue. If everything you use Homebrew for\n\
+                                  is working fine: please don't worry or file an issue; just ignore this. Thanks!\n\
+                                  \n\
+                                  Warning: Your Homebrew is outdated. Run `brew update` to update it.\n\
+                                  You can solve this by running:\n\
+                                  \x20 brew update\n\
+                                  Warning: /opt/homebrew/bin is not in your PATH.\n";
+
+    #[test]
+    fn parses_the_warnings_of_brew_doctor() {
+        let findings = parse_doctor_findings(DOCTOR_OUTPUT, "Your system is ready to brew.\n");
+
+        assert_eq!(findings.len(), 2);
+        assert_eq!(
+            findings[0].message,
+            "Your Homebrew is outdated. Run `brew update` to update it."
+        );
+        assert_eq!(
+            findings[0].remedy.as_deref(),
+            Some("You can solve this by running: brew update")
+        );
+        assert_eq!(
+            findings[1].message,
+            "/opt/homebrew/bin is not in your PATH."
+        );
+        assert_eq!(findings[1].remedy, None);
+    }
+
+    #[test]
+    fn the_notice_before_the_first_warning_is_not_a_finding() {
+        let findings = parse_doctor_findings(DOCTOR_OUTPUT, "");
+
+        assert!(
+            findings
+                .iter()
+                .all(|finding| !finding.message.contains("Please note")),
+            "findings: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn a_healthy_brew_doctor_has_no_findings() {
+        let findings = parse_doctor_findings("", "Your system is ready to brew.\n");
+
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn the_notice_is_skipped_even_without_the_empty_line_below_it() {
+        let output =
+            "Please note that these warnings are just used to help the Homebrew maintainers\n\
+                      Warning: /opt/homebrew/bin is not in your PATH.\n";
+
+        let findings = parse_doctor_findings(output, "");
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].message,
+            "/opt/homebrew/bin is not in your PATH."
+        );
+    }
+
+    #[test]
+    fn the_findings_of_brew_doctor_become_check_items() {
+        let findings = parse_doctor_findings(DOCTOR_OUTPUT, "");
+        let report = CheckReport::from_items(findings.iter().map(DoctorFinding::item));
+
+        assert_eq!(report.pending(), 2);
+        assert_eq!(
+            report.items()[0].to_string(),
+            "Your Homebrew is outdated. Run `brew update` to update it. \
+             (You can solve this by running: brew update)"
+        );
+    }
+
+    #[test]
+    fn parses_the_packages_brew_bundle_cleanup_would_remove() {
+        let output = "Would uninstall casks:\n\
+                      google-chrome\n\
+                      Would uninstall formulae:\n\
+                      wget\n\
+                      htop\n\
+                      Run `brew bundle cleanup --force` to make these changes.\n";
+
+        let packages = parse_bundle_cleanup(output);
+
+        assert_eq!(packages.len(), 3);
+        assert_eq!(packages[0].name, "google-chrome");
+        assert_eq!(packages[0].kind, "cask");
+        assert_eq!(packages[1].name, "wget");
+        assert_eq!(packages[1].kind, "formula");
+        assert_eq!(packages[2].name, "htop");
+        assert_eq!(packages[2].kind, "formula");
+    }
+
+    #[test]
+    fn the_packages_of_brew_bundle_cleanup_become_check_items() {
+        let packages = parse_bundle_cleanup("Would uninstall formulae:\nwget\n");
+        let report = CheckReport::from_items(packages.iter().map(BundlePackage::item));
+
+        assert_eq!(report.pending(), 1);
+        assert_eq!(
+            report.items()[0].to_string(),
+            "wget (formula not in the Brewfile)"
+        );
+    }
+
+    #[test]
+    fn an_empty_brew_bundle_cleanup_lists_no_package() {
+        assert!(parse_bundle_cleanup("").is_empty());
+        assert!(
+            parse_bundle_cleanup("Run `brew bundle cleanup --force` to make these changes.\n")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn the_brewfile_is_read_from_the_working_directory() {
+        let directory = std::env::temp_dir().join(format!(
+            "freshen-brewfile-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|since| since.as_nanos())
+                .unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&directory)
+            .unwrap_or_else(|error| panic!("failed to create {}: {error}", directory.display()));
+        std::fs::write(directory.join("Brewfile"), "brew \"wget\"\n")
+            .unwrap_or_else(|error| panic!("failed to write the Brewfile: {error}"));
+
+        let path = brewfile_in(&directory, None);
+
+        assert_eq!(path, Some(directory.join("Brewfile")));
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_missing_brewfile_is_not_a_brewfile() {
+        let directory = std::env::temp_dir().join(format!(
+            "freshen-no-brewfile-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|since| since.as_nanos())
+                .unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&directory)
+            .unwrap_or_else(|error| panic!("failed to create {}: {error}", directory.display()));
+
+        let path = brewfile_in(&directory, None);
+
+        assert_eq!(path, None);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn the_brewfile_can_be_pointed_at_with_an_environment_variable() {
+        let directory = std::env::temp_dir().join(format!(
+            "freshen-brewfile-env-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|since| since.as_nanos())
+                .unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&directory)
+            .unwrap_or_else(|error| panic!("failed to create {}: {error}", directory.display()));
+        let file = directory.join("Brewfile.work");
+        std::fs::write(&file, "brew \"wget\"\n")
+            .unwrap_or_else(|error| panic!("failed to write the Brewfile: {error}"));
+
+        let path = brewfile_in(&directory, Some(file.clone()));
+
+        assert_eq!(path, Some(file));
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn the_bundle_cleanup_step_is_skipped_without_a_brewfile() {
+        assert_eq!(
+            BundleCleanupStep::detection(true, false),
+            Detection::Unavailable(SkipReason::MissingConfiguration)
+        );
+        assert_eq!(
+            BundleCleanupStep::detection(true, true),
+            Detection::Installed
+        );
+        assert_eq!(
+            BundleCleanupStep::detection(false, true),
+            Detection::NotInstalled
+        );
     }
 }
