@@ -16,7 +16,7 @@
 
 use std::fmt;
 
-use crate::options::RunOptions;
+use crate::options::{RunOptions, SelectionFlag};
 use crate::platform::Platform;
 use crate::process::{network_failure, ProcessError};
 use crate::snapshot::SnapshotSection;
@@ -31,6 +31,11 @@ pub enum Detection {
     Installed,
     /// The tool is missing; the step is skipped.
     NotInstalled,
+    /// The tool is installed, but the step cannot run in the current state.
+    ///
+    /// The step is skipped with the given reason instead of running, for
+    /// example because the account of the service it manages is not signed in.
+    Unavailable(SkipReason),
 }
 
 impl Detection {
@@ -38,6 +43,54 @@ impl Detection {
     #[must_use]
     pub fn is_installed(self) -> bool {
         matches!(self, Self::Installed)
+    }
+}
+
+/// Why a step was skipped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SkipReason {
+    /// The tool managed by the step is not installed on this machine.
+    NotInstalled,
+    /// The step does not support the platform of the run.
+    UnsupportedPlatform,
+    /// `--only` or `--skip` excluded the step from the run.
+    NotSelected(SelectionFlag),
+    /// The configuration file disabled the step.
+    Disabled,
+    /// The step conflicts with an earlier step that is part of the run.
+    Conflict(StepId),
+    /// The package registry the step needs could not be reached.
+    RegistryUnreachable,
+    /// The account the step manages is not signed in to its service.
+    NotSignedIn,
+    /// The run was interrupted before the step started.
+    Interrupted,
+}
+
+impl SkipReason {
+    /// Human-readable explanation shown in the summary.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotInstalled => "not installed",
+            Self::UnsupportedPlatform => "not supported on this platform",
+            Self::NotSelected(SelectionFlag::Only) => "not selected by --only",
+            Self::NotSelected(SelectionFlag::Skip) => "excluded by --skip",
+            Self::Disabled => "disabled in the configuration file",
+            Self::Conflict(_) => "conflicts with another step",
+            Self::RegistryUnreachable => "registry unreachable",
+            Self::NotSignedIn => "not signed in",
+            Self::Interrupted => "interrupted before it started",
+        }
+    }
+}
+
+impl fmt::Display for SkipReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Conflict(conflict) => write!(f, "conflicts with `{conflict}`"),
+            other => f.write_str(other.as_str()),
+        }
     }
 }
 
@@ -400,7 +453,9 @@ pub trait Step: Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::{CheckReport, Detection, Operation, OutdatedItem, Step, StepError, StepId};
+    use super::{
+        CheckReport, Detection, Operation, OutdatedItem, SkipReason, Step, StepError, StepId,
+    };
     use crate::options::RunOptions;
     use crate::platform::Platform;
     use crate::snapshot::{SnapshotCommand, SnapshotSection};
@@ -537,6 +592,22 @@ mod tests {
         assert!(step
             .detect()
             .is_ok_and(|detection| !detection.is_installed()));
+    }
+
+    #[test]
+    fn a_step_that_is_installed_but_blocked_is_not_runnable() {
+        let detection = Detection::Unavailable(SkipReason::NotSignedIn);
+
+        assert!(!detection.is_installed());
+    }
+
+    #[test]
+    fn a_skip_reason_names_the_reason_in_one_line() {
+        assert_eq!(SkipReason::NotSignedIn.to_string(), "not signed in");
+        assert_eq!(
+            SkipReason::Conflict("brew").to_string(),
+            "conflicts with `brew`"
+        );
     }
 
     #[test]

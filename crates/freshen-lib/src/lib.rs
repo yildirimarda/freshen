@@ -5,6 +5,7 @@
 //! wrapper around this library. One module per step.
 
 pub mod apps;
+pub mod appstore;
 pub mod check;
 pub mod cleanup;
 pub mod config;
@@ -41,6 +42,7 @@ pub use apps::{
     QuitChoice, QuitOutcome, QuitPolicy, Relaunch, Reopen, RunningApp, SelfUpdater, SessionState,
     UpdateState, WindowState,
 };
+pub use appstore::{MasClient, MasOutput, MAS};
 pub use check::{CheckResult, CheckStatus, CheckSummary};
 pub use cleanup::{CleanupReport, ENABLE_FLAG as CLEANUP_FLAG};
 pub use config::{
@@ -70,12 +72,14 @@ pub use process::{
     NETWORK_RETRIES,
 };
 pub use registry::{Registry, RegistryError};
-pub use runner::{RunSummary, Runner, SkipReason, StepResult, StepStatus, VersionChange};
+pub use runner::{RunSummary, Runner, StepResult, StepStatus, VersionChange};
 pub use signals::{install as install_interrupt_handler, requested as interrupted, SignalError};
 pub use snapshot::{
     RollbackCommand, SnapshotCommand, SnapshotRecorder, SnapshotSection, DEFAULT_SNAPSHOT_RETENTION,
 };
-pub use step::{CheckReport, Detection, Operation, OutdatedItem, Step, StepError, StepId};
+pub use step::{
+    CheckReport, Detection, Operation, OutdatedItem, SkipReason, Step, StepError, StepId,
+};
 pub use system::{
     supported_terminals, terminal_is_interactive, Arch, Distro, Environment, HostProbe, OsInfo,
     Privilege, ProcessInfo, SystemInfo, SystemProbe, Terminal, TerminalApp,

@@ -126,8 +126,8 @@ fn build_registry() -> Registry {
         return test_steps::with_probe_steps(Registry::new());
     }
 
-    freshen_lib::tooling::register(freshen_lib::homebrew::register(
-        freshen_lib::containers::register(Registry::new()),
+    freshen_lib::appstore::register(freshen_lib::tooling::register(
+        freshen_lib::homebrew::register(freshen_lib::containers::register(Registry::new())),
     ))
 }
 
