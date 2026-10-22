@@ -208,7 +208,7 @@ A step id in the `[steps]` section that is not registered is refused as well,
 with the known step ids:
 
 ```
-freshen: unknown step `brew-cask` in the configuration file (known steps: brew, brew-autoremove, brew-casks, brew-cleanup, brew-formulae, brew-reopen, brew-services, colima-start, colima-stop, docker, macos-updates, mas, mise, uv)
+freshen: unknown step `brew-cask` in the configuration file (known steps: brew, brew-autoremove, brew-bundle-cleanup, brew-casks, brew-cleanup, brew-doctor, brew-formulae, brew-reopen, brew-services, colima-start, colima-stop, docker, macos-updates, mas, mise, uv)
 ```
 
 The run stops with exit code `1` when the configuration file cannot be used.

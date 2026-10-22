@@ -173,6 +173,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Decide what the Mac App Store step does when `mas upgrade` needs a password: skip the upgrade in a non-interactive run or hand the terminal to `sudo`, so a scheduled run does not fail on a missing credential, covered by tests
 - [ ] Detect a macOS restart that is still pending from an update that was installed earlier, not only in the run that installed it, so `freshen --check` tells the user that the machine has to restart before it is up to date, covered by tests with the recorded output of a machine with a staged update
 - [ ] Update the Xcode Command Line Tools before the Homebrew steps run, so that a run which installs them also upgrades the packages in the same run instead of failing on the outdated tools, covered by tests
+- [ ] Report the `brew doctor` warnings and the `brew bundle cleanup` packages in the run summary and in the `--json`/`--markdown` reports, so a structured report names them instead of only printing a human-readable line
 
 ## Milestone 5: Linux
 
@@ -338,5 +339,6 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Split `SSL_CERT_DIR` on the platform path delimiter when collecting CA bundle paths, the way OpenSSL and `rustls-native-certs` do, so a list of certificate directories is not treated as one bogus path that fails the network check, covered by tests
 - [ ] Report the native trust store load errors from the network preflight even when only some certificates were loaded, so a partly broken system trust store is not silently ignored, covered by tests with an injected trust store result
 - [ ] Parse the winget output as JSON (`winget --output json`), because winget translates its table with the Windows UI language and no locale variable can change that
+- [ ] Add the `brew-doctor` and `brew-bundle-cleanup` steps to the real-tools workflow, so their parsers are verified against the real Homebrew output, and write a `Brewfile` in the job so the bundle cleanup step is not skipped
 
 <!-- The agent appends newly found work here. -->
