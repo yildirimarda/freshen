@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use crate::containers::ActiveContainerRuntime;
 use crate::options::{RunOptions, SelectionFlag, StepSelection};
 use crate::platform::Platform;
 use crate::registry::Registry;
@@ -88,6 +89,7 @@ impl StepListing {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StepList {
     steps: Vec<StepListing>,
+    container_runtime: Option<ActiveContainerRuntime>,
 }
 
 impl StepList {
@@ -95,6 +97,12 @@ impl StepList {
     #[must_use]
     pub fn steps(&self) -> &[StepListing] {
         &self.steps
+    }
+
+    /// The active container runtime, when one was detected or overridden.
+    #[must_use]
+    pub fn container_runtime(&self) -> Option<&ActiveContainerRuntime> {
+        self.container_runtime.as_ref()
     }
 
     /// Number of known steps.
@@ -112,6 +120,9 @@ impl StepList {
 
 impl fmt::Display for StepList {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(runtime) = &self.container_runtime {
+            writeln!(f, "Container runtime: {runtime}")?;
+        }
         if self.steps.is_empty() {
             return writeln!(f, "No known steps.");
         }
@@ -163,7 +174,10 @@ pub fn list_steps(registry: &Registry, options: &RunOptions, platform: Platform)
         .map(|step| list_step(step, options, platform, &conflicts))
         .collect();
 
-    StepList { steps }
+    StepList {
+        steps,
+        container_runtime: options.container_runtime().cloned(),
+    }
 }
 
 fn list_step(

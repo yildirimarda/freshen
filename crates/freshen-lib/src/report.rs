@@ -61,7 +61,16 @@ pub(crate) fn run_json(summary: &RunSummary) -> String {
         })
         .collect();
 
+    let container_runtime = summary.container_runtime().map(|runtime| {
+        json!({
+            "name": runtime.kind().as_str(),
+            "display_name": runtime.kind().display_name(),
+            "source": runtime.source().to_string(),
+        })
+    });
+
     let report = json!({
+        "container_runtime": container_runtime,
         "ok": summary.ok_count(),
         "planned": summary.planned_count(),
         "skipped": summary.skipped_count(),
@@ -82,6 +91,9 @@ pub(crate) fn run_json(summary: &RunSummary) -> String {
 pub(crate) fn run_markdown(summary: &RunSummary) -> String {
     let mut out = String::new();
     out.push_str("# freshen report\n\n");
+    if let Some(runtime) = summary.container_runtime() {
+        out.push_str(&format!("**Container runtime:** {runtime}\n\n"));
+    }
     out.push_str(&format!(
         "**Summary:** {} ok, {} planned, {} skipped, {} failed, {} timed out, {} interrupted ({})\n\n",
         summary.ok_count(),

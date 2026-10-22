@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use crate::check::{CheckResult, CheckSummary};
 use crate::cleanup::{self, CleanupReport};
-use crate::containers::{COLIMA_STOP, DOCKER};
+use crate::containers::{ActiveContainerRuntime, COLIMA_STOP, DOCKER};
 use crate::deadline::{self, Deadline};
 use crate::options::RunOptions;
 use crate::snapshot::{RollbackCommand, SnapshotRecorder};
@@ -271,6 +271,7 @@ pub struct RunSummary {
     rollback: Vec<RollbackCommand>,
     interrupted: bool,
     restore_failures: Vec<String>,
+    container_runtime: Option<ActiveContainerRuntime>,
 }
 
 impl RunSummary {
@@ -281,6 +282,7 @@ impl RunSummary {
             rollback: Vec::new(),
             interrupted: false,
             restore_failures: Vec::new(),
+            container_runtime: None,
         }
     }
 
@@ -301,6 +303,11 @@ impl RunSummary {
 
     fn with_restore_failures(mut self, failures: Vec<String>) -> Self {
         self.restore_failures = failures;
+        self
+    }
+
+    fn with_container_runtime(mut self, runtime: Option<ActiveContainerRuntime>) -> Self {
+        self.container_runtime = runtime;
         self
     }
 
@@ -367,6 +374,12 @@ impl RunSummary {
         &self.restore_failures
     }
 
+    /// The active container runtime, when one was detected or overridden.
+    #[must_use]
+    pub fn container_runtime(&self) -> Option<&ActiveContainerRuntime> {
+        self.container_runtime.as_ref()
+    }
+
     /// Returns `true` when at least one step failed or timed out.
     #[must_use]
     pub fn has_failures(&self) -> bool {
@@ -427,6 +440,9 @@ impl RunSummary {
 
 impl fmt::Display for RunSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(runtime) = &self.container_runtime {
+            writeln!(f, "Container runtime: {runtime}")?;
+        }
         writeln!(
             f,
             "Summary: {} ok, {} planned, {} skipped, {} failed, {} timed out, {} interrupted ({})",
@@ -700,6 +716,7 @@ impl<'a> Runner<'a> {
             .with_rollback(snapshots.rollback_commands())
             .with_interrupted(interrupted)
             .with_restore_failures(restore_failures)
+            .with_container_runtime(self.options.container_runtime().cloned())
     }
 
     /// Detects every step and asks each installed one what is outdated,
