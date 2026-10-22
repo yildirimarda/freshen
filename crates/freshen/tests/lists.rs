@@ -14,16 +14,23 @@ use std::process::Output;
 
 use support::StubTools;
 
+// The constants below are only read by the tests that drive the Unix tools,
+// so they are not compiled on Windows.
+#[cfg(unix)]
 const CASK_INFO: &str = include_str!("../../freshen-lib/tests/fixtures/brew-info-casks.json");
+#[cfg(unix)]
 const HOMEBREW_STEPS: &str =
     "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-reopen";
+#[cfg(unix)]
 const CONTAINER_STEPS: &str = "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-reopen,colima-stop,colima-start,docker";
 
+#[cfg(unix)]
 const COMPOSE_JSON: &str = r#"[
     {"Name":"web","ConfigFiles":"/srv/web/compose.yml,/srv/web/override.yml"},
     {"Name":"db","ConfigFiles":"/srv/db/compose.yml"}
 ]"#;
 
+#[cfg(unix)]
 const PS_OUTPUT: &str = "abc\tweb-1\tweb\ndef\tlonely\t\nghi\tlonely2\t\n";
 
 fn stdout(output: &Output) -> String {
