@@ -49,6 +49,33 @@ const RESTORE_RETRY_DELAY: Duration = Duration::from_millis(500);
 /// that nobody answers, and the run must not hang on it.
 const SESSION_STATE_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How macOS shows an app.
+///
+/// Most apps have an icon in the Dock. A menu-bar app is an agent that lives
+/// in the menu bar, and a login item is an app that macOS starts at login,
+/// often a helper app inside another app. Both run without a Dock icon,
+/// which means macOS does not address them with an Apple event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppKind {
+    /// A regular app with an icon in the Dock.
+    Dock,
+    /// An agent app that lives in the menu bar.
+    MenuBar,
+    /// An app that macOS starts at login.
+    LoginItem,
+}
+
+impl AppKind {
+    /// Returns `true` when the app has an icon in the Dock.
+    ///
+    /// An app without a Dock icon cannot be quit through an Apple event, so
+    /// its process is ended instead.
+    #[must_use]
+    pub fn has_dock_icon(self) -> bool {
+        matches!(self, AppKind::Dock)
+    }
+}
+
 /// An application that is running.
 ///
 /// Most apps are known by their `.app` bundle path. A cask without an `.app`
@@ -59,12 +86,19 @@ pub struct RunningApp {
     path: Option<PathBuf>,
     bundle_id: String,
     name: String,
+    kind: AppKind,
 }
 
 impl RunningApp {
     /// Creates a running app from its bundle path and bundle identifier.
     #[must_use]
     pub fn new(path: PathBuf, bundle_id: impl Into<String>) -> Self {
+        Self::with_kind(path, bundle_id, AppKind::Dock)
+    }
+
+    /// Creates a running app of the given kind.
+    #[must_use]
+    pub fn with_kind(path: PathBuf, bundle_id: impl Into<String>, kind: AppKind) -> Self {
         let name = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -74,6 +108,7 @@ impl RunningApp {
             path: Some(path),
             bundle_id: bundle_id.into(),
             name,
+            kind,
         }
     }
 
@@ -88,6 +123,7 @@ impl RunningApp {
             path: None,
             name: bundle_id.clone(),
             bundle_id,
+            kind: AppKind::Dock,
         }
     }
 
@@ -107,6 +143,12 @@ impl RunningApp {
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// How macOS shows the app.
+    #[must_use]
+    pub fn kind(&self) -> AppKind {
+        self.kind
     }
 
     fn is_running<S: AppSystem + ?Sized>(&self, system: &S) -> bool {
@@ -212,6 +254,19 @@ impl SessionState {
     }
 }
 
+/// How an app is started again after the upgrade.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Relaunch {
+    /// The app is started by its bundle id: `open -g -b <bundle id>`.
+    BundleId,
+    /// The app is started by its bundle id, in the background: `open -g -j -b
+    /// <bundle id>`.
+    Background,
+    /// The app is started by its path, the way macOS starts a login item:
+    /// `open -g -j -a <path>`.
+    Path(PathBuf),
+}
+
 /// An app that was quit and has to be reopened.
 ///
 /// The bundle id is what `open` needs; the session state is how the app
@@ -220,6 +275,7 @@ impl SessionState {
 pub struct Reopen {
     bundle_id: String,
     session: SessionState,
+    relaunch: Relaunch,
 }
 
 impl Reopen {
@@ -229,6 +285,32 @@ impl Reopen {
         Self {
             bundle_id: bundle_id.into(),
             session,
+            relaunch: Relaunch::BundleId,
+        }
+    }
+
+    /// Creates a reopen entry for an app that runs without a Dock icon.
+    ///
+    /// Such an app is started again in the background, so it does not steal
+    /// the focus when the upgrade is done.
+    #[must_use]
+    pub fn background(bundle_id: impl Into<String>, session: SessionState) -> Self {
+        Self {
+            bundle_id: bundle_id.into(),
+            session,
+            relaunch: Relaunch::Background,
+        }
+    }
+
+    /// Creates a reopen entry for a login item.
+    ///
+    /// A login item is started by its path, the way macOS starts it at login.
+    #[must_use]
+    pub fn at_path(bundle_id: impl Into<String>, path: PathBuf, session: SessionState) -> Self {
+        Self {
+            bundle_id: bundle_id.into(),
+            session,
+            relaunch: Relaunch::Path(path),
         }
     }
 
@@ -242,6 +324,22 @@ impl Reopen {
     #[must_use]
     pub fn session(&self) -> SessionState {
         self.session
+    }
+
+    /// How the app is started again.
+    #[must_use]
+    pub fn relaunch(&self) -> &Relaunch {
+        &self.relaunch
+    }
+
+    /// Whether the app is started hidden.
+    ///
+    /// An app without a Dock icon has no window to show, so it is always
+    /// started in the background.
+    #[must_use]
+    pub fn is_hidden(&self) -> bool {
+        self.session.is_hidden()
+            || matches!(self.relaunch, Relaunch::Background | Relaunch::Path(_))
     }
 }
 
@@ -548,6 +646,32 @@ pub trait AppSystem: Send + Sync {
         Vec::new()
     }
 
+    /// Returns `true` when the bundle is an agent app without a Dock icon.
+    ///
+    /// A menu-bar app sets `LSUIElement` in its `Info.plist`, so macOS shows
+    /// it in the menu bar instead of in the Dock.
+    fn is_menu_bar_app(&self, _app: &Path) -> bool {
+        false
+    }
+
+    /// The helper apps inside an app that macOS starts at login.
+    ///
+    /// An app that opens at login ships a helper in
+    /// `Contents/Library/LoginItems`; macOS starts that helper at login.
+    fn login_item_helpers(&self, _app: &Path) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
+    /// Ends the given processes by asking them to quit.
+    ///
+    /// An app without a Dock icon cannot be quit through an Apple event, so
+    /// its process is ended instead. Returns `true` when the request was
+    /// delivered; a system that cannot end a process reports `false`, so the
+    /// app is asked to quit through an Apple event instead.
+    fn terminate(&self, _pids: &[u32]) -> bool {
+        false
+    }
+
     /// Asks the application to quit gracefully.
     ///
     /// The outcome says whether the request was delivered or denied by
@@ -568,11 +692,12 @@ pub trait AppSystem: Send + Sync {
         SessionState::visible()
     }
 
-    /// Reopens the application with `open -g -b`.
+    /// Reopens the application.
     ///
-    /// An app that was hidden is reopened hidden, so it does not show up in
-    /// front of the user after the upgrade.
-    fn open(&self, bundle_id: &str, hidden: bool) -> bool;
+    /// A regular app is opened by its bundle id (`open -g -b`), an app
+    /// without a Dock icon in the background (`open -g -j -b`), and a login
+    /// item by its path (`open -g -j -a`), the way macOS starts it.
+    fn open(&self, app: &Reopen) -> bool;
 
     /// Puts the window of the app back where it was.
     ///
@@ -605,6 +730,41 @@ pub fn self_updater_from_bundle(app: &Path) -> Option<SelfUpdater> {
     } else {
         None
     }
+}
+
+/// Returns `true` when the bundle is an agent app without a Dock icon.
+///
+/// `LSUIElement` is the key that turns an app into a menu-bar app: macOS
+/// shows it in the menu bar instead of in the Dock. The value is the output
+/// of `defaults read <bundle>/Contents/Info LSUIElement`.
+#[must_use]
+pub fn is_menu_bar_app_from_info(output: &str) -> bool {
+    matches!(output.trim().to_ascii_lowercase().as_str(), "1" | "true")
+}
+
+/// The helper apps inside an app that macOS starts at login.
+///
+/// An app that opens at login ships a helper in `Contents/Library/LoginItems`;
+/// macOS starts that helper at login instead of the app itself. The helper
+/// runs without a Dock icon, so it has to be handled like a menu-bar app.
+#[must_use]
+pub fn login_item_helpers_in(app: &Path) -> Vec<PathBuf> {
+    let directory = app.join("Contents/Library/LoginItems");
+    let Ok(entries) = std::fs::read_dir(&directory) else {
+        return Vec::new();
+    };
+
+    let mut helpers: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("app"))
+        })
+        .collect();
+    helpers.sort();
+    helpers
 }
 
 /// The updater that is running for an app, when one is.
@@ -665,6 +825,10 @@ pub fn find_running_apps<S: AppSystem + ?Sized>(
 /// artifacts are not an `.app` bundle (a pkg installer or a menu-bar helper)
 /// still has its app quit before the upgrade. An app found through its path is
 /// not added a second time when the same bundle id is also listed.
+///
+/// The helpers that macOS starts at login are found as well: they live inside
+/// the app they belong to, and they run without a Dock icon, so they are
+/// quit and reopened with the app.
 #[must_use]
 pub fn find_running_cask_apps<S: AppSystem + ?Sized>(
     system: &S,
@@ -680,11 +844,7 @@ pub fn find_running_cask_apps<S: AppSystem + ?Sized>(
         let Some(bundle_id) = system.bundle_id(path) else {
             continue;
         };
-        let name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default()
-            .to_owned();
+        let name = app_name(path);
         seen.push(bundle_id.clone());
         if self_bundle_id.is_some_and(|self_id| self_id == bundle_id) {
             scan.protected.push(name);
@@ -693,15 +853,30 @@ pub fn find_running_cask_apps<S: AppSystem + ?Sized>(
         if !system.is_running(path) {
             continue;
         }
-        if app_lists.is_never_quit(&bundle_id, &name) {
-            scan.never_quit.push(name);
-            continue;
+        let app = RunningApp::with_kind(path.clone(), bundle_id, app_kind(system, path));
+        collect_running(&mut scan, system, app, name, app_lists);
+    }
+
+    for path in installed {
+        for helper in system.login_item_helpers(path) {
+            let Some(bundle_id) = system.bundle_id(&helper) else {
+                continue;
+            };
+            if seen.iter().any(|seen_id| seen_id == &bundle_id) {
+                continue;
+            }
+            seen.push(bundle_id.clone());
+            let name = app_name(&helper);
+            if self_bundle_id.is_some_and(|self_id| self_id == bundle_id) {
+                scan.protected.push(name);
+                continue;
+            }
+            if !system.is_running(&helper) {
+                continue;
+            }
+            let app = RunningApp::with_kind(helper, bundle_id, AppKind::LoginItem);
+            collect_running(&mut scan, system, app, name, app_lists);
         }
-        let app = RunningApp::new(path.clone(), bundle_id);
-        if app.update_state(system).in_progress() {
-            scan.updating.push(app.clone());
-        }
-        scan.running.push(app);
     }
 
     for bundle_id in bundle_ids {
@@ -730,6 +905,47 @@ pub fn find_running_cask_apps<S: AppSystem + ?Sized>(
     scan
 }
 
+/// Adds a running app to the scan.
+///
+/// An app on the never-quit list is reported instead of being quit, and an
+/// app that is updating itself is reported as such.
+fn collect_running<S: AppSystem + ?Sized>(
+    scan: &mut AppScan,
+    system: &S,
+    app: RunningApp,
+    name: String,
+    app_lists: &AppLists,
+) {
+    if app_lists.is_never_quit(app.bundle_id(), &name) {
+        scan.never_quit.push(name);
+        return;
+    }
+    if app.update_state(system).in_progress() {
+        scan.updating.push(app.clone());
+    }
+    scan.running.push(app);
+}
+
+/// The name of an app, as it is shown to the user.
+fn app_name(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// How macOS shows the app in the given bundle.
+///
+/// An app that sets `LSUIElement` in its `Info.plist` is an agent that lives
+/// in the menu bar, so it has no icon in the Dock.
+fn app_kind<S: AppSystem + ?Sized>(system: &S, path: &Path) -> AppKind {
+    if system.is_menu_bar_app(path) {
+        AppKind::MenuBar
+    } else {
+        AppKind::Dock
+    }
+}
+
 /// Quits every app gracefully and returns the apps to reopen.
 ///
 /// A bundle id is recorded before the quit is attempted, exactly like the zsh
@@ -752,7 +968,14 @@ pub fn quit_apps<S: AppSystem + ?Sized>(
             continue;
         }
         human!("Quitting: {}", app.name());
-        let session = system.session_state(app.path(), app.bundle_id());
+        let session = if app.kind().has_dock_icon() {
+            system.session_state(app.path(), app.bundle_id())
+        } else {
+            // An app without a Dock icon has no window to put back, and
+            // asking for its state would need a permission macOS only asks
+            // for the apps with a window.
+            SessionState::visible()
+        };
         let quit = quit_one(system, app, policy);
         // An app that is still running keeps its own window and its own
         // hidden state, so it is reopened the way it is.
@@ -761,10 +984,25 @@ pub fn quit_apps<S: AppSystem + ?Sized>(
         } else {
             SessionState::visible()
         };
-        reopen.push(Reopen::new(app.bundle_id(), session));
+        reopen.push(reopen_entry(app, session));
     }
 
     reopen
+}
+
+/// The entry that brings an app back after the upgrade.
+///
+/// An app without a Dock icon comes back in the background, and a login item
+/// comes back by its path, the way macOS starts it at login.
+fn reopen_entry(app: &RunningApp, session: SessionState) -> Reopen {
+    match app.kind() {
+        AppKind::Dock => Reopen::new(app.bundle_id(), session),
+        AppKind::MenuBar => Reopen::background(app.bundle_id(), session),
+        AppKind::LoginItem => match app.path() {
+            Some(path) => Reopen::at_path(app.bundle_id(), path.to_path_buf(), session),
+            None => Reopen::background(app.bundle_id(), session),
+        },
+    }
 }
 
 /// Waits for an app that is updating itself to finish its update.
@@ -839,24 +1077,35 @@ where
 ///
 /// An app that was hidden is reopened hidden, and the window of an app that
 /// was visible is put back where it was, so the app comes back on the
-/// display it was on.
+/// display it was on. An app without a Dock icon is reopened in the
+/// background, and a login item by its path, the way macOS starts it.
 pub fn reopen_apps<S: AppSystem + ?Sized>(system: &S, apps: &[Reopen]) {
     for app in apps {
         let bundle_id = app.bundle_id();
         let session = app.session();
+        let hidden = app.is_hidden();
 
-        if session.is_hidden() {
+        if let Relaunch::Path(path) = app.relaunch() {
+            // The app the login item belongs to may have started it again
+            // while it was upgraded, so it is only opened when it is not
+            // running anymore.
+            if system.is_running(path) {
+                human!("Opening: {bundle_id} (already running)");
+                continue;
+            }
+            human!("Opening: {bundle_id} (login item)");
+        } else if hidden {
             human!("Opening: {bundle_id} (hidden)");
         } else {
             human!("Opening: {bundle_id}");
         }
 
-        if !system.open(bundle_id, session.is_hidden()) {
+        if !system.open(app) {
             warn(&format!("Could not open: {bundle_id}"));
             continue;
         }
 
-        if session.is_hidden() {
+        if hidden {
             continue;
         }
 
@@ -871,6 +1120,19 @@ pub fn reopen_apps<S: AppSystem + ?Sized>(system: &S, apps: &[Reopen]) {
 }
 
 fn quit_one<S: AppSystem + ?Sized>(system: &S, app: &RunningApp, policy: &QuitPolicy) -> bool {
+    if app.kind().has_dock_icon() {
+        quit_with_apple_event(system, app, policy)
+    } else {
+        quit_by_terminating(system, app, policy)
+    }
+}
+
+/// Quits an app through an Apple event.
+fn quit_with_apple_event<S: AppSystem + ?Sized>(
+    system: &S,
+    app: &RunningApp,
+    policy: &QuitPolicy,
+) -> bool {
     if system.quit(app.bundle_id()) == QuitOutcome::Denied {
         // The request never reached the app, so waiting for it to exit would
         // only burn the timeout.
@@ -881,6 +1143,35 @@ fn quit_one<S: AppSystem + ?Sized>(system: &S, app: &RunningApp, policy: &QuitPo
         return false;
     }
 
+    wait_until_stopped(system, app, policy)
+}
+
+/// Ends an app that runs without a Dock icon.
+///
+/// macOS does not address a menu-bar app or a login item with an Apple
+/// event, so the process is ended instead. That needs no permission at all,
+/// which matters for the apps that are not scriptable.
+fn quit_by_terminating<S: AppSystem + ?Sized>(
+    system: &S,
+    app: &RunningApp,
+    policy: &QuitPolicy,
+) -> bool {
+    let pids = app.pids(system);
+    if pids.is_empty() || !system.terminate(&pids) {
+        // The process could not be ended, so the app is asked to quit after
+        // all.
+        return quit_with_apple_event(system, app, policy);
+    }
+
+    wait_until_stopped(system, app, policy)
+}
+
+/// Waits for the app to end, and kills it when it does not.
+fn wait_until_stopped<S: AppSystem + ?Sized>(
+    system: &S,
+    app: &RunningApp,
+    policy: &QuitPolicy,
+) -> bool {
     let mut running = app.is_running(system);
     let mut waited = Duration::ZERO;
     while running && waited < policy.timeout {
@@ -1002,6 +1293,18 @@ fn bundle_id_command(app: &Path) -> CommandSpec {
         .neutral_locale()
 }
 
+/// The command that reads whether the bundle is an agent app.
+///
+/// `LSUIElement` is set by the apps that live in the menu bar, so macOS
+/// shows no icon for them in the Dock.
+fn menu_bar_command(app: &Path) -> CommandSpec {
+    CommandSpec::new("defaults")
+        .arg("read")
+        .arg(app.join("Contents/Info"))
+        .arg("LSUIElement")
+        .neutral_locale()
+}
+
 fn process_list_command() -> CommandSpec {
     CommandSpec::new("ps")
         .args(["-axo", "command="])
@@ -1120,12 +1423,36 @@ fn kill_command(pids: &[u32]) -> CommandSpec {
     spec
 }
 
+/// The command that ends a process, so it can quit on its own.
+///
+/// A menu-bar app and a login item are not addressed by macOS, so their
+/// process is asked to end instead.
+fn terminate_command(pids: &[u32]) -> CommandSpec {
+    let mut spec = CommandSpec::new("kill").arg("-TERM");
+    for pid in pids {
+        spec = spec.arg(pid.to_string());
+    }
+    spec
+}
+
 fn open_command(bundle_id: &str, hidden: bool) -> CommandSpec {
     let mut spec = CommandSpec::new("open").arg("-g");
     if hidden {
         spec = spec.arg("-j");
     }
     spec.args(["-b"]).arg(bundle_id)
+}
+
+/// The command that starts a login item by its path.
+///
+/// macOS starts a login item by its path, so the same item comes back instead
+/// of another app with the same bundle id.
+fn open_path_command(path: &Path, hidden: bool) -> CommandSpec {
+    let mut spec = CommandSpec::new("open").arg("-g");
+    if hidden {
+        spec = spec.arg("-j");
+    }
+    spec.arg("-a").arg(path)
 }
 
 /// The real macOS implementation, using the same commands as the zsh script.
@@ -1199,6 +1526,21 @@ impl AppSystem for MacAppSystem {
         }
     }
 
+    fn is_menu_bar_app(&self, app: &Path) -> bool {
+        menu_bar_command(app)
+            .run()
+            .ok()
+            .is_some_and(|output| is_menu_bar_app_from_info(output.stdout()))
+    }
+
+    fn login_item_helpers(&self, app: &Path) -> Vec<PathBuf> {
+        login_item_helpers_in(app)
+    }
+
+    fn terminate(&self, pids: &[u32]) -> bool {
+        !pids.is_empty() && terminate_command(pids).run().is_ok()
+    }
+
     fn quit(&self, bundle_id: &str) -> QuitOutcome {
         match quit_command(bundle_id).run() {
             Ok(_) => QuitOutcome::Quit,
@@ -1233,8 +1575,14 @@ impl AppSystem for MacAppSystem {
         session
     }
 
-    fn open(&self, bundle_id: &str, hidden: bool) -> bool {
-        open_command(bundle_id, hidden).run().is_ok()
+    fn open(&self, app: &Reopen) -> bool {
+        let hidden = app.is_hidden();
+        match app.relaunch() {
+            Relaunch::BundleId | Relaunch::Background => {
+                open_command(app.bundle_id(), hidden).run().is_ok()
+            }
+            Relaunch::Path(path) => open_path_command(path, hidden).run().is_ok(),
+        }
     }
 
     fn restore_window(&self, bundle_id: &str, window: &WindowState) -> bool {
@@ -1275,12 +1623,14 @@ mod tests {
 
     use super::{
         automation_denied_message, bundle_id_command, find_running_apps, find_running_cask_apps,
-        hidden_command, hidden_from_script, is_automation_denied, kill_command, open_command,
+        hidden_command, hidden_from_script, is_automation_denied, is_menu_bar_app_from_info,
+        kill_command, login_item_helpers_in, menu_bar_command, open_command, open_path_command,
         pid_list_command, pids_from_apple_script, pids_from_processes, process_list_command,
         quit_apps, quit_choice, quit_command, reopen_apps, restore_window_command, running_updater,
-        self_updater_from_bundle, window_state_command, window_state_from_script, AppSystem,
-        QuitChoice, QuitOutcome, QuitPolicy, Reopen, SelfUpdater, SessionState, UpdateState,
-        WindowState, SESSION_STATE_TIMEOUT,
+        self_updater_from_bundle, terminate_command, window_state_command,
+        window_state_from_script, AppKind, AppSystem, QuitChoice, QuitOutcome, QuitPolicy,
+        Relaunch, Reopen, SelfUpdater, SessionState, UpdateState, WindowState,
+        SESSION_STATE_TIMEOUT,
     };
     use crate::policy::AppLists;
 
@@ -1289,12 +1639,18 @@ mod tests {
         bundle_ids: Mutex<HashMap<PathBuf, String>>,
         running: Mutex<HashMap<PathBuf, Vec<u32>>>,
         running_bundles: Mutex<HashMap<String, Vec<u32>>>,
+        menu_bar_apps: Mutex<HashMap<PathBuf, ()>>,
+        login_item_helpers: Mutex<HashMap<PathBuf, Vec<PathBuf>>>,
         quit_stops_apps: bool,
         quit_outcome: QuitOutcome,
+        terminate_succeeds: bool,
+        terminate_stops_apps: bool,
         open_succeeds: bool,
         quit_calls: Mutex<Vec<String>>,
+        terminated: Mutex<Vec<Vec<u32>>>,
         killed: Mutex<Vec<Vec<u32>>>,
         opened: Mutex<Vec<(String, bool)>>,
+        opened_paths: Mutex<Vec<PathBuf>>,
         restored: Mutex<Vec<(String, WindowState)>>,
         running_checks: Mutex<usize>,
         updating: Mutex<HashMap<String, usize>>,
@@ -1312,6 +1668,8 @@ mod tests {
         fn new() -> Self {
             Self {
                 open_succeeds: true,
+                terminate_succeeds: true,
+                terminate_stops_apps: true,
                 ..Self::default()
             }
         }
@@ -1333,6 +1691,21 @@ mod tests {
             self
         }
 
+        /// The app lives in the menu bar, so it has no icon in the Dock.
+        fn with_menu_bar_app(self, app: &str) -> Self {
+            lock(&self.menu_bar_apps).insert(PathBuf::from(app), ());
+            self
+        }
+
+        /// The app has a helper that macOS starts at login.
+        fn with_login_item_helper(self, app: &str, helper: &str) -> Self {
+            lock(&self.login_item_helpers)
+                .entry(PathBuf::from(app))
+                .or_default()
+                .push(PathBuf::from(helper));
+            self
+        }
+
         fn open_fails(mut self) -> Self {
             self.open_succeeds = false;
             self
@@ -1340,6 +1713,18 @@ mod tests {
 
         fn denies_automation(mut self) -> Self {
             self.quit_outcome = QuitOutcome::Denied;
+            self
+        }
+
+        /// The process cannot be ended, so the app has to be asked to quit.
+        fn cannot_terminate(mut self) -> Self {
+            self.terminate_succeeds = false;
+            self
+        }
+
+        /// The process does not end when it is asked to.
+        fn ignores_termination(mut self) -> Self {
+            self.terminate_stops_apps = false;
             self
         }
 
@@ -1406,6 +1791,29 @@ mod tests {
             lock(&self.running_bundles).clear();
         }
 
+        fn is_menu_bar_app(&self, app: &std::path::Path) -> bool {
+            lock(&self.menu_bar_apps).contains_key(app)
+        }
+
+        fn login_item_helpers(&self, app: &std::path::Path) -> Vec<PathBuf> {
+            lock(&self.login_item_helpers)
+                .get(app)
+                .cloned()
+                .unwrap_or_default()
+        }
+
+        fn terminate(&self, pids: &[u32]) -> bool {
+            lock(&self.terminated).push(pids.to_vec());
+            if !self.terminate_succeeds {
+                return false;
+            }
+            if self.terminate_stops_apps {
+                let mut running = lock(&self.running);
+                running.retain(|_, app_pids| !app_pids.iter().any(|pid| pids.contains(pid)));
+            }
+            true
+        }
+
         fn session_state(&self, _app: Option<&std::path::Path>, bundle_id: &str) -> SessionState {
             lock(&self.sessions)
                 .get(bundle_id)
@@ -1413,8 +1821,11 @@ mod tests {
                 .unwrap_or_else(SessionState::visible)
         }
 
-        fn open(&self, bundle_id: &str, hidden: bool) -> bool {
-            lock(&self.opened).push((bundle_id.to_owned(), hidden));
+        fn open(&self, app: &Reopen) -> bool {
+            lock(&self.opened).push((app.bundle_id().to_owned(), app.is_hidden()));
+            if let Relaunch::Path(path) = app.relaunch() {
+                lock(&self.opened_paths).push(path.clone());
+            }
             self.open_succeeds
         }
 
@@ -1451,6 +1862,11 @@ mod tests {
     /// The apps that were opened, with the hidden state they were opened in.
     fn opened(system: &FakeSystem) -> Vec<(String, bool)> {
         lock(&system.opened).clone()
+    }
+
+    /// The paths the apps were opened by.
+    fn opened_paths(system: &FakeSystem) -> Vec<PathBuf> {
+        lock(&system.opened_paths).clone()
     }
 
     fn running(system: &FakeSystem, app: &str) -> bool {
@@ -2390,5 +2806,272 @@ mod tests {
                 "end tell",
             ]
         );
+        assert_eq!(
+            transcript(&menu_bar_command(std::path::Path::new(
+                "/Applications/MenuBar.app"
+            ))),
+            [
+                "read",
+                "/Applications/MenuBar.app/Contents/Info",
+                "LSUIElement"
+            ]
+        );
+        assert_eq!(
+            transcript(&terminate_command(&[10, 11])),
+            ["-TERM", "10", "11"]
+        );
+        assert_eq!(
+            transcript(&open_path_command(
+                std::path::Path::new("/Applications/Helper.app"),
+                true
+            )),
+            ["-g", "-j", "-a", "/Applications/Helper.app"]
+        );
+    }
+
+    /// The path of the helper that macOS starts at login for an app.
+    const HELPER: &str = "/Applications/Dropbox.app/Contents/Library/LoginItems/Helper.app";
+
+    #[test]
+    fn a_menu_bar_app_is_detected_from_its_info_plist() {
+        assert!(is_menu_bar_app_from_info("1\n"));
+        assert!(is_menu_bar_app_from_info("true\n"));
+        assert!(!is_menu_bar_app_from_info("0\n"));
+        assert!(!is_menu_bar_app_from_info("false\n"));
+        assert!(!is_menu_bar_app_from_info(""));
+    }
+
+    #[test]
+    fn a_menu_bar_app_has_no_icon_in_the_dock() {
+        assert!(AppKind::Dock.has_dock_icon());
+        assert!(!AppKind::MenuBar.has_dock_icon());
+        assert!(!AppKind::LoginItem.has_dock_icon());
+    }
+
+    #[test]
+    fn a_menu_bar_app_is_found_in_the_scan() {
+        let system = FakeSystem::new()
+            .with_app("/Applications/MenuBar.app", "com.example.menubar", &[10])
+            .with_menu_bar_app("/Applications/MenuBar.app");
+
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/MenuBar.app"]),
+            None,
+            &AppLists::new(),
+        );
+
+        assert_eq!(scan.running().len(), 1);
+        assert_eq!(scan.running()[0].kind(), AppKind::MenuBar);
+    }
+
+    #[test]
+    fn a_menu_bar_app_is_ended_instead_of_being_quit_through_an_apple_event() {
+        let system = FakeSystem::new()
+            .with_app("/Applications/MenuBar.app", "com.example.menubar", &[10])
+            .with_menu_bar_app("/Applications/MenuBar.app");
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/MenuBar.app"]),
+            None,
+            &AppLists::new(),
+        );
+
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
+
+        assert!(
+            lock(&system.quit_calls).is_empty(),
+            "the app was quit through an Apple event"
+        );
+        assert_eq!(lock(&system.terminated).as_slice(), [vec![10]]);
+        assert_eq!(bundle_ids(&reopen), ["com.example.menubar"]);
+        assert!(!running(&system, "/Applications/MenuBar.app"));
+    }
+
+    #[test]
+    fn a_menu_bar_app_is_reopened_in_the_background() {
+        let system = FakeSystem::new()
+            .with_app("/Applications/MenuBar.app", "com.example.menubar", &[10])
+            .with_menu_bar_app("/Applications/MenuBar.app");
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/MenuBar.app"]),
+            None,
+            &AppLists::new(),
+        );
+
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
+        reopen_apps(&system, &reopen);
+
+        assert_eq!(reopen[0].relaunch(), &Relaunch::Background);
+        assert_eq!(
+            opened(&system),
+            [("com.example.menubar".to_owned(), true)],
+            "the app was not reopened in the background"
+        );
+    }
+
+    #[test]
+    fn a_menu_bar_app_that_cannot_be_ended_is_asked_to_quit_after_all() {
+        let system = FakeSystem::new()
+            .with_app("/Applications/MenuBar.app", "com.example.menubar", &[10])
+            .with_menu_bar_app("/Applications/MenuBar.app")
+            .cannot_terminate();
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/MenuBar.app"]),
+            None,
+            &AppLists::new(),
+        );
+
+        let _ = quit_apps(&system, scan.running(), &fast_policy(false));
+
+        assert_eq!(
+            lock(&system.quit_calls).as_slice(),
+            ["com.example.menubar"],
+            "the app was not asked to quit"
+        );
+    }
+
+    #[test]
+    fn a_menu_bar_app_that_ignores_the_end_is_force_killed() {
+        let system = FakeSystem::new()
+            .with_app("/Applications/MenuBar.app", "com.example.menubar", &[10])
+            .with_menu_bar_app("/Applications/MenuBar.app")
+            .ignores_termination();
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/MenuBar.app"]),
+            None,
+            &AppLists::new(),
+        );
+
+        let _ = quit_apps(&system, scan.running(), &fast_policy(true));
+
+        assert_eq!(lock(&system.killed).as_slice(), [vec![10]]);
+    }
+
+    #[test]
+    fn the_login_item_helper_of_an_app_is_found_in_the_scan() {
+        let system = FakeSystem::new()
+            .with_app("/Applications/Dropbox.app", "com.example.dropbox", &[10])
+            .with_app(HELPER, "com.example.helper", &[11])
+            .with_login_item_helper("/Applications/Dropbox.app", HELPER);
+
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/Dropbox.app"]),
+            None,
+            &AppLists::new(),
+        );
+
+        assert_eq!(scan.running().len(), 2);
+        assert_eq!(scan.running()[0].kind(), AppKind::Dock);
+        assert_eq!(scan.running()[1].kind(), AppKind::LoginItem);
+        assert_eq!(scan.running()[1].name(), "Helper.app");
+    }
+
+    #[test]
+    fn a_login_item_that_is_not_running_is_not_quit() {
+        let system = FakeSystem::new()
+            .with_app("/Applications/Dropbox.app", "com.example.dropbox", &[10])
+            .with_bundle_id(HELPER, "com.example.helper")
+            .with_login_item_helper("/Applications/Dropbox.app", HELPER);
+
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/Dropbox.app"]),
+            None,
+            &AppLists::new(),
+        );
+
+        assert_eq!(scan.running().len(), 1);
+        assert_eq!(scan.running()[0].name(), "Dropbox.app");
+    }
+
+    #[test]
+    fn a_login_item_is_ended_and_reopened_by_its_path() {
+        let system = FakeSystem::new()
+            .with_app("/Applications/Dropbox.app", "com.example.dropbox", &[10])
+            .with_app(HELPER, "com.example.helper", &[11])
+            .with_login_item_helper("/Applications/Dropbox.app", HELPER);
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/Dropbox.app"]),
+            None,
+            &AppLists::new(),
+        );
+
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
+        reopen_apps(&system, &reopen);
+
+        let login_item = reopen
+            .iter()
+            .find(|app| app.bundle_id() == "com.example.helper")
+            .unwrap_or_else(|| panic!("the login item was not reopened"));
+        assert_eq!(
+            login_item.relaunch(),
+            &Relaunch::Path(PathBuf::from(HELPER))
+        );
+        assert_eq!(opened_paths(&system), [PathBuf::from(HELPER)]);
+        assert_eq!(
+            opened(&system),
+            [
+                ("com.example.dropbox".to_owned(), false),
+                ("com.example.helper".to_owned(), true),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_login_item_that_runs_again_is_not_opened_a_second_time() {
+        let system = FakeSystem::new()
+            .with_app("/Applications/Dropbox.app", "com.example.dropbox", &[10])
+            .with_app(HELPER, "com.example.helper", &[11])
+            .with_login_item_helper("/Applications/Dropbox.app", HELPER);
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/Dropbox.app"]),
+            None,
+            &AppLists::new(),
+        );
+
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
+        // The app the login item belongs to starts it again by itself.
+        lock(&system.running).insert(PathBuf::from(HELPER), vec![11]);
+        reopen_apps(&system, &reopen);
+
+        assert!(
+            opened_paths(&system).is_empty(),
+            "the login item was opened again: {:?}",
+            opened_paths(&system)
+        );
+    }
+
+    #[test]
+    fn the_login_item_helpers_of_an_app_are_found_on_disk() {
+        let app = fake_bundle(
+            "login-items",
+            &[
+                "Contents/Library/LoginItems/Helper.app/Contents/MacOS/Helper",
+                "Contents/Library/LoginItems/readme.txt",
+            ],
+        );
+
+        let helpers = login_item_helpers_in(&app);
+
+        assert_eq!(
+            helpers,
+            [app.join("Contents/Library/LoginItems/Helper.app")]
+        );
+        let _ = std::fs::remove_dir_all(&app);
+    }
+
+    #[test]
+    fn an_app_without_login_item_helpers_has_none() {
+        let app = fake_bundle("no-login-items", &["Contents/MacOS/app"]);
+
+        assert!(login_item_helpers_in(&app).is_empty());
+        let _ = std::fs::remove_dir_all(&app);
     }
 }

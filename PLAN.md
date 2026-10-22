@@ -165,6 +165,9 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Explain that the hidden state and the window place of an app could not be read when macOS denies the permission to control System Events, so the user knows why a hidden app was reopened in the background, covered by tests with injected osascript output
 - [ ] Put every window of a reopened app back where it was, not only the first one, so an app with several windows comes back the way it was, covered by tests
 - [ ] Report the apps that were reopened hidden and the apps whose window was put back in the run summary and in the `--json`/`--markdown` reports, so a structured report names them instead of only printing a human-readable line, covered by tests
+- [ ] Detect an app that sets `LSBackgroundOnly` in its `Info.plist` and treat it like a menu-bar app, so an app without any icon at all is ended instead of quit through an Apple event, covered by tests
+- [ ] Find the app bundle of a bundle id that is only known by its id (a cask `uninstall` stanza), so an app without a Dock icon is detected, ended and reopened like any other app, covered by tests
+- [ ] Handle a cask that installs a LaunchAgent (a login item without an app bundle): stop the agent before the upgrade and start it again afterwards with `launchctl kickstart -k`, covered by stub-based tests
 
 ## Milestone 5: Linux
 
