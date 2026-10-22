@@ -147,7 +147,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add Rancher Desktop: stop and start it with `rdctl shutdown` and `rdctl start` around its cask upgrade and restore containers, covered by stub-based tests
 - [x] Add Podman machine: stop and start it with `podman machine stop` and `podman machine start` around a Podman upgrade and restore containers, covered by stub-based tests
 - [x] Add standalone Lima instances (`limactl list`, `stop`, `start`) that are not managed by Colima, covered by stub-based tests
-- [ ] Detect the compose command in use (`docker compose`, `docker-compose`, `podman compose`) and use it consistently for pull, up and down, covered by tests with injected command lookups
+- [x] Detect the compose command in use (`docker compose`, `docker-compose`, `podman compose`) and use it consistently for pull, up and down, covered by tests with injected command lookups
 - [ ] Add native Docker Engine on Linux to the runtime abstraction (restart through `systemctl restart docker` with a warning about running containers when `live-restore` is off), covered by tests with injected facts
 - [ ] Update the README and docs to describe the supported container runtimes and replace the Colima-only wording, once the runtime abstraction exists
 - [ ] Add a read-only Homebrew cask metadata probe to `--check` (or a dedicated command) so the real-tools job verifies the recorded `brew info --cask --json=v2` transcript and fails on cask JSON parser drift, covered by tests
@@ -177,6 +177,8 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Make the Colima/lima and container steps discover both Homebrew installations (`/opt/homebrew` and `/usr/local`) instead of only the `brew` on `PATH`, so an outdated `colima`/`lima` formula in either architecture stops the containers before the upgrade, covered by tests with injected prefixes
 - [ ] Complete the Docker Desktop AppleScript fallback: wait for the app to exit after the quit and start it again by its app bundle when `docker desktop start` is unavailable, so older versions finish the stop/start cycle around their cask upgrade, covered by stub-based tests
 - [ ] Stop standalone Lima instances only when the `lima` formula itself is being upgraded, not on a Colima-only upgrade, so an unrelated VM keeps running, covered by stub-based tests
+- [ ] Prefer `podman compose` when the active runtime is Podman even if a Docker compose implementation is also installed, so a forced `--container-runtime podman` run does not fall back to the Docker CLI, covered by tests with injected command lookups
+- [ ] Use the active runtime's container CLI (`podman ps`, `podman image prune`) for standalone container listing and image cleanup when Podman is active, so a Podman-only host without the Docker CLI still restores containers, covered by stub-based tests
 
 ## Milestone 5: Linux
 

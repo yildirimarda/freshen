@@ -952,6 +952,138 @@ fn podman_machine_running(json: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// The compose implementation freshen drives.
+///
+/// Docker ships Compose v2 as the `docker compose` plugin, older installations
+/// have the standalone `docker-compose` binary, and Podman provides
+/// `podman compose`. The detected command is used for every compose action so
+/// a run never mixes implementations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComposeCommand {
+    /// The `docker compose` CLI plugin.
+    DockerCompose,
+    /// The standalone `docker-compose` binary.
+    DockerComposeStandalone,
+    /// `podman compose`.
+    PodmanCompose,
+}
+
+impl ComposeCommand {
+    /// Every known compose command, in detection order.
+    pub const ALL: [Self; 3] = [
+        Self::DockerCompose,
+        Self::DockerComposeStandalone,
+        Self::PodmanCompose,
+    ];
+
+    /// Name used in progress messages and reports, e.g. `docker compose`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DockerCompose => "docker compose",
+            Self::DockerComposeStandalone => "docker-compose",
+            Self::PodmanCompose => "podman compose",
+        }
+    }
+
+    /// Executable that runs the compose implementation.
+    #[must_use]
+    pub fn program(self) -> &'static str {
+        match self {
+            Self::DockerCompose => "docker",
+            Self::DockerComposeStandalone => "docker-compose",
+            Self::PodmanCompose => "podman",
+        }
+    }
+
+    fn prefix(self) -> &'static [&'static str] {
+        match self {
+            Self::DockerCompose | Self::PodmanCompose => &["compose"],
+            Self::DockerComposeStandalone => &[],
+        }
+    }
+
+    /// Builds a compose command for `project` with `arguments`.
+    #[must_use]
+    pub fn command(self, project: &ComposeProject, arguments: &[&str]) -> CommandSpec {
+        let mut spec = CommandSpec::new(self.program()).args(self.prefix());
+        spec = spec.args(["-p"]).arg(project.name());
+        for file in project.config_files() {
+            spec = spec.arg("-f").arg(file.as_str());
+        }
+        spec.args(arguments)
+            .retry_transient_network(NETWORK_RETRIES)
+    }
+
+    /// Builds the command that lists running compose projects as JSON.
+    #[must_use]
+    pub fn list_command(self) -> CommandSpec {
+        CommandSpec::new(self.program())
+            .args(self.prefix())
+            .args(["ls", "--format", "json"])
+            .neutral_locale()
+    }
+}
+
+impl fmt::Display for ComposeCommand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// The command lookups used to detect the compose implementation.
+///
+/// Reading them through a trait keeps detection testable without a real
+/// container toolchain: a test injects which programs exist and which ones
+/// provide a working `compose` subcommand.
+pub trait ComposeCommandProbe {
+    /// Returns `true` when `program` is an executable on `PATH`.
+    fn command_exists(&self, program: &str) -> bool;
+
+    /// Returns `true` when `program compose version` succeeds.
+    fn supports_compose(&self, program: &str) -> bool;
+}
+
+/// Reads the compose command facts from the running host.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct HostComposeCommandProbe;
+
+impl ComposeCommandProbe for HostComposeCommandProbe {
+    fn command_exists(&self, program: &str) -> bool {
+        crate::executable::command_exists(program)
+    }
+
+    fn supports_compose(&self, program: &str) -> bool {
+        if !self.command_exists(program) {
+            return false;
+        }
+
+        CommandSpec::new(program)
+            .args(["compose", "version"])
+            .neutral_locale()
+            .run()
+            .is_ok()
+    }
+}
+
+/// Detects the compose command freshen should use.
+///
+/// `docker compose` wins when the Docker CLI has a working compose plugin,
+/// then the standalone `docker-compose` binary, then `podman compose`. Returns
+/// `None` when no implementation is available.
+#[must_use]
+pub fn detect_compose_command(probe: &dyn ComposeCommandProbe) -> Option<ComposeCommand> {
+    if probe.supports_compose("docker") {
+        Some(ComposeCommand::DockerCompose)
+    } else if probe.command_exists("docker-compose") {
+        Some(ComposeCommand::DockerComposeStandalone)
+    } else if probe.supports_compose("podman") {
+        Some(ComposeCommand::PodmanCompose)
+    } else {
+        None
+    }
+}
+
 /// A compose project and the config files needed to address it again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComposeProject {
@@ -1090,15 +1222,37 @@ pub fn register_with_runtime(
     registry: Registry,
     runtime: impl ContainerRuntime + 'static,
 ) -> Registry {
+    register_with_compose(
+        registry,
+        runtime,
+        detect_compose_command(&HostComposeCommandProbe),
+    )
+}
+
+/// Registers the container steps for a specific runtime and compose command.
+///
+/// The compose command is resolved once and shared by the stop, start and
+/// image steps, so `pull`, `up` and `down` always use the same implementation.
+#[must_use]
+pub fn register_with_compose(
+    registry: Registry,
+    runtime: impl ContainerRuntime + 'static,
+    compose: Option<ComposeCommand>,
+) -> Registry {
     let runtime: Arc<dyn ContainerRuntime> = Arc::new(runtime);
     let snapshot = ContainerSnapshot::default();
     registry
         .with(ContainerStopStep::new(
             Arc::clone(&runtime),
             snapshot.clone(),
+            compose,
         ))
-        .with(ContainerStartStep::new(Arc::clone(&runtime), snapshot))
-        .with(DockerStep::new(runtime))
+        .with(ContainerStartStep::new(
+            Arc::clone(&runtime),
+            snapshot,
+            compose,
+        ))
+        .with(DockerStep::new(runtime, compose))
 }
 
 /// Registers the container steps for the detected runtime.
@@ -1155,15 +1309,21 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 struct ContainerStopStep {
     runtime: Arc<dyn ContainerRuntime>,
     snapshot: ContainerSnapshot,
+    compose: Option<ComposeCommand>,
     display_name: String,
 }
 
 impl ContainerStopStep {
-    fn new(runtime: Arc<dyn ContainerRuntime>, snapshot: ContainerSnapshot) -> Self {
+    fn new(
+        runtime: Arc<dyn ContainerRuntime>,
+        snapshot: ContainerSnapshot,
+        compose: Option<ComposeCommand>,
+    ) -> Self {
         let display_name = format!("{} stop", runtime.display_name());
         Self {
             runtime,
             snapshot,
+            compose,
             display_name,
         }
     }
@@ -1229,19 +1389,21 @@ impl Step for ContainerStopStep {
         let mut snapshot = Snapshot::default();
         let mut failures = Vec::new();
 
+        if let Some(compose) = self.compose {
+            snapshot.compose = selected_projects(list_compose_projects(compose), options);
+        }
         if command_exists("docker") {
-            snapshot = Snapshot {
-                compose: selected_projects(list_compose_projects(), options),
-                standalone: selected_containers(list_standalone_containers(), options),
-            };
+            snapshot.standalone = selected_containers(list_standalone_containers(), options);
         }
 
         self.snapshot.store(snapshot.clone());
 
-        for project in &snapshot.compose {
-            human!("docker compose down: {}", project.name());
-            if let Err(error) = compose_command(project, &["down"]).run() {
-                failures.push(StepError::run_from_process(COLIMA_STOP, &error));
+        if let Some(compose) = self.compose {
+            for project in &snapshot.compose {
+                human!("{} down: {}", compose.as_str(), project.name());
+                if let Err(error) = compose.command(project, &["down"]).run() {
+                    failures.push(StepError::run_from_process(COLIMA_STOP, &error));
+                }
             }
         }
         for container in &snapshot.standalone {
@@ -1263,7 +1425,12 @@ impl Step for ContainerStopStep {
     }
 
     fn restore(&self) -> Result<(), StepError> {
-        restore_runtime(self.runtime.as_ref(), &self.snapshot, COLIMA_STOP)
+        restore_runtime(
+            self.runtime.as_ref(),
+            &self.snapshot,
+            COLIMA_STOP,
+            self.compose,
+        )
     }
 
     fn prerequisites(&self) -> &'static [StepId] {
@@ -1282,15 +1449,21 @@ impl Step for ContainerStopStep {
 struct ContainerStartStep {
     runtime: Arc<dyn ContainerRuntime>,
     snapshot: ContainerSnapshot,
+    compose: Option<ComposeCommand>,
     display_name: String,
 }
 
 impl ContainerStartStep {
-    fn new(runtime: Arc<dyn ContainerRuntime>, snapshot: ContainerSnapshot) -> Self {
+    fn new(
+        runtime: Arc<dyn ContainerRuntime>,
+        snapshot: ContainerSnapshot,
+        compose: Option<ComposeCommand>,
+    ) -> Self {
         let display_name = format!("{} start", runtime.display_name());
         Self {
             runtime,
             snapshot,
+            compose,
             display_name,
         }
     }
@@ -1317,10 +1490,12 @@ impl ContainerStartStep {
                 failures.push(StepError::run_from_process(COLIMA_START, &error));
             }
         }
-        for project in &snapshot.compose {
-            human!("docker compose up -d: {}", project.name());
-            if let Err(error) = compose_command(project, &["up", "-d"]).run() {
-                failures.push(StepError::run_from_process(COLIMA_START, &error));
+        if let Some(compose) = self.compose {
+            for project in &snapshot.compose {
+                human!("{} up -d: {}", compose.as_str(), project.name());
+                if let Err(error) = compose.command(project, &["up", "-d"]).run() {
+                    failures.push(StepError::run_from_process(COLIMA_START, &error));
+                }
             }
         }
 
@@ -1336,6 +1511,7 @@ fn restore_runtime(
     runtime: &dyn ContainerRuntime,
     snapshot: &ContainerSnapshot,
     step: StepId,
+    compose: Option<ComposeCommand>,
 ) -> Result<(), StepError> {
     let Some(stopped) = snapshot.get() else {
         return Ok(());
@@ -1358,10 +1534,12 @@ fn restore_runtime(
             failures.push(StepError::run_from_process(step, &error));
         }
     }
-    for project in &stopped.compose {
-        human!("docker compose up -d: {}", project.name());
-        if let Err(error) = compose_command(project, &["up", "-d"]).run() {
-            failures.push(StepError::run_from_process(step, &error));
+    if let Some(compose) = compose {
+        for project in &stopped.compose {
+            human!("{} up -d: {}", compose.as_str(), project.name());
+            if let Err(error) = compose.command(project, &["up", "-d"]).run() {
+                failures.push(StepError::run_from_process(step, &error));
+            }
         }
     }
 
@@ -1416,11 +1594,12 @@ impl Step for ContainerStartStep {
 
 struct DockerStep {
     runtime: Arc<dyn ContainerRuntime>,
+    compose: Option<ComposeCommand>,
 }
 
 impl DockerStep {
-    fn new(runtime: Arc<dyn ContainerRuntime>) -> Self {
-        Self { runtime }
+    fn new(runtime: Arc<dyn ContainerRuntime>, compose: Option<ComposeCommand>) -> Self {
+        Self { runtime, compose }
     }
 }
 
@@ -1434,7 +1613,9 @@ impl Step for DockerStep {
     }
 
     fn detect(&self) -> Result<Detection, StepError> {
-        let detected = if command_exists("docker") && self.runtime.detect().is_installed() {
+        let detected = if (command_exists("docker") || self.compose.is_some())
+            && self.runtime.detect().is_installed()
+        {
             Detection::Installed
         } else {
             Detection::NotInstalled
@@ -1460,32 +1641,37 @@ impl Step for DockerStep {
         }
 
         human!("Docker: pull newer images for running compose projects");
-        let projects = selected_projects(list_compose_projects(), options);
+        let projects = self
+            .compose
+            .map(|compose| selected_projects(list_compose_projects(compose), options))
+            .unwrap_or_default();
         let mut failures = Vec::new();
 
         if projects.is_empty() {
             human!("No running compose projects.");
-        } else {
+        } else if let Some(compose) = self.compose {
             for project in &projects {
-                human!("docker compose pull + up -d: {}", project.name());
-                if let Err(error) = compose_command(project, &["pull", "--quiet"]).run() {
+                human!("{} pull + up -d: {}", compose.as_str(), project.name());
+                if let Err(error) = compose.command(project, &["pull", "--quiet"]).run() {
                     failures.push(StepError::run_from_process(DOCKER, &error));
                 }
-                if let Err(error) = compose_command(project, &["up", "-d"]).run() {
+                if let Err(error) = compose.command(project, &["up", "-d"]).run() {
                     failures.push(StepError::run_from_process(DOCKER, &error));
                 }
             }
         }
 
-        if let Err(error) = cleanup::run(
-            DOCKER,
-            "Docker: prune dangling images",
-            CommandSpec::new("docker")
-                .args(["image", "prune", "-f"])
-                .neutral_locale(),
-            options,
-        ) {
-            failures.push(error);
+        if command_exists("docker") {
+            if let Err(error) = cleanup::run(
+                DOCKER,
+                "Docker: prune dangling images",
+                CommandSpec::new("docker")
+                    .args(["image", "prune", "-f"])
+                    .neutral_locale(),
+                options,
+            ) {
+                failures.push(error);
+            }
         }
 
         finish(failures)
@@ -1523,12 +1709,8 @@ fn lines(output: &str) -> Vec<String> {
         .collect()
 }
 
-fn list_compose_projects() -> Vec<ComposeProject> {
-    let Ok(output) = CommandSpec::new("docker")
-        .args(["compose", "ls", "--format", "json"])
-        .neutral_locale()
-        .run()
-    else {
+fn list_compose_projects(compose: ComposeCommand) -> Vec<ComposeProject> {
+    let Ok(output) = compose.list_command().run() else {
         return Vec::new();
     };
     parse_compose_projects(output.stdout())
@@ -1586,17 +1768,6 @@ fn selected_containers(
         .collect()
 }
 
-fn compose_command(project: &ComposeProject, arguments: &[&str]) -> CommandSpec {
-    let mut spec = CommandSpec::new("docker")
-        .args(["compose", "-p"])
-        .arg(project.name());
-    for file in project.config_files() {
-        spec = spec.arg("-f").arg(file.as_str());
-    }
-    spec.args(arguments)
-        .retry_transient_network(NETWORK_RETRIES)
-}
-
 fn docker_command(arguments: &[&str], id: &str) -> CommandSpec {
     CommandSpec::new("docker").args(arguments).arg(id)
 }
@@ -1616,13 +1787,13 @@ fn command_exists(program: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        compose_command, detect_active_runtime, parse_compose_projects,
+        detect_active_runtime, detect_compose_command, parse_compose_projects,
         parse_running_standalone_lima_instances, parse_standalone_containers,
         podman_machine_running, register, register_for, register_with_runtime,
-        ActiveContainerRuntime, ColimaRuntime, ComposeProject, ContainerRuntime,
-        ContainerRuntimeKind, ContainerRuntimeProbe, ContainerRuntimeSource, DockerDesktopRuntime,
-        OrbStackRuntime, PodmanRuntime, RancherDesktopRuntime, StandaloneContainer, COLIMA_START,
-        COLIMA_STOP, DOCKER, PS_FORMAT,
+        ActiveContainerRuntime, ColimaRuntime, ComposeCommand, ComposeCommandProbe, ComposeProject,
+        ContainerRuntime, ContainerRuntimeKind, ContainerRuntimeProbe, ContainerRuntimeSource,
+        DockerDesktopRuntime, OrbStackRuntime, PodmanRuntime, RancherDesktopRuntime,
+        StandaloneContainer, COLIMA_START, COLIMA_STOP, DOCKER, PS_FORMAT,
     };
     use crate::homebrew;
     use crate::options::RunOptions;
@@ -1820,11 +1991,13 @@ mod tests {
     }
 
     #[test]
-    fn compose_commands_match_the_zsh_transcript() {
+    fn docker_compose_commands_match_the_zsh_transcript() {
         let project = ComposeProject::new("web", ["/srv/web/compose.yml", "/srv/web/override.yml"]);
 
         assert_eq!(
-            compose_command(&project, &["down"]).arguments(),
+            ComposeCommand::DockerCompose
+                .command(&project, &["down"])
+                .arguments(),
             os_strings(&[
                 "compose",
                 "-p",
@@ -1837,7 +2010,9 @@ mod tests {
             ])
         );
         assert_eq!(
-            compose_command(&project, &["pull", "--quiet"]).arguments(),
+            ComposeCommand::DockerCompose
+                .command(&project, &["pull", "--quiet"])
+                .arguments(),
             os_strings(&[
                 "compose",
                 "-p",
@@ -1850,6 +2025,95 @@ mod tests {
                 "--quiet",
             ])
         );
+    }
+
+    #[test]
+    fn every_compose_variant_builds_the_same_pull_up_and_down_shape() {
+        let project = ComposeProject::new("web", ["/srv/web/compose.yml"]);
+
+        for (command, program, prefix) in [
+            (ComposeCommand::DockerCompose, "docker", vec!["compose"]),
+            (
+                ComposeCommand::DockerComposeStandalone,
+                "docker-compose",
+                vec![],
+            ),
+            (ComposeCommand::PodmanCompose, "podman", vec!["compose"]),
+        ] {
+            for action in [vec!["down"], vec!["up", "-d"], vec!["pull", "--quiet"]] {
+                let spec = command.command(&project, &action);
+                let mut expected = prefix.clone();
+                expected.extend(["-p", "web", "-f", "/srv/web/compose.yml"]);
+                expected.extend(action);
+
+                assert_eq!(spec.program(), program, "{command}");
+                assert_eq!(spec.arguments(), os_strings(&expected), "{command}");
+            }
+        }
+    }
+
+    struct FakeComposeProbe {
+        existing: HashSet<&'static str>,
+        composing: HashSet<&'static str>,
+    }
+
+    impl FakeComposeProbe {
+        fn new(existing: &[&'static str], composing: &[&'static str]) -> Self {
+            Self {
+                existing: existing.iter().copied().collect(),
+                composing: composing.iter().copied().collect(),
+            }
+        }
+    }
+
+    impl ComposeCommandProbe for FakeComposeProbe {
+        fn command_exists(&self, program: &str) -> bool {
+            self.existing.contains(program)
+        }
+
+        fn supports_compose(&self, program: &str) -> bool {
+            self.composing.contains(program)
+        }
+    }
+
+    #[test]
+    fn detects_the_docker_compose_plugin_first() {
+        let probe = FakeComposeProbe::new(
+            &["docker", "docker-compose", "podman"],
+            &["docker", "podman"],
+        );
+
+        assert_eq!(
+            detect_compose_command(&probe),
+            Some(ComposeCommand::DockerCompose)
+        );
+    }
+
+    #[test]
+    fn falls_back_to_the_standalone_binary_without_the_docker_plugin() {
+        let probe = FakeComposeProbe::new(&["docker", "docker-compose"], &[]);
+
+        assert_eq!(
+            detect_compose_command(&probe),
+            Some(ComposeCommand::DockerComposeStandalone)
+        );
+    }
+
+    #[test]
+    fn falls_back_to_podman_compose_when_docker_has_no_compose() {
+        let probe = FakeComposeProbe::new(&["docker", "podman"], &["podman"]);
+
+        assert_eq!(
+            detect_compose_command(&probe),
+            Some(ComposeCommand::PodmanCompose)
+        );
+    }
+
+    #[test]
+    fn no_compose_command_is_detected_without_a_working_implementation() {
+        let probe = FakeComposeProbe::new(&["docker", "podman"], &[]);
+
+        assert_eq!(detect_compose_command(&probe), None);
     }
 
     #[test]

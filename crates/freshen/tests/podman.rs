@@ -308,3 +308,70 @@ fn a_failing_podman_machine_start_is_recorded_and_containers_are_not_restored() 
     );
     assert!(text.contains("1 failed"), "summary: {text}");
 }
+
+#[test]
+fn uses_podman_compose_when_docker_has_no_compose_plugin() {
+    let tools = StubTools::new(&["brew", "docker", "podman"]);
+    install_brew(&tools);
+    tools.set_script(
+        "docker",
+        r#"case "$*" in
+  "compose version")
+    exit 1
+    ;;
+  "ps --format "*)
+    printf '%s' "$FRESHEN_PS_OUTPUT"
+    ;;
+esac"#,
+    );
+    tools.set_script(
+        "podman",
+        r#"case "$*" in
+  "compose version")
+    exit 0
+    ;;
+  "compose ls --format json")
+    printf '%s' "$FRESHEN_COMPOSE_JSON"
+    ;;
+  "machine list --format json")
+    printf '%s' "$FRESHEN_PODMAN_MACHINES"
+    ;;
+esac"#,
+    );
+
+    let output = run(&tools, "podman\n", MACHINE_RUNNING);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    let podman_compose = |action: &str| {
+        format!("podman compose -p web -f /srv/web/compose.yml -f /srv/web/override.yml {action}")
+    };
+
+    assert!(
+        calls.contains(&"docker compose version".to_owned()),
+        "calls: {calls:?}"
+    );
+    assert!(
+        calls.contains(&"podman compose version".to_owned()),
+        "calls: {calls:?}"
+    );
+    assert!(calls.contains(&podman_compose("down")), "calls: {calls:?}");
+    assert!(calls.contains(&podman_compose("up -d")), "calls: {calls:?}");
+    assert!(
+        calls.contains(&podman_compose("pull --quiet")),
+        "calls: {calls:?}"
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.starts_with("docker compose -p")),
+        "calls: {calls:?}"
+    );
+
+    let text = stdout(&output);
+    assert!(text.contains("podman compose down: web"), "output: {text}");
+    assert!(
+        text.contains("podman compose pull + up -d: web"),
+        "output: {text}"
+    );
+}
