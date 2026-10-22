@@ -23,6 +23,7 @@ A failing step never aborts the run. Failures are collected and listed at the en
 
 ### Details worth knowing
 
+- **Both Homebrew architectures are updated.** On an Apple Silicon Mac the native Homebrew lives at `/opt/homebrew` and an Intel Homebrew installed for Rosetta lives at `/usr/local`. freshen discovers both (and the `brew` on `PATH`) and runs every Homebrew step for each installation, so packages in the other architecture are not silently left behind. With a single installation the commands are exactly `brew ...` as before; with two, the output names the prefix and the pre-upgrade snapshot and rollback hints cover both.
 - **Formulae are upgraded before apps are closed**, so apps stay open during the slow part.
 - **Apps are only quit when a cask upgrade will replace them.** Quit is graceful (AppleScript, 3 s timeout so a "Save changes?" dialog cannot hang the run). Apps that do not quit within `QUIT_TIMEOUT` are left alone unless `--force-kill` is given.
 - **An app that updates itself is waited for, not quit.** Apps that update themselves (Sparkle, or the auto-updater of an Electron app) replace their own bundle while they run, so quitting them mid-update would leave a broken app behind. freshen detects the running updater, waits up to `UPDATE_TIMEOUT` seconds for the update to finish and only then quits the app. An app whose update does not finish in time is left running and is not reopened.

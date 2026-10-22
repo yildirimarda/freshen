@@ -139,7 +139,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add macOS system updates: list via `softwareupdate --list` (report-only by default), opt-in `--install-macos-updates`, and detect pending reboot
 - [x] Update Xcode Command Line Tools when `softwareupdate` lists them, and handle the common "CLT out of date after macOS update" brew error
 - [x] Add `brew doctor` and `brew bundle cleanup` (when a Brewfile exists) as report-only checks
-- [ ] Handle Rosetta / dual-arch Homebrew installs (`/opt/homebrew` and `/usr/local`)
+- [x] Handle Rosetta / dual-arch Homebrew installs (`/opt/homebrew` and `/usr/local`)
 - [ ] Introduce a `ContainerRuntime` abstraction (detect, is_running, stop, start, and which formulae or casks trigger a restart) and move the existing Colima/lima logic behind it as the first implementation without changing behaviour, covered by the existing parity and idempotency tests
 - [ ] Detect the active container runtime from `DOCKER_HOST`, `docker context show` and the well-known socket paths (Colima, OrbStack, Docker Desktop, Rancher Desktop, Podman, native `/var/run/docker.sock`), show it in `--list-steps` and the run summary, and allow an override with a `--container-runtime` flag, covered by tests with injected environment and socket facts
 - [ ] Add Docker Desktop on macOS: detect it, quit it with `docker desktop stop` (falling back to the AppleScript quit) before its cask is upgraded, start it again afterwards and bring compose projects and standalone containers back with the same restore logic as Colima, covered by stub-based tests
@@ -174,6 +174,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Detect a macOS restart that is still pending from an update that was installed earlier, not only in the run that installed it, so `freshen --check` tells the user that the machine has to restart before it is up to date, covered by tests with the recorded output of a machine with a staged update
 - [ ] Update the Xcode Command Line Tools before the Homebrew steps run, so that a run which installs them also upgrades the packages in the same run instead of failing on the outdated tools, covered by tests
 - [ ] Report the `brew doctor` warnings and the `brew bundle cleanup` packages in the run summary and in the `--json`/`--markdown` reports, so a structured report names them instead of only printing a human-readable line
+- [ ] Make the Colima/lima and container steps discover both Homebrew installations (`/opt/homebrew` and `/usr/local`) instead of only the `brew` on `PATH`, so an outdated `colima`/`lima` formula in either architecture stops the containers before the upgrade, covered by tests with injected prefixes
 
 ## Milestone 5: Linux
 

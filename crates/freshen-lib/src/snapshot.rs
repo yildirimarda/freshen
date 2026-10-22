@@ -190,14 +190,7 @@ impl SnapshotSection {
 /// The Homebrew formulae and casks shared by every Homebrew step.
 #[must_use]
 pub fn homebrew_section() -> SnapshotSection {
-    SnapshotSection::new(
-        "brew",
-        vec![
-            SnapshotCommand::new("brew", ["list", "--versions"]),
-            SnapshotCommand::new("brew", ["list", "--cask", "--versions"]),
-            SnapshotCommand::new("brew", ["bundle", "dump", "--force"]).writing_to_file("--file="),
-        ],
-    )
+    SnapshotSection::new("brew", crate::homebrew::homebrew_snapshot_commands())
 }
 
 /// Writes snapshot sections to one timestamped file per run.
@@ -363,10 +356,10 @@ impl CapturedSection {
         let mut commands = Vec::new();
         for entry in &self.entries {
             match self.group {
-                "brew" if entry.command == "brew list --versions" => {
+                "brew" if entry.command.ends_with("brew list --versions") => {
                     commands.extend(brew_rollback_commands(entry));
                 }
-                "brew" if entry.command == "brew list --cask --versions" => {
+                "brew" if entry.command.ends_with("brew list --cask --versions") => {
                     commands.extend(brew_cask_rollback_commands(entry));
                 }
                 "uv" if entry.command == "uv tool list" => {
@@ -394,7 +387,16 @@ fn recorded_lines(entry: &SnapshotEntry) -> impl Iterator<Item = &str> {
     output.lines().filter(|line| !line.trim().is_empty())
 }
 
+/// The Homebrew executable recorded in a snapshot command.
+///
+/// It is `brew` for the installation on `PATH` and an absolute path for the
+/// other architecture, so a rollback hint reaches the right installation.
+fn brew_program(entry: &SnapshotEntry) -> &str {
+    entry.command.split_whitespace().next().unwrap_or("brew")
+}
+
 fn brew_rollback_commands(entry: &SnapshotEntry) -> Vec<RollbackCommand> {
+    let brew = brew_program(entry);
     recorded_lines(entry)
         .filter_map(|line| {
             let mut fields = line.split_whitespace();
@@ -405,9 +407,9 @@ fn brew_rollback_commands(entry: &SnapshotEntry) -> Vec<RollbackCommand> {
             }
 
             let command = if name.contains('@') {
-                format!("brew install {name}")
+                format!("{brew} install {name}")
             } else {
-                format!("brew install {name}@{version}")
+                format!("{brew} install {name}@{version}")
             };
             Some(RollbackCommand::new("brew", command))
         })
@@ -415,6 +417,7 @@ fn brew_rollback_commands(entry: &SnapshotEntry) -> Vec<RollbackCommand> {
 }
 
 fn brew_cask_rollback_commands(entry: &SnapshotEntry) -> Vec<RollbackCommand> {
+    let brew = brew_program(entry);
     recorded_lines(entry)
         .filter_map(|line| {
             let mut fields = line.split_whitespace();
@@ -425,9 +428,9 @@ fn brew_cask_rollback_commands(entry: &SnapshotEntry) -> Vec<RollbackCommand> {
             }
 
             let command = if name.contains('@') {
-                format!("brew install --cask {name}")
+                format!("{brew} install --cask {name}")
             } else {
-                format!("brew install --cask {name}@{version}")
+                format!("{brew} install --cask {name}@{version}")
             };
             Some(RollbackCommand::new("brew", command))
         })
@@ -884,6 +887,30 @@ mod tests {
                 "brew install --cask visual-studio-code@1.85.1",
                 "brew install --cask firefox@115",
             ]
+        );
+    }
+
+    #[test]
+    fn rollback_commands_use_the_installation_recorded_in_the_snapshot() {
+        assert_eq!(
+            commands(CapturedSection {
+                group: "brew",
+                entries: vec![SnapshotEntry::new(
+                    "/opt/homebrew/bin/brew list --versions",
+                    "jq 1.7.1\n",
+                )],
+            }),
+            ["/opt/homebrew/bin/brew install jq@1.7.1"]
+        );
+        assert_eq!(
+            commands(CapturedSection {
+                group: "brew",
+                entries: vec![SnapshotEntry::new(
+                    "/usr/local/bin/brew list --cask --versions",
+                    "firefox 121.0\n",
+                )],
+            }),
+            ["/usr/local/bin/brew install --cask firefox@121.0"]
         );
     }
 

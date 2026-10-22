@@ -12,8 +12,17 @@
 //! The doctor and the bundle cleanup are report-only: `brew doctor` and
 //! `brew bundle cleanup` only list what they found, and the steps show that
 //! list without changing anything.
+//!
+//! A Mac can have two Homebrew installations: the native one at
+//! `/opt/homebrew` and the Intel one at `/usr/local` that runs under Rosetta.
+//! The steps discover both (and the `brew` on `PATH`) and run each command for
+//! every installation, so packages in the other architecture are not silently
+//! left behind. A single installation keeps using the plain `brew` name, so
+//! the command transcripts stay the same as before.
 
+use std::collections::HashSet;
 use std::env;
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -35,7 +44,7 @@ use crate::snapshot::{self, SnapshotSection};
 use crate::step::{
     CheckReport, Detection, Operation, OutdatedItem, SkipReason, Step, StepError, StepId,
 };
-use crate::system::detect_terminal_app;
+use crate::system::{detect_terminal_app, Arch};
 use crate::warnings::warn_about_breakable_sessions;
 use crate::xcode;
 
@@ -50,6 +59,206 @@ pub(crate) const REOPEN: StepId = "brew-reopen";
 const SERVICES: StepId = "brew-services";
 
 const HOMEBREW_PLATFORMS: [Platform; 2] = [Platform::Macos, Platform::Linux];
+
+/// Prefixes checked on macOS in addition to the `brew` on `PATH`.
+const MACOS_BREW_PREFIXES: [&str; 2] = ["/opt/homebrew", "/usr/local"];
+
+/// Environment variable that replaces the prefixes searched for Homebrew.
+///
+/// A PATH-style list of prefixes, used by tests to point at temporary
+/// installations. The `brew` on `PATH` is still discovered.
+const BREW_PREFIXES_ENV: &str = "FRESHEN_BREW_PREFIXES";
+
+/// One Homebrew installation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BrewInstall {
+    /// The `bin/brew` executable.
+    program: PathBuf,
+    /// The installation prefix, for example `/opt/homebrew`.
+    prefix: PathBuf,
+    /// Whether the executable was found through `PATH`.
+    from_path: bool,
+    /// The architecture this installation serves.
+    arch: Arch,
+}
+
+impl BrewInstall {
+    /// The command that runs this installation.
+    ///
+    /// The installation on `PATH` keeps the plain `brew` name so the command
+    /// transcript does not change for a normal single-install machine. The
+    /// other installation is named by its absolute path, which is also what
+    /// makes the two architectures unambiguous in the log.
+    fn command(&self) -> CommandSpec {
+        if self.from_path {
+            CommandSpec::new("brew")
+        } else {
+            CommandSpec::new(self.program.as_os_str())
+        }
+    }
+
+    /// The program name recorded in a pre-upgrade snapshot.
+    fn snapshot_program(&self) -> String {
+        if self.from_path {
+            "brew".to_owned()
+        } else {
+            self.program.display().to_string()
+        }
+    }
+
+    /// Whether this installation serves `arch`.
+    fn serves(&self, arch: &Arch) -> bool {
+        &self.arch == arch
+    }
+}
+
+/// The Homebrew installations found on this machine.
+#[derive(Debug, Clone, Default)]
+struct BrewSet {
+    installs: Vec<BrewInstall>,
+}
+
+impl BrewSet {
+    /// Discovers every Homebrew installation.
+    fn detect() -> Self {
+        Self {
+            installs: brew_installs(),
+        }
+    }
+
+    fn installs(&self) -> &[BrewInstall] {
+        &self.installs
+    }
+
+    fn is_empty(&self) -> bool {
+        self.installs.is_empty()
+    }
+
+    fn is_multiple(&self) -> bool {
+        self.installs.len() > 1
+    }
+
+    /// A label for a message, naming the prefix only when there is more than
+    /// one installation.
+    fn label(&self, install: &BrewInstall) -> String {
+        if self.is_multiple() {
+            format!("Homebrew at {}", install.prefix.display())
+        } else {
+            "Homebrew".to_owned()
+        }
+    }
+}
+
+/// Prefixes a message with the installation only when there is more than one.
+fn install_message(brews: &BrewSet, install: &BrewInstall, message: impl Into<String>) -> String {
+    let message = message.into();
+    if brews.is_multiple() {
+        format!("{}: {message}", brews.label(install))
+    } else {
+        message
+    }
+}
+
+/// Discovers the `brew` on `PATH` and the standard prefixes.
+fn brew_installs() -> Vec<BrewInstall> {
+    let path = crate::executable::resolve("brew");
+    brew_installs_from(path, &brew_prefixes(), &Arch::current())
+}
+
+/// The prefixes searched for a Homebrew installation.
+fn brew_prefixes() -> Vec<PathBuf> {
+    if let Some(value) = env::var_os(BREW_PREFIXES_ENV) {
+        return env::split_paths(&value).collect();
+    }
+    if Platform::current() == Some(Platform::Macos) {
+        return MACOS_BREW_PREFIXES.iter().map(PathBuf::from).collect();
+    }
+    Vec::new()
+}
+
+/// Discovers installations from an already resolved `PATH` executable and a
+/// list of prefixes.
+///
+/// The result is deduplicated by executable and ordered with the installation
+/// that matches the running architecture first, so a Rosetta run updates its
+/// own architecture before the other one.
+fn brew_installs_from(
+    path: Option<PathBuf>,
+    prefixes: &[PathBuf],
+    current_arch: &Arch,
+) -> Vec<BrewInstall> {
+    let mut seen = HashSet::new();
+    let mut installs = Vec::new();
+
+    if let Some(program) = path {
+        let prefix = prefix_of(&program);
+        push_install(
+            &mut installs,
+            &mut seen,
+            program,
+            prefix,
+            true,
+            current_arch,
+        );
+    }
+    for prefix in prefixes {
+        push_install(
+            &mut installs,
+            &mut seen,
+            prefix.join("bin").join("brew"),
+            prefix.clone(),
+            false,
+            current_arch,
+        );
+    }
+
+    installs.sort_by_key(|install| std::cmp::Reverse(install.serves(current_arch)));
+    installs
+}
+
+fn push_install(
+    installs: &mut Vec<BrewInstall>,
+    seen: &mut HashSet<PathBuf>,
+    program: PathBuf,
+    prefix: PathBuf,
+    from_path: bool,
+    current_arch: &Arch,
+) {
+    if crate::executable::resolve(&program).is_none() {
+        return;
+    }
+
+    let key = fs::canonicalize(&program).unwrap_or_else(|_| program.clone());
+    if !seen.insert(key) {
+        return;
+    }
+
+    installs.push(BrewInstall {
+        arch: install_arch(&prefix, current_arch),
+        program,
+        prefix,
+        from_path,
+    });
+}
+
+/// The prefix of an executable named `<prefix>/bin/brew`.
+fn prefix_of(program: &Path) -> PathBuf {
+    program
+        .parent()
+        .and_then(Path::parent)
+        .map_or_else(|| PathBuf::from("/usr/local"), Path::to_path_buf)
+}
+
+/// The architecture a prefix serves.
+fn install_arch(prefix: &Path, current_arch: &Arch) -> Arch {
+    if prefix.ends_with("opt/homebrew") {
+        Arch::Aarch64
+    } else if prefix.ends_with("usr/local") {
+        Arch::X86_64
+    } else {
+        current_arch.clone()
+    }
+}
 
 /// The apps that were quit and still need to be reopened.
 ///
@@ -72,26 +281,37 @@ impl ReopenQueue {
     }
 }
 
+/// A Homebrew service that was running before its formula was upgraded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct QueuedService {
+    install: BrewInstall,
+    name: String,
+}
+
 /// Homebrew services that were running before their formula was upgraded and
 /// still need to be restarted.
 #[derive(Clone, Default)]
-struct ServiceQueue(Arc<Mutex<Vec<String>>>);
+struct ServiceQueue(Arc<Mutex<Vec<QueuedService>>>);
 
 impl ServiceQueue {
-    fn extend(&self, services: impl IntoIterator<Item = String>) {
+    fn extend(&self, install: &BrewInstall, services: impl IntoIterator<Item = String>) {
         let mut queued = lock(&self.0);
-        for service in services {
+        for name in services {
+            let service = QueuedService {
+                install: install.clone(),
+                name,
+            };
             if !queued.contains(&service) {
                 queued.push(service);
             }
         }
     }
 
-    fn names(&self) -> Vec<String> {
+    fn services(&self) -> Vec<QueuedService> {
         lock(&self.0).clone()
     }
 
-    fn remove(&self, service: &str) {
+    fn remove(&self, service: &QueuedService) {
         lock(&self.0).retain(|queued| queued != service);
     }
 }
@@ -499,11 +719,36 @@ pub fn installed_app_paths(apps: &[String], roots: &[PathBuf]) -> Vec<PathBuf> {
     paths
 }
 
+/// The commands that record every Homebrew installation for a snapshot.
+///
+/// A dual-architecture machine records both prefixes, so the rollback hints
+/// cover the packages of each installation.
+pub(crate) fn homebrew_snapshot_commands() -> Vec<snapshot::SnapshotCommand> {
+    let brews = BrewSet::detect();
+    let mut commands = Vec::new();
+    for install in brews.installs() {
+        let program = install.snapshot_program();
+        commands.push(snapshot::SnapshotCommand::new(
+            program.clone(),
+            ["list", "--versions"],
+        ));
+        commands.push(snapshot::SnapshotCommand::new(
+            program.clone(),
+            ["list", "--cask", "--versions"],
+        ));
+        commands.push(
+            snapshot::SnapshotCommand::new(program, ["bundle", "dump", "--force"])
+                .writing_to_file("--file="),
+        );
+    }
+    commands
+}
+
 fn detect_brew() -> Detection {
-    if crate::executable::command_exists("brew") {
-        Detection::Installed
-    } else {
+    if BrewSet::detect().is_empty() {
         Detection::NotInstalled
+    } else {
+        Detection::Installed
     }
 }
 
@@ -547,8 +792,9 @@ fn lines(output: &str) -> Vec<String> {
         .collect()
 }
 
-fn outdated(step: StepId, args: &[&str]) -> Result<CheckReport, StepError> {
-    let output = CommandSpec::new("brew")
+fn outdated(step: StepId, install: &BrewInstall, args: &[&str]) -> Result<CheckReport, StepError> {
+    let output = install
+        .command()
         .args(["outdated"])
         .args(args)
         .neutral_locale()
@@ -570,8 +816,9 @@ const PINNED_REASON: &str = "held back (pinned)";
 /// A failure is not fatal: Homebrew itself skips pinned formulae during an
 /// upgrade, so the run can continue without the list. The warning keeps the
 /// missing information visible.
-fn pinned_formulae() -> Option<Vec<String>> {
-    match CommandSpec::new("brew")
+fn pinned_formulae(install: &BrewInstall) -> Option<Vec<String>> {
+    match install
+        .command()
         .args(["list", "--pinned", "--formula"])
         .neutral_locale()
         .run()
@@ -614,6 +861,22 @@ fn with_pinned_reasons(report: CheckReport, pinned: &[String]) -> CheckReport {
     }))
 }
 
+/// Names the installation in a check item when more than one is present.
+fn qualify_items(report: CheckReport, install: &BrewInstall, multiple: bool) -> CheckReport {
+    if !multiple {
+        return report;
+    }
+
+    CheckReport::from_items(report.items().iter().map(|item| {
+        let from = format!("from {}", install.prefix.display());
+        let reason = match item.reason() {
+            Some(existing) => format!("{existing}; {from}"),
+            None => from,
+        };
+        item.clone().with_reason(reason)
+    }))
+}
+
 /// Parses the services `brew services list` reports as running.
 ///
 /// The output is a table with a `Name Status ...` header. Only services that
@@ -647,17 +910,18 @@ fn services_for_formulae(output: &str, formulae: &[String]) -> Vec<String> {
 ///
 /// A failure is not fatal: the formula upgrade can still proceed, and the
 /// warning keeps the missing service restart visible.
-fn capture_running_services(formulae: &[String], queue: &ServiceQueue) {
+fn capture_running_services(formulae: &[String], install: &BrewInstall, queue: &ServiceQueue) {
     if formulae.is_empty() {
         return;
     }
 
-    match CommandSpec::new("brew")
+    match install
+        .command()
         .args(["services", "list"])
         .neutral_locale()
         .run()
     {
-        Ok(output) => queue.extend(services_for_formulae(output.stdout(), formulae)),
+        Ok(output) => queue.extend(install, services_for_formulae(output.stdout(), formulae)),
         Err(error) => eprintln!("freshen: could not list Homebrew services: {error}"),
     }
 }
@@ -880,7 +1144,12 @@ impl Step for UpdateStep {
     }
 
     fn run(&self) -> Result<(), StepError> {
-        run_brew(BREW, CommandSpec::new("brew").arg("update")).map(|_| ())
+        let brews = BrewSet::detect();
+        for install in brews.installs() {
+            human!("{}", install_message(&brews, install, "update"));
+            run_brew(BREW, install.command().arg("update"))?;
+        }
+        Ok(())
     }
 
     fn snapshot(&self) -> Option<SnapshotSection> {
@@ -899,6 +1168,98 @@ struct FormulaeStep {
 impl FormulaeStep {
     fn new(services: ServiceQueue) -> Self {
         Self { services }
+    }
+
+    fn run_install(
+        &self,
+        brews: &BrewSet,
+        install: &BrewInstall,
+        options: &RunOptions,
+    ) -> Result<(), StepError> {
+        let outdated = match install
+            .command()
+            .args(["outdated", "--formula", "--quiet"])
+            .neutral_locale()
+            .retry_transient_network(NETWORK_RETRIES)
+            .run()
+        {
+            Ok(outdated) => Some(lines(outdated.stdout())),
+            Err(error) => {
+                eprintln!("freshen: could not list outdated formulae: {error}");
+                None
+            }
+        };
+
+        let Some(formulae) = outdated else {
+            return run_brew(FORMULAE, install.command().args(["upgrade", "--formula"]))
+                .map(|_| ());
+        };
+
+        let filter = options.filters().packages();
+        let selected: Vec<String> = formulae
+            .iter()
+            .filter(|name| filter.includes(name))
+            .cloned()
+            .collect();
+
+        if selected.is_empty() {
+            if formulae.is_empty() {
+                human!(
+                    "{}",
+                    install_message(brews, install, "No outdated formulae.")
+                );
+            } else {
+                human!(
+                    "{}",
+                    install_message(
+                        brews,
+                        install,
+                        "No outdated formulae left after applying the include/exclude lists."
+                    )
+                );
+            }
+            return Ok(());
+        }
+
+        let pinned = pinned_formulae(install).unwrap_or_default();
+        let (held_back, upgradable): (Vec<String>, Vec<String>) = selected
+            .into_iter()
+            .partition(|name| is_pinned(name, &pinned));
+
+        if !held_back.is_empty() {
+            human!(
+                "{}",
+                install_message(
+                    brews,
+                    install,
+                    format!("Held back (pinned): {}", held_back.join(" "))
+                )
+            );
+        }
+
+        warn_about_breakable_sessions(&upgradable.join("\n"));
+
+        if upgradable.is_empty() {
+            human!(
+                "{}",
+                install_message(
+                    brews,
+                    install,
+                    "No formulae upgraded: every outdated formula is held back (pinned)."
+                )
+            );
+            return Ok(());
+        }
+
+        let mut spec = install.command().args(["upgrade", "--formula"]);
+        if !filter.is_empty() || !held_back.is_empty() {
+            for name in &upgradable {
+                spec = spec.arg(name);
+            }
+        }
+
+        capture_running_services(&upgradable, install, &self.services);
+        run_brew(FORMULAE, spec).map(|_| ())
     }
 }
 
@@ -920,14 +1281,19 @@ impl Step for FormulaeStep {
     }
 
     fn check_with_options(&self, options: &RunOptions) -> Result<CheckReport, StepError> {
-        let report = outdated(FORMULAE, &["--formula"])?
-            .filtered(|name| options.filters().packages().includes(name));
-        if report.is_up_to_date() {
-            return Ok(report);
+        let brews = BrewSet::detect();
+        let mut items = Vec::new();
+        for install in brews.installs() {
+            let report = outdated(FORMULAE, install, &["--formula"])?
+                .filtered(|name| options.filters().packages().includes(name));
+            if !report.is_up_to_date() {
+                let pinned = pinned_formulae(install).unwrap_or_default();
+                let report = with_pinned_reasons(report, &pinned);
+                let report = qualify_items(report, install, brews.is_multiple());
+                items.extend(report.items().iter().cloned());
+            }
         }
-
-        let pinned = pinned_formulae().unwrap_or_default();
-        Ok(with_pinned_reasons(report, &pinned))
+        Ok(CheckReport::from_items(items))
     }
 
     fn run(&self) -> Result<(), StepError> {
@@ -935,68 +1301,11 @@ impl Step for FormulaeStep {
     }
 
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
-        let outdated = match CommandSpec::new("brew")
-            .args(["outdated", "--formula", "--quiet"])
-            .neutral_locale()
-            .retry_transient_network(NETWORK_RETRIES)
-            .run()
-        {
-            Ok(outdated) => Some(lines(outdated.stdout())),
-            Err(error) => {
-                eprintln!("freshen: could not list outdated formulae: {error}");
-                None
-            }
-        };
-
-        let Some(formulae) = outdated else {
-            return run_brew(
-                FORMULAE,
-                CommandSpec::new("brew").args(["upgrade", "--formula"]),
-            )
-            .map(|_| ());
-        };
-
-        let filter = options.filters().packages();
-        let selected: Vec<String> = formulae
-            .iter()
-            .filter(|name| filter.includes(name))
-            .cloned()
-            .collect();
-
-        if selected.is_empty() {
-            if formulae.is_empty() {
-                human!("No outdated formulae.");
-            } else {
-                human!("No outdated formulae left after applying the include/exclude lists.");
-            }
-            return Ok(());
+        let brews = BrewSet::detect();
+        for install in brews.installs() {
+            self.run_install(&brews, install, options)?;
         }
-
-        let pinned = pinned_formulae().unwrap_or_default();
-        let (held_back, upgradable): (Vec<String>, Vec<String>) = selected
-            .into_iter()
-            .partition(|name| is_pinned(name, &pinned));
-
-        if !held_back.is_empty() {
-            human!("Held back (pinned): {}", held_back.join(" "));
-        }
-
-        warn_about_breakable_sessions(&upgradable.join("\n"));
-
-        if upgradable.is_empty() {
-            human!("No formulae upgraded: every outdated formula is held back (pinned).");
-            return Ok(());
-        }
-
-        let mut spec = CommandSpec::new("brew").args(["upgrade", "--formula"]);
-        if !filter.is_empty() || !held_back.is_empty() {
-            for name in &upgradable {
-                spec = spec.arg(name);
-            }
-        }
-
-        capture_running_services(&upgradable, &self.services);
-        run_brew(FORMULAE, spec).map(|_| ())
+        Ok(())
     }
 
     fn snapshot(&self) -> Option<SnapshotSection> {
@@ -1022,24 +1331,31 @@ impl ServicesStep {
     }
 
     fn restart_queued(&self, message: &str) -> Result<(), StepError> {
-        let services = self.services.names();
+        let services = self.services.services();
         if services.is_empty() {
             return Ok(());
         }
 
-        human!("{message}: {}", services.join(" "));
+        let names: Vec<String> = services
+            .iter()
+            .map(|service| service.name.clone())
+            .collect();
+        human!("{message}: {}", names.join(" "));
         let mut restarted = Vec::new();
         let mut failures = Vec::new();
 
         for service in services {
             let result = run_brew(
                 SERVICES,
-                CommandSpec::new("brew").args(["services", "restart", &service]),
+                service
+                    .install
+                    .command()
+                    .args(["services", "restart", &service.name]),
             );
             match result {
                 Ok(_) => {
                     self.services.remove(&service);
-                    restarted.push(service);
+                    restarted.push(service.name);
                 }
                 Err(error) => failures.push(error),
             }
@@ -1165,8 +1481,9 @@ fn quit_bundle_ids_of(metadata: &CaskMetadata, casks: &[String]) -> Vec<String> 
 }
 
 /// The command that reads the metadata of the given casks.
-fn cask_info_command(casks: &[String]) -> CommandSpec {
-    let mut info = CommandSpec::new("brew")
+fn cask_info_command(install: &BrewInstall, casks: &[String]) -> CommandSpec {
+    let mut info = install
+        .command()
         .args(["info", "--cask", "--json=v2"])
         .neutral_locale()
         .retry_transient_network(NETWORK_RETRIES);
@@ -1183,6 +1500,92 @@ impl CasksStep {
             system: Arc::new(MacAppSystem),
             interactive: crate::system::terminal_is_interactive(),
         }
+    }
+
+    fn run_install(
+        &self,
+        brews: &BrewSet,
+        install: &BrewInstall,
+        options: &RunOptions,
+    ) -> Result<(), StepError> {
+        let outdated = run_brew(
+            CASKS,
+            install
+                .command()
+                .args(["outdated", "--cask", "--greedy", "--quiet"])
+                .neutral_locale(),
+        )?;
+        let filter = options.filters().casks();
+        let casks: Vec<String> = lines(outdated.stdout())
+            .into_iter()
+            .filter(|cask| filter.includes(cask))
+            .collect();
+
+        if casks.is_empty() {
+            human!("{}", install_message(brews, install, "No outdated casks."));
+            return Ok(());
+        }
+
+        human!(
+            "{}",
+            install_message(
+                brews,
+                install,
+                format!("Casks to upgrade: {}", casks.join(" "))
+            )
+        );
+
+        let mut choice = QuitChoice::Quit;
+        let mut selected = casks.clone();
+        let mut needs_greedy = true;
+        match cask_info_command(install, &casks).run() {
+            Ok(output) => match cask_metadata(output.stdout()) {
+                Ok(metadata) => {
+                    let (upgraded, skipped) = self.select_casks(&casks, &metadata);
+                    for cask in &skipped {
+                        human!("warning: {}", administrator_skip_message(cask));
+                    }
+                    selected = upgraded;
+                    needs_greedy = selected.iter().any(|cask| metadata.needs_greedy(cask));
+
+                    let apps = apps_of(&metadata, &selected);
+                    let bundle_ids = quit_bundle_ids_of(&metadata, &selected);
+                    report_cask_apps(&apps);
+                    choice = self.quit_running_apps(&apps, &bundle_ids, options);
+                }
+                Err(error) => eprintln!("freshen: could not read cask metadata: {error}"),
+            },
+            Err(error) => eprintln!("freshen: could not inspect casks: {error}"),
+        }
+
+        if choice == QuitChoice::SkipCasks {
+            human!("warning: Cask upgrade skipped by user.");
+            return Ok(());
+        }
+
+        if selected.is_empty() {
+            human!(
+                "{}",
+                install_message(
+                    brews,
+                    install,
+                    "No casks upgraded: every outdated cask needs an administrator password."
+                )
+            );
+            return Ok(());
+        }
+
+        let mut spec = install.command().args(["upgrade", "--cask"]);
+        if needs_greedy {
+            spec = spec.arg("--greedy");
+        }
+        if !filter.is_empty() || selected.len() != casks.len() {
+            for cask in &selected {
+                spec = spec.arg(cask);
+            }
+        }
+
+        run_brew(CASKS, spec).map(|_| ())
     }
 
     #[cfg(test)]
@@ -1236,7 +1639,7 @@ impl CasksStep {
     /// self-updating cask is not mistaken for a normal one. When the metadata
     /// cannot be read the report is returned unchanged; the check itself still
     /// succeeds.
-    fn with_greedy_reasons(&self, report: CheckReport) -> CheckReport {
+    fn with_greedy_reasons(&self, report: CheckReport, install: &BrewInstall) -> CheckReport {
         let casks: Vec<String> = report
             .items()
             .iter()
@@ -1246,7 +1649,7 @@ impl CasksStep {
             return report;
         }
 
-        let metadata = match cask_info_command(&casks).run() {
+        let metadata = match cask_info_command(install, &casks).run() {
             Ok(output) => match cask_metadata(output.stdout()) {
                 Ok(metadata) => metadata,
                 Err(error) => {
@@ -1366,9 +1769,16 @@ impl Step for CasksStep {
     }
 
     fn check_with_options(&self, options: &RunOptions) -> Result<CheckReport, StepError> {
-        let report = outdated(CASKS, &["--cask", "--greedy"])?
-            .filtered(|name| options.filters().casks().includes(name));
-        Ok(self.with_greedy_reasons(report))
+        let brews = BrewSet::detect();
+        let mut items = Vec::new();
+        for install in brews.installs() {
+            let report = outdated(CASKS, install, &["--cask", "--greedy"])?
+                .filtered(|name| options.filters().casks().includes(name));
+            let report = self.with_greedy_reasons(report, install);
+            let report = qualify_items(report, install, brews.is_multiple());
+            items.extend(report.items().iter().cloned());
+        }
+        Ok(CheckReport::from_items(items))
     }
 
     fn run(&self) -> Result<(), StepError> {
@@ -1376,69 +1786,11 @@ impl Step for CasksStep {
     }
 
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
-        let outdated = run_brew(
-            CASKS,
-            CommandSpec::new("brew")
-                .args(["outdated", "--cask", "--greedy", "--quiet"])
-                .neutral_locale(),
-        )?;
-        let filter = options.filters().casks();
-        let casks: Vec<String> = lines(outdated.stdout())
-            .into_iter()
-            .filter(|cask| filter.includes(cask))
-            .collect();
-
-        if casks.is_empty() {
-            human!("No outdated casks.");
-            return Ok(());
+        let brews = BrewSet::detect();
+        for install in brews.installs() {
+            self.run_install(&brews, install, options)?;
         }
-
-        human!("Casks to upgrade: {}", casks.join(" "));
-
-        let mut choice = QuitChoice::Quit;
-        let mut selected = casks.clone();
-        let mut needs_greedy = true;
-        match cask_info_command(&casks).run() {
-            Ok(output) => match cask_metadata(output.stdout()) {
-                Ok(metadata) => {
-                    let (upgraded, skipped) = self.select_casks(&casks, &metadata);
-                    for cask in &skipped {
-                        human!("warning: {}", administrator_skip_message(cask));
-                    }
-                    selected = upgraded;
-                    needs_greedy = selected.iter().any(|cask| metadata.needs_greedy(cask));
-
-                    let apps = apps_of(&metadata, &selected);
-                    let bundle_ids = quit_bundle_ids_of(&metadata, &selected);
-                    report_cask_apps(&apps);
-                    choice = self.quit_running_apps(&apps, &bundle_ids, options);
-                }
-                Err(error) => eprintln!("freshen: could not read cask metadata: {error}"),
-            },
-            Err(error) => eprintln!("freshen: could not inspect casks: {error}"),
-        }
-
-        if choice == QuitChoice::SkipCasks {
-            human!("warning: Cask upgrade skipped by user.");
-            return Ok(());
-        }
-
-        if selected.is_empty() {
-            human!("No casks upgraded: every outdated cask needs an administrator password.");
-            return Ok(());
-        }
-
-        let mut spec = CommandSpec::new("brew").args(["upgrade", "--cask"]);
-        if needs_greedy {
-            spec = spec.arg("--greedy");
-        }
-        if !filter.is_empty() || selected.len() != casks.len() {
-            for cask in &selected {
-                spec = spec.arg(cask);
-            }
-        }
-
-        run_brew(CASKS, spec).map(|_| ())
+        Ok(())
     }
 
     fn snapshot(&self) -> Option<SnapshotSection> {
@@ -1488,18 +1840,23 @@ impl Step for AutoremoveStep {
     }
 
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
-        cleanup::run_guarded(
-            AUTOREMOVE,
-            "Homebrew autoremove",
-            CommandSpec::new("brew")
-                .args(["autoremove", "--dry-run"])
-                .neutral_locale(),
-            CommandSpec::new("brew")
-                .arg("autoremove")
-                .retry_transient_network(NETWORK_RETRIES),
-            options,
-        )
-        .map(|_| ())
+        let brews = BrewSet::detect();
+        for install in brews.installs() {
+            cleanup::run_guarded(
+                AUTOREMOVE,
+                &install_message(&brews, install, "Homebrew autoremove"),
+                install
+                    .command()
+                    .args(["autoremove", "--dry-run"])
+                    .neutral_locale(),
+                install
+                    .command()
+                    .arg("autoremove")
+                    .retry_transient_network(NETWORK_RETRIES),
+                options,
+            )?;
+        }
+        Ok(())
     }
 
     fn snapshot(&self) -> Option<SnapshotSection> {
@@ -1539,18 +1896,23 @@ impl Step for CleanupStep {
     }
 
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
-        cleanup::run_guarded(
-            CLEANUP,
-            "Homebrew cleanup",
-            CommandSpec::new("brew")
-                .args(["cleanup", "--dry-run", "--prune=all"])
-                .neutral_locale(),
-            CommandSpec::new("brew")
-                .args(["cleanup", "--prune=all"])
-                .retry_transient_network(NETWORK_RETRIES),
-            options,
-        )
-        .map(|_| ())
+        let brews = BrewSet::detect();
+        for install in brews.installs() {
+            cleanup::run_guarded(
+                CLEANUP,
+                &install_message(&brews, install, "Homebrew cleanup"),
+                install
+                    .command()
+                    .args(["cleanup", "--dry-run", "--prune=all"])
+                    .neutral_locale(),
+                install
+                    .command()
+                    .args(["cleanup", "--prune=all"])
+                    .retry_transient_network(NETWORK_RETRIES),
+                options,
+            )?;
+        }
+        Ok(())
     }
 
     fn snapshot(&self) -> Option<SnapshotSection> {
@@ -1644,7 +2006,28 @@ impl DoctorStep {
 
     /// Runs `brew doctor` and parses what it printed.
     fn doctor(&self, operation: Operation) -> Result<Vec<DoctorFinding>, StepError> {
-        let output = CommandSpec::new("brew")
+        let brews = BrewSet::detect();
+        let mut all = Vec::new();
+        for install in brews.installs() {
+            let mut findings = self.doctor_install(install, operation)?;
+            if brews.is_multiple() {
+                for finding in &mut findings {
+                    finding.message = format!("{}: {}", install.prefix.display(), finding.message);
+                }
+            }
+            all.extend(findings);
+        }
+        Ok(all)
+    }
+
+    /// Runs `brew doctor` for one installation.
+    fn doctor_install(
+        &self,
+        install: &BrewInstall,
+        operation: Operation,
+    ) -> Result<Vec<DoctorFinding>, StepError> {
+        let output = install
+            .command()
             .args(["doctor"])
             .neutral_locale()
             .retry_transient_network(NETWORK_RETRIES)
@@ -1765,7 +2148,28 @@ impl BundleCleanupStep {
 
     /// Runs `brew bundle cleanup` and parses what it printed.
     fn cleanup(&self, operation: Operation) -> Result<Vec<BundlePackage>, StepError> {
-        let output = CommandSpec::new("brew")
+        let brews = BrewSet::detect();
+        let mut all = Vec::new();
+        for install in brews.installs() {
+            let mut packages = self.cleanup_install(install, operation)?;
+            if brews.is_multiple() {
+                for package in &mut packages {
+                    package.name = format!("{}: {}", install.prefix.display(), package.name);
+                }
+            }
+            all.extend(packages);
+        }
+        Ok(all)
+    }
+
+    /// Runs `brew bundle cleanup` for one installation.
+    fn cleanup_install(
+        &self,
+        install: &BrewInstall,
+        operation: Operation,
+    ) -> Result<Vec<BundlePackage>, StepError> {
+        let output = install
+            .command()
             .args(["bundle", "cleanup"])
             .neutral_locale()
             .retry_transient_network(NETWORK_RETRIES)
@@ -1812,7 +2216,7 @@ impl Step for BundleCleanupStep {
 
     fn detect(&self) -> Result<Detection, StepError> {
         Ok(Self::detection(
-            crate::executable::command_exists("brew"),
+            detect_brew().is_installed(),
             brewfile().is_some(),
         ))
     }
@@ -1922,19 +2326,20 @@ impl Step for ReopenStep {
 #[cfg(test)]
 mod tests {
     use super::{
-        administrator_skip_message, apps_of, brewfile_in, cask_app_artifacts, cask_metadata,
-        command_line_tools_failure, installed_app_paths, is_pinned, own_bundle_id,
-        parse_bundle_cleanup, parse_doctor_findings, parse_outdated, quit_bundle_ids_of, quit_plan,
-        register, running_services, services_for_formulae, BundleCleanupStep, BundlePackage,
-        CaskError, CasksStep, DoctorFinding, ReopenQueue, ReopenStep, CASKS, FORMULAE, REOPEN,
-        SERVICES,
+        administrator_skip_message, apps_of, brew_installs_from, brewfile_in, cask_app_artifacts,
+        cask_metadata, command_line_tools_failure, install_arch, installed_app_paths, is_pinned,
+        own_bundle_id, parse_bundle_cleanup, parse_doctor_findings, parse_outdated,
+        quit_bundle_ids_of, quit_plan, register, running_services, services_for_formulae,
+        BundleCleanupStep, BundlePackage, CaskError, CasksStep, DoctorFinding, ReopenQueue,
+        ReopenStep, CASKS, FORMULAE, REOPEN, SERVICES,
     };
     use crate::apps::{AppScan, AppSystem, QuitOutcome, Reopen, RunningApp, SessionState};
     use crate::platform::Platform;
     use crate::policy::AppLists;
     use crate::registry::Registry;
     use crate::step::{CheckReport, Detection, Operation, SkipReason, Step, StepId};
-    use std::path::Path;
+    use crate::system::Arch;
+    use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
 
     #[derive(Default)]
@@ -2835,6 +3240,115 @@ mod tests {
         assert_eq!(
             BundleCleanupStep::detection(false, true),
             Detection::NotInstalled
+        );
+    }
+    #[cfg(unix)]
+    fn executable_brew(prefix: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let program = prefix.join("bin").join("brew");
+        std::fs::create_dir_all(program.parent().unwrap_or(prefix))
+            .unwrap_or_else(|error| panic!("failed to create {}: {error}", program.display()));
+        std::fs::write(&program, "#!/bin/sh\nexit 0\n")
+            .unwrap_or_else(|error| panic!("failed to write {}: {error}", program.display()));
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap_or_else(
+            |error| panic!("failed to make {} executable: {error}", program.display()),
+        );
+        program
+    }
+
+    #[cfg(unix)]
+    fn discovery_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "freshen-brew-installs-{}-{}-{name}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|since| since.as_nanos())
+                .unwrap_or_default()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root)
+            .unwrap_or_else(|error| panic!("failed to create {}: {error}", root.display()));
+        root
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discovers_both_architectures_and_puts_the_native_one_first() {
+        let root = discovery_root("dual");
+        let arm = root.join("opt/homebrew");
+        let intel = root.join("usr/local");
+        let arm_program = executable_brew(&arm);
+        let intel_program = executable_brew(&intel);
+
+        let installs = brew_installs_from(
+            Some(intel_program.clone()),
+            &[arm.clone(), intel.clone()],
+            &Arch::Aarch64,
+        );
+
+        assert_eq!(installs.len(), 2, "installs: {installs:?}");
+        assert_eq!(installs[0].program, arm_program);
+        assert_eq!(installs[0].arch, Arch::Aarch64);
+        assert!(!installs[0].from_path);
+        assert_eq!(installs[1].program, intel_program);
+        assert_eq!(installs[1].arch, Arch::X86_64);
+        assert!(installs[1].from_path);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_installation_on_path_is_not_added_twice() {
+        let root = discovery_root("dedupe");
+        let intel = root.join("usr/local");
+        let program = executable_brew(&intel);
+
+        let installs = brew_installs_from(
+            Some(program.clone()),
+            std::slice::from_ref(&intel),
+            &Arch::X86_64,
+        );
+
+        assert_eq!(installs.len(), 1, "installs: {installs:?}");
+        assert_eq!(installs[0].program, program);
+        assert!(installs[0].from_path);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_standard_prefix_is_found_without_being_on_path() {
+        let root = discovery_root("prefix-only");
+        let arm = root.join("opt/homebrew");
+        let program = executable_brew(&arm);
+
+        let installs = brew_installs_from(None, std::slice::from_ref(&arm), &Arch::Aarch64);
+
+        assert_eq!(installs.len(), 1, "installs: {installs:?}");
+        assert_eq!(installs[0].program, program);
+        assert!(!installs[0].from_path);
+        assert_eq!(
+            installs[0].snapshot_program(),
+            program.display().to_string()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_standard_prefixes_map_to_their_architecture() {
+        assert_eq!(
+            install_arch(Path::new("/opt/homebrew"), &Arch::X86_64),
+            Arch::Aarch64
+        );
+        assert_eq!(
+            install_arch(Path::new("/usr/local"), &Arch::Aarch64),
+            Arch::X86_64
+        );
+        assert_eq!(
+            install_arch(Path::new("/custom/brew"), &Arch::Aarch64),
+            Arch::Aarch64
         );
     }
 }
