@@ -34,6 +34,21 @@ const DEFAULT_FORCE_KILL_GRACE: Duration = Duration::from_secs(2);
 /// Default seconds to wait for an app that is updating itself.
 const DEFAULT_UPDATE_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// How many times the window of a reopened app is put back where it was.
+///
+/// An app needs a moment to create its window after it was opened, so the
+/// move is retried before it is given up on.
+const RESTORE_ATTEMPTS: u32 = 3;
+
+/// The wait between two attempts to put a window back.
+const RESTORE_RETRY_DELAY: Duration = Duration::from_millis(500);
+
+/// How long the AppleScript that reads the state of an app may take.
+///
+/// macOS answers at once, but the command can wait for a permission dialog
+/// that nobody answers, and the run must not hang on it.
+const SESSION_STATE_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// An application that is running.
 ///
 /// Most apps are known by their `.app` bundle path. A cask without an `.app`
@@ -111,6 +126,122 @@ impl RunningApp {
     /// What the app is doing about its own updates.
     fn update_state<S: AppSystem + ?Sized>(&self, system: &S) -> UpdateState {
         system.update_state(self.path(), &self.bundle_id)
+    }
+}
+
+/// The place of an app's window on the screen.
+///
+/// macOS only puts a window back where it was for the apps that save their
+/// own window state; the other apps come back in the middle of the main
+/// display. Remembering the place lets freshen put the window back on the
+/// display the app was on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowState {
+    position: (i32, i32),
+    size: (u32, u32),
+}
+
+impl WindowState {
+    /// Creates a window state from the position and the size of a window.
+    #[must_use]
+    pub fn new(position: (i32, i32), size: (u32, u32)) -> Self {
+        Self { position, size }
+    }
+
+    /// The position of the window on the screen.
+    ///
+    /// The position is negative when the window is on a display that is left
+    /// of or above the main display.
+    #[must_use]
+    pub fn position(&self) -> (i32, i32) {
+        self.position
+    }
+
+    /// The size of the window.
+    #[must_use]
+    pub fn size(&self) -> (u32, u32) {
+        self.size
+    }
+}
+
+/// How an app looked before it was quit.
+///
+/// macOS does not bring an app back the way it was: an app that was hidden
+/// comes back visible, and a window that was on a second display comes back
+/// on the main one. freshen reads the state of an app before it quits it and
+/// restores it when the app is reopened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SessionState {
+    hidden: bool,
+    window: Option<WindowState>,
+}
+
+impl SessionState {
+    /// The state of an app that is visible and keeps no window.
+    #[must_use]
+    pub fn visible() -> Self {
+        Self::default()
+    }
+
+    /// The state of an app that was hidden.
+    #[must_use]
+    pub fn hidden() -> Self {
+        Self {
+            hidden: true,
+            window: None,
+        }
+    }
+
+    /// Records the place of the app's window.
+    #[must_use]
+    pub fn with_window(mut self, window: WindowState) -> Self {
+        self.window = Some(window);
+        self
+    }
+
+    /// Returns `true` when the app was hidden.
+    #[must_use]
+    pub fn is_hidden(&self) -> bool {
+        self.hidden
+    }
+
+    /// The place of the app's window, when it had one.
+    #[must_use]
+    pub fn window(&self) -> Option<WindowState> {
+        self.window
+    }
+}
+
+/// An app that was quit and has to be reopened.
+///
+/// The bundle id is what `open` needs; the session state is how the app
+/// looked before the quit, so it comes back the same way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reopen {
+    bundle_id: String,
+    session: SessionState,
+}
+
+impl Reopen {
+    /// Creates a reopen entry for an app.
+    #[must_use]
+    pub fn new(bundle_id: impl Into<String>, session: SessionState) -> Self {
+        Self {
+            bundle_id: bundle_id.into(),
+            session,
+        }
+    }
+
+    /// The bundle id of the app.
+    #[must_use]
+    pub fn bundle_id(&self) -> &str {
+        &self.bundle_id
+    }
+
+    /// How the app looked before it was quit.
+    #[must_use]
+    pub fn session(&self) -> SessionState {
+        self.session
     }
 }
 
@@ -427,8 +558,28 @@ pub trait AppSystem: Send + Sync {
     /// Force-kills the given pids.
     fn force_kill(&self, pids: &[u32]);
 
+    /// Reads how the app looks right now.
+    ///
+    /// The state says whether the app is hidden and where its window is, so
+    /// the app can come back the way it was after the upgrade. An
+    /// implementation that cannot read the state reports a visible app
+    /// without a window.
+    fn session_state(&self, _app: Option<&Path>, _bundle_id: &str) -> SessionState {
+        SessionState::visible()
+    }
+
     /// Reopens the application with `open -g -b`.
-    fn open(&self, bundle_id: &str) -> bool;
+    ///
+    /// An app that was hidden is reopened hidden, so it does not show up in
+    /// front of the user after the upgrade.
+    fn open(&self, bundle_id: &str, hidden: bool) -> bool;
+
+    /// Puts the window of the app back where it was.
+    ///
+    /// Returns `true` when the window was moved.
+    fn restore_window(&self, _bundle_id: &str, _window: &WindowState) -> bool {
+        false
+    }
 
     /// What the app is doing about its own updates.
     ///
@@ -579,10 +730,12 @@ pub fn find_running_cask_apps<S: AppSystem + ?Sized>(
     scan
 }
 
-/// Quits every app gracefully and returns the bundle ids to reopen.
+/// Quits every app gracefully and returns the apps to reopen.
 ///
 /// A bundle id is recorded before the quit is attempted, exactly like the zsh
 /// script, so an app that refuses to quit is still reopened (it never closed).
+/// The session state of the app is read before the quit, so it can be
+/// restored when the app comes back.
 ///
 /// An app that is updating itself is waited for instead of being quit, and is
 /// left alone when its update does not finish in time.
@@ -591,7 +744,7 @@ pub fn quit_apps<S: AppSystem + ?Sized>(
     system: &S,
     apps: &[RunningApp],
     policy: &QuitPolicy,
-) -> Vec<String> {
+) -> Vec<Reopen> {
     let mut reopen = Vec::with_capacity(apps.len());
 
     for app in apps {
@@ -599,8 +752,16 @@ pub fn quit_apps<S: AppSystem + ?Sized>(
             continue;
         }
         human!("Quitting: {}", app.name());
-        reopen.push(app.bundle_id.clone());
-        quit_one(system, app, policy);
+        let session = system.session_state(app.path(), app.bundle_id());
+        let quit = quit_one(system, app, policy);
+        // An app that is still running keeps its own window and its own
+        // hidden state, so it is reopened the way it is.
+        let session = if quit {
+            session
+        } else {
+            SessionState::visible()
+        };
+        reopen.push(Reopen::new(app.bundle_id(), session));
     }
 
     reopen
@@ -674,12 +835,37 @@ where
     }
 }
 
-/// Reopens the apps with the given bundle ids, warning about failures.
-pub fn reopen_apps<S: AppSystem + ?Sized>(system: &S, bundle_ids: &[String]) {
-    for bundle_id in bundle_ids {
-        human!("Opening: {bundle_id}");
-        if !system.open(bundle_id) {
+/// Reopens the apps that were quit, restoring how they looked before.
+///
+/// An app that was hidden is reopened hidden, and the window of an app that
+/// was visible is put back where it was, so the app comes back on the
+/// display it was on.
+pub fn reopen_apps<S: AppSystem + ?Sized>(system: &S, apps: &[Reopen]) {
+    for app in apps {
+        let bundle_id = app.bundle_id();
+        let session = app.session();
+
+        if session.is_hidden() {
+            human!("Opening: {bundle_id} (hidden)");
+        } else {
+            human!("Opening: {bundle_id}");
+        }
+
+        if !system.open(bundle_id, session.is_hidden()) {
             warn(&format!("Could not open: {bundle_id}"));
+            continue;
+        }
+
+        if session.is_hidden() {
+            continue;
+        }
+
+        if let Some(window) = session.window() {
+            if !system.restore_window(bundle_id, &window) {
+                warn(&format!(
+                    "Could not put the window of {bundle_id} back where it was."
+                ));
+            }
         }
     }
 }
@@ -770,6 +956,44 @@ pub fn pids_from_apple_script(output: &str) -> Vec<u32> {
         .collect()
 }
 
+/// The hidden state in the output of the System Events query.
+///
+/// The output is `true` or `false`, and anything else means the state could
+/// not be read.
+#[must_use]
+pub fn hidden_from_script(output: &str) -> Option<bool> {
+    match output.trim().to_ascii_lowercase().as_str() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+/// The place of a window in the output of the System Events query.
+///
+/// The output looks like `{{0, 0}, {1440, 900}}`: the position of the window
+/// and its size. A window on a second display can have a negative position.
+#[must_use]
+pub fn window_state_from_script(output: &str) -> Option<WindowState> {
+    let numbers = script_numbers(output);
+    match numbers.as_slice() {
+        [x, y, width, height] => Some(WindowState::new(
+            (i32::try_from(*x).ok()?, i32::try_from(*y).ok()?),
+            (u32::try_from(*width).ok()?, u32::try_from(*height).ok()?),
+        )),
+        _ => None,
+    }
+}
+
+/// The numbers in the output of an AppleScript command.
+fn script_numbers(output: &str) -> Vec<i64> {
+    output
+        .split(|character: char| !character.is_ascii_digit() && character != '-')
+        .filter(|token| !token.is_empty() && *token != "-")
+        .filter_map(|token| token.parse().ok())
+        .collect()
+}
+
 fn bundle_id_command(app: &Path) -> CommandSpec {
     CommandSpec::new("defaults")
         .arg("read")
@@ -807,6 +1031,75 @@ fn bundle_pids_command(bundle_id: &str) -> CommandSpec {
         .neutral_locale()
 }
 
+/// The AppleScript that tells whether the app is hidden.
+///
+/// `AXHidden` is the attribute macOS uses for an app that was hidden, and it
+/// is read through System Events because an app cannot report it by itself.
+fn hidden_command(bundle_id: &str) -> CommandSpec {
+    CommandSpec::new("osascript")
+        .arg("-e")
+        .arg("tell application \"System Events\"")
+        .arg("-e")
+        .arg(format!(
+            "set appProcess to first process whose bundle identifier is \"{bundle_id}\""
+        ))
+        .arg("-e")
+        .arg("get value of attribute \"AXHidden\" of appProcess")
+        .arg("-e")
+        .arg("end tell")
+        .neutral_locale()
+        .timeout(SESSION_STATE_TIMEOUT)
+}
+
+/// The AppleScript that reads the place of the window of the app.
+///
+/// The first window of the app is used, because an app that is reopened comes
+/// back with a window in the middle of the main display.
+fn window_state_command(bundle_id: &str) -> CommandSpec {
+    CommandSpec::new("osascript")
+        .arg("-e")
+        .arg("tell application \"System Events\"")
+        .arg("-e")
+        .arg(format!(
+            "set appProcess to first process whose bundle identifier is \"{bundle_id}\""
+        ))
+        .arg("-e")
+        .arg("tell appProcess")
+        .arg("-e")
+        .arg("get {position of window 1, size of window 1}")
+        .arg("-e")
+        .arg("end tell")
+        .arg("-e")
+        .arg("end tell")
+        .neutral_locale()
+        .timeout(SESSION_STATE_TIMEOUT)
+}
+
+/// The AppleScript that puts the window of the app back where it was.
+fn restore_window_command(bundle_id: &str, window: &WindowState) -> CommandSpec {
+    let (x, y) = window.position();
+    let (width, height) = window.size();
+    CommandSpec::new("osascript")
+        .arg("-e")
+        .arg("tell application \"System Events\"")
+        .arg("-e")
+        .arg(format!(
+            "set appProcess to first process whose bundle identifier is \"{bundle_id}\""
+        ))
+        .arg("-e")
+        .arg("tell appProcess")
+        .arg("-e")
+        .arg(format!("set position of window 1 to {{{x}, {y}}}"))
+        .arg("-e")
+        .arg(format!("set size of window 1 to {{{width}, {height}}}"))
+        .arg("-e")
+        .arg("end tell")
+        .arg("-e")
+        .arg("end tell")
+        .neutral_locale()
+        .timeout(SESSION_STATE_TIMEOUT)
+}
+
 fn quit_command(bundle_id: &str) -> CommandSpec {
     CommandSpec::new("osascript")
         .arg("-e")
@@ -827,8 +1120,12 @@ fn kill_command(pids: &[u32]) -> CommandSpec {
     spec
 }
 
-fn open_command(bundle_id: &str) -> CommandSpec {
-    CommandSpec::new("open").args(["-g", "-b"]).arg(bundle_id)
+fn open_command(bundle_id: &str, hidden: bool) -> CommandSpec {
+    let mut spec = CommandSpec::new("open").arg("-g");
+    if hidden {
+        spec = spec.arg("-j");
+    }
+    spec.args(["-b"]).arg(bundle_id)
 }
 
 /// The real macOS implementation, using the same commands as the zsh script.
@@ -841,6 +1138,27 @@ impl MacAppSystem {
             .run()
             .map(|output| output.stdout().to_owned())
             .unwrap_or_default()
+    }
+
+    /// Whether the app is hidden right now.
+    ///
+    /// A state that cannot be read (a denied permission, or an app that does
+    /// not answer) counts as visible, so the app is reopened as it was before
+    /// the upgrade rather than staying hidden by accident.
+    fn is_hidden(&self, bundle_id: &str) -> bool {
+        hidden_command(bundle_id)
+            .run()
+            .ok()
+            .and_then(|output| hidden_from_script(output.stdout()))
+            .unwrap_or(false)
+    }
+
+    /// Where the window of the app is right now.
+    fn window_state(&self, bundle_id: &str) -> Option<WindowState> {
+        window_state_command(bundle_id)
+            .run()
+            .ok()
+            .and_then(|output| window_state_from_script(output.stdout()))
     }
 }
 
@@ -904,8 +1222,31 @@ impl AppSystem for MacAppSystem {
         }
     }
 
-    fn open(&self, bundle_id: &str) -> bool {
-        open_command(bundle_id).run().is_ok()
+    fn session_state(&self, _app: Option<&Path>, bundle_id: &str) -> SessionState {
+        let mut session = SessionState::visible();
+        if self.is_hidden(bundle_id) {
+            session = SessionState::hidden();
+        }
+        if let Some(window) = self.window_state(bundle_id) {
+            session = session.with_window(window);
+        }
+        session
+    }
+
+    fn open(&self, bundle_id: &str, hidden: bool) -> bool {
+        open_command(bundle_id, hidden).run().is_ok()
+    }
+
+    fn restore_window(&self, bundle_id: &str, window: &WindowState) -> bool {
+        for attempt in 0..RESTORE_ATTEMPTS {
+            if restore_window_command(bundle_id, window).run().is_ok() {
+                return true;
+            }
+            if attempt + 1 < RESTORE_ATTEMPTS {
+                std::thread::sleep(RESTORE_RETRY_DELAY);
+            }
+        }
+        false
     }
 
     fn update_state(&self, app: Option<&Path>, bundle_id: &str) -> UpdateState {
@@ -934,10 +1275,12 @@ mod tests {
 
     use super::{
         automation_denied_message, bundle_id_command, find_running_apps, find_running_cask_apps,
-        is_automation_denied, kill_command, open_command, pid_list_command, pids_from_apple_script,
-        pids_from_processes, process_list_command, quit_apps, quit_choice, quit_command,
-        reopen_apps, running_updater, self_updater_from_bundle, AppSystem, QuitChoice, QuitOutcome,
-        QuitPolicy, SelfUpdater, UpdateState,
+        hidden_command, hidden_from_script, is_automation_denied, kill_command, open_command,
+        pid_list_command, pids_from_apple_script, pids_from_processes, process_list_command,
+        quit_apps, quit_choice, quit_command, reopen_apps, restore_window_command, running_updater,
+        self_updater_from_bundle, window_state_command, window_state_from_script, AppSystem,
+        QuitChoice, QuitOutcome, QuitPolicy, Reopen, SelfUpdater, SessionState, UpdateState,
+        WindowState, SESSION_STATE_TIMEOUT,
     };
     use crate::policy::AppLists;
 
@@ -951,9 +1294,11 @@ mod tests {
         open_succeeds: bool,
         quit_calls: Mutex<Vec<String>>,
         killed: Mutex<Vec<Vec<u32>>>,
-        opened: Mutex<Vec<String>>,
+        opened: Mutex<Vec<(String, bool)>>,
+        restored: Mutex<Vec<(String, WindowState)>>,
         running_checks: Mutex<usize>,
         updating: Mutex<HashMap<String, usize>>,
+        sessions: Mutex<HashMap<String, SessionState>>,
     }
 
     fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -1006,6 +1351,12 @@ mod tests {
             lock(&self.updating).insert(bundle_id.to_owned(), checks);
             self
         }
+
+        /// The app looks this way before it is quit.
+        fn with_session(self, bundle_id: &str, session: SessionState) -> Self {
+            lock(&self.sessions).insert(bundle_id.to_owned(), session);
+            self
+        }
     }
 
     impl AppSystem for FakeSystem {
@@ -1055,9 +1406,21 @@ mod tests {
             lock(&self.running_bundles).clear();
         }
 
-        fn open(&self, bundle_id: &str) -> bool {
-            lock(&self.opened).push(bundle_id.to_owned());
+        fn session_state(&self, _app: Option<&std::path::Path>, bundle_id: &str) -> SessionState {
+            lock(&self.sessions)
+                .get(bundle_id)
+                .copied()
+                .unwrap_or_else(SessionState::visible)
+        }
+
+        fn open(&self, bundle_id: &str, hidden: bool) -> bool {
+            lock(&self.opened).push((bundle_id.to_owned(), hidden));
             self.open_succeeds
+        }
+
+        fn restore_window(&self, bundle_id: &str, window: &WindowState) -> bool {
+            lock(&self.restored).push((bundle_id.to_owned(), *window));
+            true
         }
 
         fn update_state(&self, _app: Option<&std::path::Path>, bundle_id: &str) -> UpdateState {
@@ -1078,6 +1441,16 @@ mod tests {
 
     fn installed(paths: &[&str]) -> Vec<PathBuf> {
         paths.iter().map(PathBuf::from).collect()
+    }
+
+    /// The bundle ids of the apps that have to be reopened.
+    fn bundle_ids(apps: &[Reopen]) -> Vec<&str> {
+        apps.iter().map(Reopen::bundle_id).collect()
+    }
+
+    /// The apps that were opened, with the hidden state they were opened in.
+    fn opened(system: &FakeSystem) -> Vec<(String, bool)> {
+        lock(&system.opened).clone()
     }
 
     fn running(system: &FakeSystem, app: &str) -> bool {
@@ -1240,7 +1613,7 @@ mod tests {
         let reopened = quit_apps(&system, scan.running(), &fast_policy(false));
 
         assert_eq!(lock(&system.quit_calls).as_slice(), ["com.example.helper"]);
-        assert_eq!(reopened, ["com.example.helper"]);
+        assert_eq!(bundle_ids(&reopened), ["com.example.helper"]);
         assert_eq!(
             *lock(&system.running_checks),
             2,
@@ -1317,7 +1690,7 @@ mod tests {
             &QuitPolicy::new(Duration::from_secs(20), false),
         );
 
-        assert_eq!(reopen, ["com.firefox"]);
+        assert_eq!(bundle_ids(&reopen), ["com.firefox"]);
         assert_eq!(lock(&system.quit_calls).as_slice(), ["com.firefox"]);
         assert!(lock(&system.killed).is_empty());
         assert!(!running(&system, "/Applications/Firefox.app"));
@@ -1335,7 +1708,7 @@ mod tests {
 
         let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
 
-        assert_eq!(reopen, ["com.firefox"]);
+        assert_eq!(bundle_ids(&reopen), ["com.firefox"]);
         assert!(lock(&system.killed).is_empty());
         assert!(running(&system, "/Applications/Firefox.app"));
     }
@@ -1353,7 +1726,7 @@ mod tests {
 
         let reopen = quit_apps(&system, scan.running(), &fast_policy(true));
 
-        assert_eq!(reopen, ["com.firefox"]);
+        assert_eq!(bundle_ids(&reopen), ["com.firefox"]);
         assert_eq!(lock(&system.killed).as_slice(), [vec![10, 11]]);
     }
 
@@ -1371,7 +1744,7 @@ mod tests {
 
         let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
 
-        assert_eq!(reopen, ["com.firefox"]);
+        assert_eq!(bundle_ids(&reopen), ["com.firefox"]);
         assert_eq!(lock(&system.quit_calls).as_slice(), ["com.firefox"]);
         assert!(lock(&system.killed).is_empty());
         assert!(running(&system, "/Applications/Firefox.app"));
@@ -1397,7 +1770,7 @@ mod tests {
             &QuitPolicy::new(Duration::from_secs(20), false),
         );
 
-        assert_eq!(reopen, ["com.firefox"]);
+        assert_eq!(bundle_ids(&reopen), ["com.firefox"]);
 
         assert_eq!(
             *lock(&system.running_checks),
@@ -1420,7 +1793,7 @@ mod tests {
 
         let reopen = quit_apps(&system, scan.running(), &fast_policy(true));
 
-        assert_eq!(reopen, ["com.firefox"]);
+        assert_eq!(bundle_ids(&reopen), ["com.firefox"]);
         assert_eq!(lock(&system.killed).as_slice(), [vec![10]]);
     }
 
@@ -1476,17 +1849,216 @@ mod tests {
         let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
         reopen_apps(&system, &reopen);
 
-        assert_eq!(reopen, ["com.firefox"]);
-        assert_eq!(lock(&system.opened).as_slice(), ["com.firefox"]);
+        assert_eq!(bundle_ids(&reopen), ["com.firefox"]);
+        assert_eq!(opened(&system), [("com.firefox".to_owned(), false)]);
     }
 
     #[test]
     fn a_failed_reopen_is_reported_but_does_not_stop_the_others() {
         let system = FakeSystem::new().open_fails();
 
-        reopen_apps(&system, &["com.first".to_owned(), "com.second".to_owned()]);
+        reopen_apps(
+            &system,
+            &[
+                Reopen::new("com.first", SessionState::visible()),
+                Reopen::new("com.second", SessionState::visible()),
+            ],
+        );
 
-        assert_eq!(lock(&system.opened).as_slice(), ["com.first", "com.second"]);
+        assert_eq!(
+            opened(&system),
+            [
+                ("com.first".to_owned(), false),
+                ("com.second".to_owned(), false)
+            ]
+        );
+    }
+
+    #[test]
+    fn an_app_that_was_hidden_is_reopened_hidden() {
+        let system = FakeSystem::new();
+
+        reopen_apps(
+            &system,
+            &[Reopen::new("com.firefox", SessionState::hidden())],
+        );
+
+        assert_eq!(opened(&system), [("com.firefox".to_owned(), true)]);
+    }
+
+    #[test]
+    fn a_visible_app_is_reopened_in_the_background() {
+        let system = FakeSystem::new();
+
+        reopen_apps(
+            &system,
+            &[Reopen::new("com.firefox", SessionState::visible())],
+        );
+
+        assert_eq!(opened(&system), [("com.firefox".to_owned(), false)]);
+    }
+
+    #[test]
+    fn the_window_of_an_app_is_put_back_where_it_was() {
+        let system = FakeSystem::new();
+        let window = WindowState::new((10, 20), (1440, 900));
+
+        reopen_apps(
+            &system,
+            &[Reopen::new(
+                "com.firefox",
+                SessionState::visible().with_window(window),
+            )],
+        );
+
+        assert_eq!(
+            lock(&system.restored).as_slice(),
+            [("com.firefox".to_owned(), window)]
+        );
+    }
+
+    #[test]
+    fn the_window_of_a_hidden_app_is_not_moved() {
+        let system = FakeSystem::new();
+        let window = WindowState::new((10, 20), (1440, 900));
+
+        reopen_apps(
+            &system,
+            &[Reopen::new(
+                "com.firefox",
+                SessionState::hidden().with_window(window),
+            )],
+        );
+
+        assert!(
+            lock(&system.restored).is_empty(),
+            "the window of a hidden app was moved"
+        );
+    }
+
+    #[test]
+    fn an_app_that_cannot_be_opened_is_not_moved_back() {
+        let system = FakeSystem::new().open_fails();
+        let window = WindowState::new((10, 20), (1440, 900));
+
+        reopen_apps(
+            &system,
+            &[Reopen::new(
+                "com.firefox",
+                SessionState::visible().with_window(window),
+            )],
+        );
+
+        assert!(
+            lock(&system.restored).is_empty(),
+            "the window of an app that did not open was moved"
+        );
+    }
+
+    #[test]
+    fn the_session_state_of_an_app_is_read_before_it_is_quit() {
+        let system = FakeSystem {
+            quit_stops_apps: true,
+            ..FakeSystem::new()
+                .with_app("/Applications/Firefox.app", "com.firefox", &[10])
+                .with_session(
+                    "com.firefox",
+                    SessionState::visible().with_window(WindowState::new((10, 20), (1440, 900))),
+                )
+        };
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/Firefox.app"]),
+            None,
+            &AppLists::new(),
+        );
+
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
+
+        assert_eq!(reopen.len(), 1);
+        assert!(!reopen[0].session().is_hidden());
+        assert_eq!(
+            reopen[0].session().window().map(|window| window.position()),
+            Some((10, 20))
+        );
+    }
+
+    #[test]
+    fn an_app_without_a_session_state_is_reopened_as_it_was_visible() {
+        let system = FakeSystem {
+            quit_stops_apps: true,
+            ..FakeSystem::new().with_app("/Applications/Firefox.app", "com.firefox", &[10])
+        };
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/Firefox.app"]),
+            None,
+            &AppLists::new(),
+        );
+
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
+        reopen_apps(&system, &reopen);
+
+        assert_eq!(opened(&system), [("com.firefox".to_owned(), false)]);
+        assert!(lock(&system.restored).is_empty());
+    }
+
+    #[test]
+    fn an_app_that_did_not_quit_keeps_its_own_state() {
+        let system = FakeSystem::new()
+            .with_app("/Applications/Firefox.app", "com.firefox", &[10])
+            .with_session("com.firefox", SessionState::hidden());
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/Firefox.app"]),
+            None,
+            &AppLists::new(),
+        );
+
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
+        reopen_apps(&system, &reopen);
+
+        assert!(
+            running(&system, "/Applications/Firefox.app"),
+            "the app was quit"
+        );
+        assert_eq!(
+            opened(&system),
+            [("com.firefox".to_owned(), false)],
+            "an app that is still running was reopened hidden"
+        );
+    }
+
+    #[test]
+    fn the_hidden_state_is_read_from_the_system_events_output() {
+        assert_eq!(hidden_from_script("true\n"), Some(true));
+        assert_eq!(hidden_from_script("false\n"), Some(false));
+        assert_eq!(hidden_from_script("TRUE\n"), Some(true));
+        assert_eq!(hidden_from_script("missing value"), None);
+        assert_eq!(hidden_from_script(""), None);
+    }
+
+    #[test]
+    fn the_place_of_a_window_is_read_from_the_system_events_output() {
+        let window = window_state_from_script("{{0, 0}, {1440, 900}}");
+
+        assert_eq!(window.map(|window| window.position()), Some((0, 0)));
+        assert_eq!(window.map(|window| window.size()), Some((1440, 900)));
+    }
+
+    #[test]
+    fn a_window_on_a_second_display_has_a_negative_position() {
+        let window = window_state_from_script("{{-1920, 100}, {1280, 800}}");
+
+        assert_eq!(window.map(|window| window.position()), Some((-1920, 100)));
+        assert_eq!(window.map(|window| window.size()), Some((1280, 800)));
+    }
+
+    #[test]
+    fn a_window_without_a_place_is_not_read() {
+        assert_eq!(window_state_from_script("missing value"), None);
+        assert_eq!(window_state_from_script("{{0, 0}}"), None);
+        assert_eq!(window_state_from_script(""), None);
     }
 
     #[test]
@@ -1513,7 +2085,7 @@ mod tests {
             &fast_policy(false).with_update_timeout(Duration::from_secs(5)),
         );
 
-        assert_eq!(reopen, ["com.firefox"]);
+        assert_eq!(bundle_ids(&reopen), ["com.firefox"]);
         assert_eq!(lock(&system.quit_calls).as_slice(), ["com.firefox"]);
     }
 
@@ -1557,7 +2129,7 @@ mod tests {
 
         let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
 
-        assert_eq!(reopen, ["com.firefox"]);
+        assert_eq!(bundle_ids(&reopen), ["com.firefox"]);
         assert_eq!(lock(&system.quit_calls).as_slice(), ["com.firefox"]);
     }
 
@@ -1754,8 +2326,69 @@ mod tests {
         );
         assert_eq!(transcript(&kill_command(&[10, 11])), ["-9", "10", "11"]);
         assert_eq!(
-            transcript(&open_command("com.example.firefox")),
+            transcript(&open_command("com.example.firefox", false)),
             ["-g", "-b", "com.example.firefox"]
+        );
+        assert_eq!(
+            transcript(&open_command("com.example.firefox", true)),
+            ["-g", "-j", "-b", "com.example.firefox"]
+        );
+        assert_eq!(
+            hidden_command("com.example.firefox").timeout_limit(),
+            Some(SESSION_STATE_TIMEOUT),
+            "a permission dialog must not hold up the run"
+        );
+        assert_eq!(
+            transcript(&hidden_command("com.example.firefox")),
+            [
+                "-e",
+                "tell application \"System Events\"",
+                "-e",
+                "set appProcess to first process whose bundle identifier is \"com.example.firefox\"",
+                "-e",
+                "get value of attribute \"AXHidden\" of appProcess",
+                "-e",
+                "end tell",
+            ]
+        );
+        assert_eq!(
+            transcript(&window_state_command("com.example.firefox")),
+            [
+                "-e",
+                "tell application \"System Events\"",
+                "-e",
+                "set appProcess to first process whose bundle identifier is \"com.example.firefox\"",
+                "-e",
+                "tell appProcess",
+                "-e",
+                "get {position of window 1, size of window 1}",
+                "-e",
+                "end tell",
+                "-e",
+                "end tell",
+            ]
+        );
+        assert_eq!(
+            transcript(&restore_window_command(
+                "com.example.firefox",
+                &WindowState::new((10, 20), (1440, 900))
+            )),
+            [
+                "-e",
+                "tell application \"System Events\"",
+                "-e",
+                "set appProcess to first process whose bundle identifier is \"com.example.firefox\"",
+                "-e",
+                "tell appProcess",
+                "-e",
+                "set position of window 1 to {10, 20}",
+                "-e",
+                "set size of window 1 to {1440, 900}",
+                "-e",
+                "end tell",
+                "-e",
+                "end tell",
+            ]
         );
     }
 }

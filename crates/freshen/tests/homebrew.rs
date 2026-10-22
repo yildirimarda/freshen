@@ -540,14 +540,35 @@ esac"#,
     );
     tools.set_script(
         "osascript",
-        if osascript_quits {
+        &osascript_script(if osascript_quits {
             ": > \"$FRESHEN_PS_STATE\""
         } else {
             ":"
-        },
+        }),
     );
 
     (tools, app, state)
+}
+
+/// The `osascript` stub that answers the questions freshen asks about an app.
+///
+/// The hidden state and the place of the window are answered from the
+/// environment, so a test can describe how the app looked before the quit.
+/// The `quit` body stands for what the stub does when the app is quit.
+#[cfg(unix)]
+fn osascript_script(quit_body: &str) -> String {
+    r#"case "$*" in
+  *"AXHidden"*)
+    printf '%s\n' "${FRESHEN_APP_HIDDEN:-false}"
+    ;;
+  *"position of window 1"*)
+    if [ -n "${FRESHEN_APP_WINDOW:-}" ]; then printf '%s\n' "$FRESHEN_APP_WINDOW"; fi
+    ;;
+  *"to quit"*)
+    QUIT_BODY
+    ;;
+esac"#
+        .replace("QUIT_BODY", quit_body)
 }
 
 /// Makes the `osascript` stub answer like macOS does when the Automation
@@ -614,6 +635,8 @@ fn quits_running_cask_apps_before_the_upgrade_and_reopens_after_cleanup() {
             "brew info --cask --json=v2 firefox".to_owned(),
             format!("defaults read {} CFBundleIdentifier", info.display()),
             "ps -axo command=".to_owned(),
+            "osascript -e tell application \"System Events\" -e set appProcess to first process whose bundle identifier is \"com.example.firefox\" -e get value of attribute \"AXHidden\" of appProcess -e end tell".to_owned(),
+            "osascript -e tell application \"System Events\" -e set appProcess to first process whose bundle identifier is \"com.example.firefox\" -e tell appProcess -e get {position of window 1, size of window 1} -e end tell -e end tell".to_owned(),
             "osascript -e with timeout of 3 seconds -e tell application id \"com.example.firefox\" to quit -e end timeout".to_owned(),
             "ps -axo command=".to_owned(),
             "brew upgrade --cask".to_owned(),
@@ -735,6 +758,8 @@ fn yes_at_the_prompt_quits_apps_and_upgrades_casks() {
             "brew info --cask --json=v2 firefox".to_owned(),
             format!("defaults read {} CFBundleIdentifier", info.display()),
             "ps -axo command=".to_owned(),
+            "osascript -e tell application \"System Events\" -e set appProcess to first process whose bundle identifier is \"com.example.firefox\" -e get value of attribute \"AXHidden\" of appProcess -e end tell".to_owned(),
+            "osascript -e tell application \"System Events\" -e set appProcess to first process whose bundle identifier is \"com.example.firefox\" -e tell appProcess -e get {position of window 1, size of window 1} -e end tell -e end tell".to_owned(),
             "osascript -e with timeout of 3 seconds -e tell application id \"com.example.firefox\" to quit -e end timeout".to_owned(),
             "ps -axo command=".to_owned(),
             "brew upgrade --cask".to_owned(),
@@ -759,6 +784,83 @@ fn yes_at_the_prompt_quits_apps_and_upgrades_casks() {
     assert!(
         text.contains("Opening: com.example.firefox"),
         "output: {text}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_app_that_was_hidden_is_reopened_hidden() {
+    let (tools, _app, state) = app_tools(true);
+
+    let output = run_apps(&tools, &state, &[("FRESHEN_APP_HIDDEN", "true")], &[]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(
+        calls.contains(&"open -g -j -b com.example.firefox".to_owned()),
+        "the app was not reopened hidden: {calls:?}"
+    );
+    assert!(
+        !calls.contains(&"open -g -b com.example.firefox".to_owned()),
+        "the app was reopened visible: {calls:?}"
+    );
+
+    let text = stdout(&output);
+    assert!(
+        text.contains("Opening: com.example.firefox (hidden)"),
+        "output: {text}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_window_of_an_app_is_put_back_where_it_was() {
+    let (tools, _app, state) = app_tools(true);
+
+    let output = run_apps(
+        &tools,
+        &state,
+        &[("FRESHEN_APP_WINDOW", "{{10, 20}, {1440, 900}}")],
+        &[],
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(
+        calls.contains(&"open -g -b com.example.firefox".to_owned()),
+        "the app was not reopened: {calls:?}"
+    );
+    assert!(
+        calls.contains(
+            &"osascript -e tell application \"System Events\" -e set appProcess to first process whose bundle identifier is \"com.example.firefox\" -e tell appProcess -e set position of window 1 to {10, 20} -e set size of window 1 to {1440, 900} -e end tell -e end tell".to_owned()
+        ),
+        "the window was not put back: {calls:?}"
+    );
+    assert!(
+        calls
+            .iter()
+            .position(|call| call.contains("set position of window 1"))
+            > calls.iter().position(|call| call.contains("open -g -b")),
+        "the window was put back before the app was opened: {calls:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_app_that_was_not_hidden_is_reopened_visible() {
+    let (tools, _app, state) = app_tools(true);
+
+    let output = run_apps(&tools, &state, &[("FRESHEN_APP_HIDDEN", "false")], &[]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(
+        calls.contains(&"open -g -b com.example.firefox".to_owned()),
+        "the app was not reopened: {calls:?}"
+    );
+    assert!(
+        !calls.contains(&"open -g -j -b com.example.firefox".to_owned()),
+        "the app was reopened hidden: {calls:?}"
     );
 }
 
