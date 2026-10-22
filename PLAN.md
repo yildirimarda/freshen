@@ -132,7 +132,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Respect pinned formulae (`brew pin`) and report them as "held back" instead of failing
 - [x] Restart Homebrew services (`brew services`) whose formulae were upgraded, and report which ones were restarted
 - [x] Support casks whose artifacts are not `.app` (pkg installers, menu-bar helpers, `uninstall quit:` bundle ids) by reading the cask's `uninstall` stanza for the bundle ids to quit
-- [ ] Detect apps that update themselves (Sparkle, Electron auto-update) and are mid-update, and wait instead of quitting them
+- [x] Detect apps that update themselves (Sparkle, Electron auto-update) and are mid-update, and wait instead of quitting them
 - [ ] Preserve window/session state where possible: reopen apps in the same Space/display, hidden state preserved (`open -g -j`)
 - [ ] Handle apps that were running as login items or menu-bar-only agents without a Dock icon
 - [ ] Add Mac App Store updates via `mas outdated` / `mas upgrade`, with a skip when not signed in
@@ -159,6 +159,9 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Respect pinned casks (`brew pin --cask`) as held back too, so a pinned cask is skipped and reported instead of being shown as upgradable, covered by tests
 - [ ] Report the Homebrew services that were restarted in the run summary and in the `--json`/`--markdown` reports, so a structured report names them instead of only printing a human-readable line, covered by tests
 - [ ] Stop apps for casks whose `uninstall` stanza lists only `signal` entries (for example Zoom's `signal: ["KILL", "us.zoom.xos"]`) instead of a `quit` bundle id, so a pkg-installer cask with no `quit` entry still has its running app stopped before the upgrade, covered by tests with a recorded transcript
+- [ ] Skip the cask upgrade of an app that is still updating itself after the wait, so the Homebrew install does not race the app's own updater, covered by tests
+- [ ] Report the apps that were left running because they were updating themselves in the run summary and in the `--json`/`--markdown` reports, so a structured report names them instead of only printing a human-readable line, covered by tests
+- [ ] Detect an Electron (Squirrel) update that was downloaded but not applied yet (a `pending` directory in the app's cache) and treat that app as updating itself, covered by tests
 
 ## Milestone 5: Linux
 

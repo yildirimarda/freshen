@@ -31,6 +31,9 @@ const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// Default wait after a force kill, matching the zsh script.
 const DEFAULT_FORCE_KILL_GRACE: Duration = Duration::from_secs(2);
 
+/// Default seconds to wait for an app that is updating itself.
+const DEFAULT_UPDATE_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// An application that is running.
 ///
 /// Most apps are known by their `.app` bundle path. A cask without an `.app`
@@ -104,6 +107,80 @@ impl RunningApp {
             None => system.bundle_pids(&self.bundle_id),
         }
     }
+
+    /// What the app is doing about its own updates.
+    fn update_state<S: AppSystem + ?Sized>(&self, system: &S) -> UpdateState {
+        system.update_state(self.path(), &self.bundle_id)
+    }
+}
+
+/// The framework an app uses to update itself.
+///
+/// An app that updates itself replaces its own bundle while it runs, so
+/// quitting it in the middle of that leaves a half-updated app behind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelfUpdater {
+    /// The Sparkle framework, used by many native macOS apps.
+    Sparkle,
+    /// The updater of an Electron app, which installs the new version with a
+    /// `ShipIt` helper.
+    Electron,
+}
+
+impl SelfUpdater {
+    /// The name of the updater, as shown to the user.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            SelfUpdater::Sparkle => "Sparkle",
+            SelfUpdater::Electron => "Electron auto-update",
+        }
+    }
+}
+
+/// What an app is doing about its own updates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct UpdateState {
+    updater: Option<SelfUpdater>,
+    in_progress: bool,
+}
+
+impl UpdateState {
+    /// The app does not update itself.
+    #[must_use]
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// The app updates itself, but not at the moment.
+    #[must_use]
+    pub fn idle(updater: SelfUpdater) -> Self {
+        Self {
+            updater: Some(updater),
+            in_progress: false,
+        }
+    }
+
+    /// The app is updating itself right now.
+    #[must_use]
+    pub fn updating(updater: SelfUpdater) -> Self {
+        Self {
+            updater: Some(updater),
+            in_progress: true,
+        }
+    }
+
+    /// The updater the app uses, when it updates itself.
+    #[must_use]
+    pub fn updater(self) -> Option<SelfUpdater> {
+        self.updater
+    }
+
+    /// Returns `true` when the app is updating itself right now.
+    #[must_use]
+    pub fn in_progress(self) -> bool {
+        self.in_progress
+    }
 }
 
 /// The result of inspecting the apps a cask upgrade will replace.
@@ -112,6 +189,7 @@ pub struct AppScan {
     running: Vec<RunningApp>,
     protected: Vec<String>,
     never_quit: Vec<String>,
+    updating: Vec<RunningApp>,
 }
 
 impl AppScan {
@@ -134,6 +212,15 @@ impl AppScan {
         &self.never_quit
     }
 
+    /// Installed apps that are updating themselves right now.
+    ///
+    /// These apps are waited for instead of being quit, because quitting them
+    /// in the middle of their own update would leave a broken app behind.
+    #[must_use]
+    pub fn updating(&self) -> &[RunningApp] {
+        &self.updating
+    }
+
     /// Returns `true` when there is nothing running to quit.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -148,6 +235,7 @@ impl AppScan {
             running,
             protected: Vec::new(),
             never_quit: Vec::new(),
+            updating: Vec::new(),
         }
     }
 }
@@ -159,6 +247,7 @@ pub struct QuitPolicy {
     poll_interval: Duration,
     force_kill_grace: Duration,
     force_kill: bool,
+    update_timeout: Duration,
 }
 
 impl QuitPolicy {
@@ -170,10 +259,14 @@ impl QuitPolicy {
             poll_interval: DEFAULT_POLL_INTERVAL,
             force_kill_grace: DEFAULT_FORCE_KILL_GRACE,
             force_kill,
+            update_timeout: DEFAULT_UPDATE_TIMEOUT,
         }
     }
 
     /// Reads `QUIT_TIMEOUT` (seconds) like the zsh script, falling back to 20.
+    ///
+    /// `UPDATE_TIMEOUT` (seconds) bounds the wait for an app that is updating
+    /// itself, and falls back to 60.
     #[must_use]
     pub fn from_env(force_kill: bool) -> Self {
         let timeout = env::var("QUIT_TIMEOUT")
@@ -181,7 +274,12 @@ impl QuitPolicy {
             .and_then(|value| value.trim().parse::<u64>().ok())
             .map(Duration::from_secs)
             .unwrap_or(DEFAULT_QUIT_TIMEOUT);
-        Self::new(timeout, force_kill)
+        let update_timeout = env::var("UPDATE_TIMEOUT")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .map(Duration::from_secs)
+            .unwrap_or(DEFAULT_UPDATE_TIMEOUT);
+        Self::new(timeout, force_kill).with_update_timeout(update_timeout)
     }
 
     /// Replaces the interval between two "is it still running?" checks.
@@ -202,10 +300,23 @@ impl QuitPolicy {
         self
     }
 
+    /// Replaces the wait for an app that is updating itself.
+    #[must_use]
+    pub fn with_update_timeout(mut self, timeout: Duration) -> Self {
+        self.update_timeout = timeout;
+        self
+    }
+
     /// How long to wait for a graceful quit.
     #[must_use]
     pub fn timeout(&self) -> Duration {
         self.timeout
+    }
+
+    /// How long to wait for an app that is updating itself.
+    #[must_use]
+    pub fn update_timeout(&self) -> Duration {
+        self.update_timeout
     }
 
     /// Returns `true` when an app that does not quit may be killed.
@@ -318,6 +429,67 @@ pub trait AppSystem: Send + Sync {
 
     /// Reopens the application with `open -g -b`.
     fn open(&self, bundle_id: &str) -> bool;
+
+    /// What the app is doing about its own updates.
+    ///
+    /// `app` is the path of the bundle when the app has one; an app that is
+    /// known only by its bundle id is inspected through that id alone.
+    fn update_state(&self, _app: Option<&Path>, _bundle_id: &str) -> UpdateState {
+        UpdateState::none()
+    }
+}
+
+/// The updater an app uses, detected from the files in its bundle.
+///
+/// Sparkle apps ship the framework in `Contents/Frameworks`, and an Electron
+/// app that updates itself ships `app-update.yml` in `Contents/Resources`.
+#[must_use]
+pub fn self_updater_from_bundle(app: &Path) -> Option<SelfUpdater> {
+    if app.join("Contents/Frameworks/Sparkle.framework").exists() {
+        Some(SelfUpdater::Sparkle)
+    } else if app.join("Contents/Resources/app-update.yml").exists()
+        || app.join("Contents/Frameworks/Squirrel.framework").exists()
+    {
+        Some(SelfUpdater::Electron)
+    } else {
+        None
+    }
+}
+
+/// The updater that is running for an app, when one is.
+///
+/// Sparkle runs its updater from inside the app bundle, so the command line
+/// of the updater names the Sparkle framework of that app. The updater of an
+/// Electron app runs a `ShipIt` helper whose path carries the bundle id of
+/// the app it updates.
+///
+/// The lines are the output of `ps -axo command=`, which holds the command
+/// line without a pid.
+#[must_use]
+pub fn running_updater(
+    processes: &str,
+    app: Option<&Path>,
+    bundle_id: &str,
+) -> Option<SelfUpdater> {
+    let sparkle = app.map(|app| format!("{}/Contents/Frameworks/Sparkle.framework", app.display()));
+    let electron = (!bundle_id.is_empty()).then_some(bundle_id);
+
+    for line in processes.lines() {
+        let command = line.trim_start();
+        if sparkle
+            .as_deref()
+            .is_some_and(|needle| command.contains(needle))
+        {
+            return Some(SelfUpdater::Sparkle);
+        }
+        if electron.is_some_and(|bundle_id| {
+            command.to_ascii_lowercase().contains("shipit") && command.contains(bundle_id)
+        }) {
+            return Some(SelfUpdater::Electron);
+        }
+    }
+
+    None
 }
 
 /// Finds the running apps among `installed` bundles.
@@ -374,7 +546,11 @@ pub fn find_running_cask_apps<S: AppSystem + ?Sized>(
             scan.never_quit.push(name);
             continue;
         }
-        scan.running.push(RunningApp::new(path.clone(), bundle_id));
+        let app = RunningApp::new(path.clone(), bundle_id);
+        if app.update_state(system).in_progress() {
+            scan.updating.push(app.clone());
+        }
+        scan.running.push(app);
     }
 
     for bundle_id in bundle_ids {
@@ -393,8 +569,11 @@ pub fn find_running_cask_apps<S: AppSystem + ?Sized>(
             scan.never_quit.push(bundle_id.clone());
             continue;
         }
-        scan.running
-            .push(RunningApp::from_bundle_id(bundle_id.clone()));
+        let app = RunningApp::from_bundle_id(bundle_id.clone());
+        if app.update_state(system).in_progress() {
+            scan.updating.push(app.clone());
+        }
+        scan.running.push(app);
     }
 
     scan
@@ -404,6 +583,9 @@ pub fn find_running_cask_apps<S: AppSystem + ?Sized>(
 ///
 /// A bundle id is recorded before the quit is attempted, exactly like the zsh
 /// script, so an app that refuses to quit is still reopened (it never closed).
+///
+/// An app that is updating itself is waited for instead of being quit, and is
+/// left alone when its update does not finish in time.
 #[must_use]
 pub fn quit_apps<S: AppSystem + ?Sized>(
     system: &S,
@@ -413,12 +595,83 @@ pub fn quit_apps<S: AppSystem + ?Sized>(
     let mut reopen = Vec::with_capacity(apps.len());
 
     for app in apps {
-        human!("Quitting: {}", app.name);
+        if !wait_for_self_update(system, app, policy) {
+            continue;
+        }
+        human!("Quitting: {}", app.name());
         reopen.push(app.bundle_id.clone());
         quit_one(system, app, policy);
     }
 
     reopen
+}
+
+/// Waits for an app that is updating itself to finish its update.
+///
+/// An app that updates itself (Sparkle, or the updater of an Electron app)
+/// replaces its own bundle while it runs. Quitting it in the middle of that
+/// leaves a half-updated app behind, so freshen waits for the update to
+/// finish instead of quitting the app.
+///
+/// Returns `true` when the app is not updating anymore and may be quit, and
+/// `false` when the update did not finish in time. An app that was not quit is
+/// not reopened either, because it never closed.
+pub fn wait_for_self_update<S: AppSystem + ?Sized>(
+    system: &S,
+    app: &RunningApp,
+    policy: &QuitPolicy,
+) -> bool {
+    wait_for_self_update_with(system, app, policy, crate::signals::requested)
+}
+
+/// Waits for an app that is updating itself, stopping early on an interrupt.
+fn wait_for_self_update_with<S: AppSystem + ?Sized, F>(
+    system: &S,
+    app: &RunningApp,
+    policy: &QuitPolicy,
+    interrupt: F,
+) -> bool
+where
+    F: Fn() -> bool,
+{
+    let mut waited = Duration::ZERO;
+    let mut announced = false;
+
+    loop {
+        let state = app.update_state(system);
+        if !state.in_progress() {
+            return true;
+        }
+
+        if !announced {
+            announced = true;
+            let updater = state.updater().map_or("its own updater", SelfUpdater::name);
+            human!(
+                "Waiting up to {}s for {} to finish updating itself ({updater})...",
+                policy.update_timeout().as_secs(),
+                app.name()
+            );
+        }
+
+        if interrupt() {
+            warn(&format!(
+                "interrupted while waiting for {} to finish updating itself, so it was not quit.",
+                app.name()
+            ));
+            return false;
+        }
+
+        if waited >= policy.update_timeout() {
+            warn(&format!(
+                "{} is updating itself and did not finish, so it was not quit.",
+                app.name()
+            ));
+            return false;
+        }
+
+        std::thread::sleep(policy.poll_interval);
+        waited += policy.poll_interval;
+    }
 }
 
 /// Reopens the apps with the given bundle ids, warning about failures.
@@ -654,6 +907,22 @@ impl AppSystem for MacAppSystem {
     fn open(&self, bundle_id: &str) -> bool {
         open_command(bundle_id).run().is_ok()
     }
+
+    fn update_state(&self, app: Option<&Path>, bundle_id: &str) -> UpdateState {
+        let updater = app.and_then(self_updater_from_bundle);
+        if updater.is_none() && app.is_some() {
+            // The app does not update itself, so no updater can be running.
+            return UpdateState::none();
+        }
+
+        match running_updater(&self.process_list(), app, bundle_id) {
+            Some(running) => UpdateState::updating(running),
+            None => match updater {
+                Some(updater) => UpdateState::idle(updater),
+                None => UpdateState::none(),
+            },
+        }
+    }
 }
 
 #[cfg(test)]
@@ -667,7 +936,8 @@ mod tests {
         automation_denied_message, bundle_id_command, find_running_apps, find_running_cask_apps,
         is_automation_denied, kill_command, open_command, pid_list_command, pids_from_apple_script,
         pids_from_processes, process_list_command, quit_apps, quit_choice, quit_command,
-        reopen_apps, AppSystem, QuitChoice, QuitOutcome, QuitPolicy,
+        reopen_apps, running_updater, self_updater_from_bundle, AppSystem, QuitChoice, QuitOutcome,
+        QuitPolicy, SelfUpdater, UpdateState,
     };
     use crate::policy::AppLists;
 
@@ -683,6 +953,7 @@ mod tests {
         killed: Mutex<Vec<Vec<u32>>>,
         opened: Mutex<Vec<String>>,
         running_checks: Mutex<usize>,
+        updating: Mutex<HashMap<String, usize>>,
     }
 
     fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -724,6 +995,15 @@ mod tests {
 
         fn denies_automation(mut self) -> Self {
             self.quit_outcome = QuitOutcome::Denied;
+            self
+        }
+
+        /// The app updates itself for the next `checks` checks.
+        ///
+        /// The counter stands for an update that finishes after a while: every
+        /// check of the update state uses one of them.
+        fn with_updating(self, bundle_id: &str, checks: usize) -> Self {
+            lock(&self.updating).insert(bundle_id.to_owned(), checks);
             self
         }
     }
@@ -779,6 +1059,21 @@ mod tests {
             lock(&self.opened).push(bundle_id.to_owned());
             self.open_succeeds
         }
+
+        fn update_state(&self, _app: Option<&std::path::Path>, bundle_id: &str) -> UpdateState {
+            let mut updating = lock(&self.updating);
+            match updating.get_mut(bundle_id) {
+                Some(remaining) if *remaining > 0 => {
+                    *remaining -= 1;
+                    UpdateState::updating(SelfUpdater::Sparkle)
+                }
+                Some(_) => {
+                    updating.remove(bundle_id);
+                    UpdateState::idle(SelfUpdater::Sparkle)
+                }
+                None => UpdateState::none(),
+            }
+        }
     }
 
     fn installed(paths: &[&str]) -> Vec<PathBuf> {
@@ -793,6 +1088,30 @@ mod tests {
         QuitPolicy::new(Duration::ZERO, force_kill)
             .with_poll_interval(Duration::from_millis(1))
             .with_force_kill_grace(Duration::ZERO)
+    }
+
+    /// Creates a fake app bundle that holds the given entries.
+    ///
+    /// An entry ending in `.yml` is a file, every other entry a directory.
+    fn fake_bundle(name: &str, entries: &[&str]) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("freshen-apps-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for entry in entries {
+            let path = root.join(entry);
+            if entry.ends_with(".yml") {
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent).unwrap_or_else(|error| {
+                        panic!("failed to create {}: {error}", parent.display())
+                    });
+                }
+                std::fs::write(&path, "provider: generic\n")
+                    .unwrap_or_else(|error| panic!("failed to write {}: {error}", path.display()));
+            } else {
+                std::fs::create_dir_all(&path)
+                    .unwrap_or_else(|error| panic!("failed to create {}: {error}", path.display()));
+            }
+        }
+        root
     }
 
     #[test]
@@ -1168,6 +1487,188 @@ mod tests {
         reopen_apps(&system, &["com.first".to_owned(), "com.second".to_owned()]);
 
         assert_eq!(lock(&system.opened).as_slice(), ["com.first", "com.second"]);
+    }
+
+    #[test]
+    fn an_app_that_updates_itself_is_waited_for_before_it_is_quit() {
+        let system = FakeSystem {
+            quit_stops_apps: true,
+            ..FakeSystem::new()
+                .with_app("/Applications/Firefox.app", "com.firefox", &[10])
+                .with_updating("com.firefox", 3)
+        };
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/Firefox.app"]),
+            None,
+            &AppLists::new(),
+        );
+
+        assert_eq!(scan.updating().len(), 1);
+        assert_eq!(scan.updating()[0].name(), "Firefox.app");
+
+        let reopen = quit_apps(
+            &system,
+            scan.running(),
+            &fast_policy(false).with_update_timeout(Duration::from_secs(5)),
+        );
+
+        assert_eq!(reopen, ["com.firefox"]);
+        assert_eq!(lock(&system.quit_calls).as_slice(), ["com.firefox"]);
+    }
+
+    #[test]
+    fn an_app_that_does_not_finish_updating_is_not_quit() {
+        let system = FakeSystem::new()
+            .with_app("/Applications/Firefox.app", "com.firefox", &[10])
+            .with_updating("com.firefox", usize::MAX);
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/Firefox.app"]),
+            None,
+            &AppLists::new(),
+        );
+
+        let reopen = quit_apps(
+            &system,
+            scan.running(),
+            &fast_policy(false).with_update_timeout(Duration::ZERO),
+        );
+
+        assert!(reopen.is_empty(), "the app was reopened: {reopen:?}");
+        assert!(lock(&system.quit_calls).is_empty(), "the app was quit");
+        assert!(running(&system, "/Applications/Firefox.app"));
+    }
+
+    #[test]
+    fn an_app_that_does_not_update_itself_is_quit_without_waiting() {
+        let system = FakeSystem {
+            quit_stops_apps: true,
+            ..FakeSystem::new().with_app("/Applications/Firefox.app", "com.firefox", &[10])
+        };
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/Firefox.app"]),
+            None,
+            &AppLists::new(),
+        );
+
+        assert!(scan.updating().is_empty());
+
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
+
+        assert_eq!(reopen, ["com.firefox"]);
+        assert_eq!(lock(&system.quit_calls).as_slice(), ["com.firefox"]);
+    }
+
+    #[test]
+    fn the_wait_for_an_update_stops_when_the_run_is_interrupted() {
+        let system = FakeSystem::new()
+            .with_app("/Applications/Firefox.app", "com.firefox", &[10])
+            .with_updating("com.firefox", usize::MAX);
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/Firefox.app"]),
+            None,
+            &AppLists::new(),
+        );
+
+        let finished = super::wait_for_self_update_with(
+            &system,
+            &scan.running()[0],
+            &fast_policy(false).with_update_timeout(Duration::from_secs(60)),
+            || true,
+        );
+
+        assert!(!finished, "the wait ignored the interrupt");
+        assert!(lock(&system.quit_calls).is_empty(), "the app was quit");
+    }
+
+    #[test]
+    fn the_update_state_says_whether_the_app_is_updating_itself() {
+        assert!(!UpdateState::none().in_progress());
+        assert_eq!(UpdateState::none().updater(), None);
+        assert!(!UpdateState::idle(SelfUpdater::Sparkle).in_progress());
+        assert_eq!(
+            UpdateState::idle(SelfUpdater::Sparkle).updater(),
+            Some(SelfUpdater::Sparkle)
+        );
+        assert!(UpdateState::updating(SelfUpdater::Electron).in_progress());
+        assert_eq!(
+            UpdateState::updating(SelfUpdater::Electron).updater(),
+            Some(SelfUpdater::Electron)
+        );
+    }
+
+    #[test]
+    fn a_sparkle_updater_running_for_an_app_is_detected() {
+        let processes = "\
+/Applications/Firefox.app/Contents/MacOS/firefox
+/Applications/Firefox.app/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate";
+
+        let updater = running_updater(
+            processes,
+            Some(std::path::Path::new("/Applications/Firefox.app")),
+            "com.firefox",
+        );
+
+        assert_eq!(updater, Some(SelfUpdater::Sparkle));
+    }
+
+    #[test]
+    fn the_electron_updater_of_an_app_is_detected_by_its_bundle_id() {
+        let processes = "/Users/test/Library/Caches/com.example.editor/ShipIt/ShipIt";
+
+        let updater = running_updater(processes, None, "com.example.editor");
+
+        assert_eq!(updater, Some(SelfUpdater::Electron));
+    }
+
+    #[test]
+    fn the_updater_of_another_app_is_not_mistaken_for_this_one() {
+        let processes = "/Users/test/Library/Caches/com.example.editor/ShipIt/ShipIt";
+
+        let updater = running_updater(
+            processes,
+            Some(std::path::Path::new("/Applications/Other.app")),
+            "com.example.other",
+        );
+
+        assert_eq!(updater, None);
+    }
+
+    #[test]
+    fn an_app_that_is_not_updating_itself_has_no_running_updater() {
+        let processes = "/Applications/Firefox.app/Contents/MacOS/firefox";
+
+        let updater = running_updater(
+            processes,
+            Some(std::path::Path::new("/Applications/Firefox.app")),
+            "com.firefox",
+        );
+
+        assert_eq!(updater, None);
+    }
+
+    #[test]
+    fn the_updater_of_an_app_is_detected_from_its_bundle() {
+        let sparkle = fake_bundle("sparkle", &["Contents/Frameworks/Sparkle.framework"]);
+        assert_eq!(
+            self_updater_from_bundle(&sparkle),
+            Some(SelfUpdater::Sparkle)
+        );
+        let _ = std::fs::remove_dir_all(&sparkle);
+
+        let electron = fake_bundle("electron", &["Contents/Resources/app-update.yml"]);
+        assert_eq!(
+            self_updater_from_bundle(&electron),
+            Some(SelfUpdater::Electron)
+        );
+        let _ = std::fs::remove_dir_all(&electron);
+
+        let plain = fake_bundle("plain", &["Contents/MacOS/app"]);
+        assert_eq!(self_updater_from_bundle(&plain), None);
+        let _ = std::fs::remove_dir_all(&plain);
     }
 
     #[test]
