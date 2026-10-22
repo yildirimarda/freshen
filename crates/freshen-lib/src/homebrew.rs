@@ -18,7 +18,7 @@ use serde_json::Value;
 
 use crate::apps::{
     find_running_cask_apps, quit_apps, quit_choice, reopen_apps, AppScan, AppSystem, MacAppSystem,
-    QuitChoice, QuitPolicy, RunningApp,
+    QuitChoice, QuitPolicy, Reopen, RunningApp,
 };
 use crate::cleanup;
 use crate::options::RunOptions;
@@ -42,16 +42,19 @@ const SERVICES: StepId = "brew-services";
 
 const HOMEBREW_PLATFORMS: [Platform; 2] = [Platform::Macos, Platform::Linux];
 
-/// Bundle ids of the apps that were quit and still need to be reopened.
+/// The apps that were quit and still need to be reopened.
+///
+/// The session state of every app is kept, so an app comes back the way it
+/// was before the upgrade.
 #[derive(Clone, Default)]
-struct ReopenQueue(Arc<Mutex<Vec<String>>>);
+struct ReopenQueue(Arc<Mutex<Vec<Reopen>>>);
 
 impl ReopenQueue {
-    fn extend(&self, bundle_ids: impl IntoIterator<Item = String>) {
-        lock(&self.0).extend(bundle_ids);
+    fn extend(&self, apps: impl IntoIterator<Item = Reopen>) {
+        lock(&self.0).extend(apps);
     }
 
-    fn bundle_ids(&self) -> Vec<String> {
+    fn apps(&self) -> Vec<Reopen> {
         lock(&self.0).clone()
     }
 
@@ -92,13 +95,13 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 fn reopen_queued(queue: &ReopenQueue, system: &dyn AppSystem, message: &str, interrupted: bool) {
-    let bundle_ids = queue.bundle_ids();
-    if bundle_ids.is_empty() {
+    let apps = queue.apps();
+    if apps.is_empty() {
         return;
     }
 
     human!("{message}");
-    reopen_apps(system, &bundle_ids);
+    reopen_apps(system, &apps);
     if !interrupted {
         queue.clear();
     }
@@ -1461,7 +1464,7 @@ mod tests {
         quit_plan, register, running_services, services_for_formulae, CaskError, CasksStep,
         ReopenQueue, ReopenStep, CASKS, FORMULAE, REOPEN, SERVICES,
     };
-    use crate::apps::{AppScan, AppSystem, QuitOutcome, RunningApp};
+    use crate::apps::{AppScan, AppSystem, QuitOutcome, Reopen, RunningApp, SessionState};
     use crate::platform::Platform;
     use crate::policy::AppLists;
     use crate::registry::Registry;
@@ -1493,7 +1496,7 @@ mod tests {
 
         fn force_kill(&self, _pids: &[u32]) {}
 
-        fn open(&self, bundle_id: &str) -> bool {
+        fn open(&self, bundle_id: &str, _hidden: bool) -> bool {
             super::lock(&self.opened).push(bundle_id.to_owned());
             true
         }
@@ -1989,7 +1992,10 @@ mod tests {
     #[test]
     fn an_interrupted_cask_step_reopens_the_apps_it_quit() {
         let queue = ReopenQueue::default();
-        queue.extend(["com.firefox".to_owned(), "com.editor".to_owned()]);
+        queue.extend([
+            Reopen::new("com.firefox", SessionState::visible()),
+            Reopen::new("com.editor", SessionState::visible()),
+        ]);
         let system = Arc::new(FakeAppSystem::default());
         let step = CasksStep::with_system(queue.clone(), system.clone());
 
@@ -2000,13 +2006,13 @@ mod tests {
             super::lock(&system.opened).as_slice(),
             ["com.firefox", "com.editor"]
         );
-        assert!(queue.bundle_ids().is_empty());
+        assert!(queue.apps().is_empty());
     }
 
     #[test]
     fn the_reopen_step_restores_apps_after_an_interrupt() {
         let queue = ReopenQueue::default();
-        queue.extend(["com.firefox".to_owned()]);
+        queue.extend([Reopen::new("com.firefox", SessionState::visible())]);
         let system = Arc::new(FakeAppSystem::default());
         let step = ReopenStep::with_system(queue.clone(), system.clone());
 
@@ -2014,7 +2020,7 @@ mod tests {
             .unwrap_or_else(|error| panic!("restore failed: {error}"));
 
         assert_eq!(super::lock(&system.opened).as_slice(), ["com.firefox"]);
-        assert!(queue.bundle_ids().is_empty());
+        assert!(queue.apps().is_empty());
     }
 
     #[test]
