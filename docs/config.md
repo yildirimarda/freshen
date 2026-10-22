@@ -211,4 +211,11 @@ with the known step ids:
 freshen: unknown step `brew-cask` in the configuration file (known steps: brew, brew-autoremove, brew-bundle-cleanup, brew-casks, brew-cleanup, brew-doctor, brew-formulae, brew-reopen, brew-services, colima-start, colima-stop, docker, macos-updates, mas, mise, uv)
 ```
 
+The container steps (`colima-stop`, `colima-start`, `docker`) work with any
+supported runtime: Colima (including Lima VMs), OrbStack, Docker Desktop,
+Rancher Desktop, Podman (machine) and native Docker Engine. The runtime is
+detected from `DOCKER_HOST`, `docker context show` and well-known socket
+paths; override it with `--container-runtime` (`colima`, `orbstack`,
+`docker-desktop`, `rancher-desktop`, `podman`, `docker`).
+
 The run stops with exit code `1` when the configuration file cannot be used.
