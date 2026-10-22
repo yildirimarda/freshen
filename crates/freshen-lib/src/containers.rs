@@ -21,7 +21,7 @@ use crate::homebrew::{BREW, FORMULAE, REOPEN};
 use crate::options::RunOptions;
 use crate::output::human;
 use crate::platform::Platform;
-use crate::process::{CommandSpec, NETWORK_RETRIES};
+use crate::process::{CommandSpec, ProcessError, NETWORK_RETRIES};
 use crate::registry::Registry;
 use crate::snapshot::{self, SnapshotCommand, SnapshotSection};
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
@@ -38,6 +38,111 @@ const CONTAINER_PLATFORMS: [Platform; 2] = [Platform::Macos, Platform::Linux];
 /// The `docker ps --format` argument, with the literal tabs the zsh script
 /// produces with `$'...'`.
 const PS_FORMAT: &str = "{{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.project\"}}";
+
+/// A container runtime that has to be stopped around an upgrade of its own
+/// packages and started again afterwards.
+///
+/// The Homebrew steps do not know which runtime they are dealing with: the
+/// stop and start steps ask the runtime whether it is installed and running,
+/// stop and start it, and use the runtime's trigger lists to decide whether an
+/// outdated formula or cask needs the restart cycle.
+pub trait ContainerRuntime: Send + Sync {
+    /// Human-readable name used in progress messages, e.g. `colima/lima`.
+    fn name(&self) -> &'static str;
+
+    /// Name shown in the step list, e.g. `Colima/lima`.
+    fn display_name(&self) -> &'static str;
+
+    /// Executable that controls the runtime, e.g. `colima`.
+    fn command(&self) -> &'static str;
+
+    /// Whether the runtime's tool is installed.
+    fn detect(&self) -> Detection;
+
+    /// Whether the runtime is currently running.
+    fn is_running(&self) -> bool;
+
+    /// Stops the runtime.
+    fn stop(&self) -> Result<(), ProcessError>;
+
+    /// Starts the runtime.
+    fn start(&self) -> Result<(), ProcessError>;
+
+    /// Formulae whose upgrade needs the runtime to be stopped and started.
+    fn restart_formulae(&self) -> &'static [&'static str];
+
+    /// Casks whose upgrade needs the runtime to be stopped and started.
+    fn restart_casks(&self) -> &'static [&'static str];
+
+    /// Whether upgrading `package` needs a stop/start cycle.
+    fn triggers_restart(&self, package: &str) -> bool {
+        self.restart_formulae().contains(&package) || self.restart_casks().contains(&package)
+    }
+}
+
+/// The Colima/lima container runtime.
+///
+/// Colima manages a Lima VM that runs Docker. Upgrading either the `colima`
+/// or the `lima` formula can restart the VM, so both trigger a stop/start
+/// cycle.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ColimaRuntime;
+
+impl ColimaRuntime {
+    /// Creates the Colima/lima runtime.
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl ContainerRuntime for ColimaRuntime {
+    fn name(&self) -> &'static str {
+        "colima/lima"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Colima/lima"
+    }
+
+    fn command(&self) -> &'static str {
+        "colima"
+    }
+
+    fn detect(&self) -> Detection {
+        if command_exists(self.command()) {
+            Detection::Installed
+        } else {
+            Detection::NotInstalled
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        CommandSpec::new(self.command()).arg("status").run().is_ok()
+    }
+
+    fn stop(&self) -> Result<(), ProcessError> {
+        CommandSpec::new(self.command())
+            .arg("stop")
+            .run()
+            .map(|_| ())
+    }
+
+    fn start(&self) -> Result<(), ProcessError> {
+        CommandSpec::new(self.command())
+            .arg("start")
+            .run()
+            .map(|_| ())
+    }
+
+    fn restart_formulae(&self) -> &'static [&'static str] {
+        &["colima", "lima"]
+    }
+
+    fn restart_casks(&self) -> &'static [&'static str] {
+        &[]
+    }
+}
 
 /// A compose project and the config files needed to address it again.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,11 +273,24 @@ pub fn parse_standalone_containers(output: &str) -> Vec<StandaloneContainer> {
 /// cleanup, reopen and finally the Docker image step.
 #[must_use]
 pub fn register(registry: Registry) -> Registry {
+    register_with_runtime(registry, ColimaRuntime)
+}
+
+/// Registers the container steps for a specific container runtime.
+#[must_use]
+pub fn register_with_runtime(
+    registry: Registry,
+    runtime: impl ContainerRuntime + 'static,
+) -> Registry {
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(runtime);
     let snapshot = ContainerSnapshot::default();
     registry
-        .with(ColimaStopStep::new(snapshot.clone()))
-        .with(ColimaStartStep::new(snapshot))
-        .with(DockerStep)
+        .with(ContainerStopStep::new(
+            Arc::clone(&runtime),
+            snapshot.clone(),
+        ))
+        .with(ContainerStartStep::new(Arc::clone(&runtime), snapshot))
+        .with(DockerStep::new(runtime))
 }
 
 #[derive(Debug, Default, Clone)]
@@ -205,27 +323,34 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     }
 }
 
-struct ColimaStopStep {
+struct ContainerStopStep {
+    runtime: Arc<dyn ContainerRuntime>,
     snapshot: ContainerSnapshot,
+    display_name: String,
 }
 
-impl ColimaStopStep {
-    fn new(snapshot: ContainerSnapshot) -> Self {
-        Self { snapshot }
+impl ContainerStopStep {
+    fn new(runtime: Arc<dyn ContainerRuntime>, snapshot: ContainerSnapshot) -> Self {
+        let display_name = format!("{} stop", runtime.display_name());
+        Self {
+            runtime,
+            snapshot,
+            display_name,
+        }
     }
 }
 
-impl Step for ColimaStopStep {
+impl Step for ContainerStopStep {
     fn id(&self) -> StepId {
         COLIMA_STOP
     }
 
     fn display_name(&self) -> &str {
-        "Colima/lima stop"
+        &self.display_name
     }
 
     fn detect(&self) -> Result<Detection, StepError> {
-        Ok(detect_with_brew("colima"))
+        Ok(detect_with_brew(self.runtime.as_ref()))
     }
 
     fn check(&self) -> Result<CheckReport, StepError> {
@@ -243,14 +368,19 @@ impl Step for ColimaStopStep {
             .retry_transient_network(NETWORK_RETRIES)
             .run()
             .map_err(|error| StepError::run_from_process(COLIMA_STOP, &error))?;
-        let upgrade_stops_colima = lines(outdated.stdout())
+        let upgrade_stops_runtime = lines(outdated.stdout())
             .iter()
-            .any(|name| name == "colima" || name == "lima");
-        if !upgrade_stops_colima || !colima_is_running() {
+            .any(|name| self.runtime.triggers_restart(name));
+        if !upgrade_stops_runtime || !self.runtime.is_running() {
             return Ok(());
         }
 
-        human!("colima/lima is outdated and colima is running: stopping containers and colima");
+        human!(
+            "{} is outdated and {} is running: stopping containers and {}",
+            self.runtime.name(),
+            self.runtime.command(),
+            self.runtime.command()
+        );
 
         let mut snapshot = Snapshot::default();
         let mut failures = Vec::new();
@@ -277,7 +407,7 @@ impl Step for ColimaStopStep {
             }
         }
 
-        if let Err(error) = CommandSpec::new("colima").arg("stop").run() {
+        if let Err(error) = self.runtime.stop() {
             failures.push(StepError::run_from_process(COLIMA_STOP, &error));
         }
 
@@ -289,7 +419,7 @@ impl Step for ColimaStopStep {
     }
 
     fn restore(&self) -> Result<(), StepError> {
-        restore_colima(&self.snapshot, COLIMA_STOP)
+        restore_runtime(self.runtime.as_ref(), &self.snapshot, COLIMA_STOP)
     }
 
     fn prerequisites(&self) -> &'static [StepId] {
@@ -301,25 +431,35 @@ impl Step for ColimaStopStep {
     }
 }
 
-struct ColimaStartStep {
+struct ContainerStartStep {
+    runtime: Arc<dyn ContainerRuntime>,
     snapshot: ContainerSnapshot,
+    display_name: String,
 }
 
-impl ColimaStartStep {
-    fn new(snapshot: ContainerSnapshot) -> Self {
-        Self { snapshot }
+impl ContainerStartStep {
+    fn new(runtime: Arc<dyn ContainerRuntime>, snapshot: ContainerSnapshot) -> Self {
+        let display_name = format!("{} start", runtime.display_name());
+        Self {
+            runtime,
+            snapshot,
+            display_name,
+        }
     }
 
-    fn start_and_restore(&self, message: &str) -> Result<(), StepError> {
+    fn start_and_restore(&self, action: &str) -> Result<(), StepError> {
         let Some(snapshot) = self.snapshot.get() else {
             return Ok(());
         };
 
-        human!("{message}");
+        human!("{action} {} and containers", self.runtime.command());
         let mut failures = Vec::new();
 
-        if let Err(error) = CommandSpec::new("colima").arg("start").run() {
-            human!("warning: colima did not start; containers were NOT restarted");
+        if let Err(error) = self.runtime.start() {
+            human!(
+                "warning: {} did not start; containers were NOT restarted",
+                self.runtime.command()
+            );
             return Err(StepError::run_from_process(COLIMA_START, &error));
         }
 
@@ -344,16 +484,23 @@ impl ColimaStartStep {
     }
 }
 
-fn restore_colima(snapshot: &ContainerSnapshot, step: StepId) -> Result<(), StepError> {
+fn restore_runtime(
+    runtime: &dyn ContainerRuntime,
+    snapshot: &ContainerSnapshot,
+    step: StepId,
+) -> Result<(), StepError> {
     let Some(stopped) = snapshot.get() else {
         return Ok(());
     };
 
-    human!("Restoring colima and containers");
+    human!("Restoring {} and containers", runtime.command());
     let mut failures = Vec::new();
 
-    if let Err(error) = CommandSpec::new("colima").arg("start").run() {
-        human!("warning: colima did not start; containers were NOT restarted");
+    if let Err(error) = runtime.start() {
+        human!(
+            "warning: {} did not start; containers were NOT restarted",
+            runtime.command()
+        );
         return Err(StepError::run_from_process(step, &error));
     }
 
@@ -377,17 +524,17 @@ fn restore_colima(snapshot: &ContainerSnapshot, step: StepId) -> Result<(), Step
     result
 }
 
-impl Step for ColimaStartStep {
+impl Step for ContainerStartStep {
     fn id(&self) -> StepId {
         COLIMA_START
     }
 
     fn display_name(&self) -> &str {
-        "Colima/lima start"
+        &self.display_name
     }
 
     fn detect(&self) -> Result<Detection, StepError> {
-        Ok(detect_with_brew("colima"))
+        Ok(detect_with_brew(self.runtime.as_ref()))
     }
 
     fn check(&self) -> Result<CheckReport, StepError> {
@@ -395,7 +542,7 @@ impl Step for ColimaStartStep {
     }
 
     fn run(&self) -> Result<(), StepError> {
-        self.start_and_restore("Starting colima and containers")
+        self.start_and_restore("Starting")
     }
 
     fn snapshot(&self) -> Option<SnapshotSection> {
@@ -403,7 +550,7 @@ impl Step for ColimaStartStep {
     }
 
     fn restore(&self) -> Result<(), StepError> {
-        self.start_and_restore("Restoring colima and containers")
+        self.start_and_restore("Restoring")
     }
 
     fn prerequisites(&self) -> &'static [StepId] {
@@ -415,7 +562,15 @@ impl Step for ColimaStartStep {
     }
 }
 
-struct DockerStep;
+struct DockerStep {
+    runtime: Arc<dyn ContainerRuntime>,
+}
+
+impl DockerStep {
+    fn new(runtime: Arc<dyn ContainerRuntime>) -> Self {
+        Self { runtime }
+    }
+}
 
 impl Step for DockerStep {
     fn id(&self) -> StepId {
@@ -427,7 +582,7 @@ impl Step for DockerStep {
     }
 
     fn detect(&self) -> Result<Detection, StepError> {
-        let detected = if command_exists("docker") && command_exists("colima") {
+        let detected = if command_exists("docker") && self.runtime.detect().is_installed() {
             Detection::Installed
         } else {
             Detection::NotInstalled
@@ -444,8 +599,11 @@ impl Step for DockerStep {
     }
 
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
-        if !colima_is_running() {
-            human!("warning: colima is not running, skipping Docker image updates.");
+        if !self.runtime.is_running() {
+            human!(
+                "warning: {} is not running, skipping Docker image updates.",
+                self.runtime.command()
+            );
             return Ok(());
         }
 
@@ -511,10 +669,6 @@ fn lines(output: &str) -> Vec<String> {
         .filter(|line| !line.is_empty())
         .map(str::to_owned)
         .collect()
-}
-
-fn colima_is_running() -> bool {
-    CommandSpec::new("colima").arg("status").run().is_ok()
 }
 
 fn list_compose_projects() -> Vec<ComposeProject> {
@@ -595,8 +749,8 @@ fn docker_command(arguments: &[&str], id: &str) -> CommandSpec {
     CommandSpec::new("docker").args(arguments).arg(id)
 }
 
-fn detect_with_brew(tool: &str) -> Detection {
-    if command_exists("brew") && command_exists(tool) {
+fn detect_with_brew(runtime: &dyn ContainerRuntime) -> Detection {
+    if command_exists("brew") && runtime.detect().is_installed() {
         Detection::Installed
     } else {
         Detection::NotInstalled
@@ -611,13 +765,15 @@ fn command_exists(program: &str) -> bool {
 mod tests {
     use super::{
         compose_command, parse_compose_projects, parse_standalone_containers, register,
-        ComposeProject, StandaloneContainer, COLIMA_START, COLIMA_STOP, DOCKER, PS_FORMAT,
+        register_with_runtime, ColimaRuntime, ComposeProject, ContainerRuntime,
+        StandaloneContainer, COLIMA_START, COLIMA_STOP, DOCKER, PS_FORMAT,
     };
     use crate::homebrew;
     use crate::options::RunOptions;
     use crate::platform::Platform;
+    use crate::process::ProcessError;
     use crate::registry::Registry;
-    use crate::step::StepId;
+    use crate::step::{Detection, StepId};
     use std::ffi::OsString;
 
     fn ordered_ids(platform: Platform) -> Vec<StepId> {
@@ -845,5 +1001,80 @@ mod tests {
             "{{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.project\"}}"
         );
         assert_eq!(PS_FORMAT.matches('\t').count(), 2);
+    }
+
+    #[test]
+    fn colima_runtime_declares_the_packages_that_trigger_a_restart() {
+        let runtime = ColimaRuntime::new();
+
+        assert_eq!(runtime.name(), "colima/lima");
+        assert_eq!(runtime.display_name(), "Colima/lima");
+        assert_eq!(runtime.command(), "colima");
+        assert_eq!(runtime.restart_formulae(), ["colima", "lima"]);
+        assert!(runtime.restart_casks().is_empty());
+        assert!(runtime.triggers_restart("colima"));
+        assert!(runtime.triggers_restart("lima"));
+        assert!(!runtime.triggers_restart("docker"));
+    }
+
+    struct FakeRuntime;
+
+    impl ContainerRuntime for FakeRuntime {
+        fn name(&self) -> &'static str {
+            "fake"
+        }
+
+        fn display_name(&self) -> &'static str {
+            "Fake"
+        }
+
+        fn command(&self) -> &'static str {
+            "fake"
+        }
+
+        fn detect(&self) -> Detection {
+            Detection::Installed
+        }
+
+        fn is_running(&self) -> bool {
+            true
+        }
+
+        fn stop(&self) -> Result<(), ProcessError> {
+            Ok(())
+        }
+
+        fn start(&self) -> Result<(), ProcessError> {
+            Ok(())
+        }
+
+        fn restart_formulae(&self) -> &'static [&'static str] {
+            &["fake-formula"]
+        }
+
+        fn restart_casks(&self) -> &'static [&'static str] {
+            &["fake-cask"]
+        }
+    }
+
+    #[test]
+    fn a_runtime_triggers_a_restart_for_formulae_and_casks() {
+        let runtime = FakeRuntime;
+
+        assert!(runtime.triggers_restart("fake-formula"));
+        assert!(runtime.triggers_restart("fake-cask"));
+        assert!(!runtime.triggers_restart("other"));
+    }
+
+    #[test]
+    fn the_steps_take_their_names_from_the_registered_runtime() {
+        let registry = register_with_runtime(Registry::new(), FakeRuntime);
+
+        let names: Vec<_> = registry
+            .steps()
+            .map(|step| step.display_name().to_owned())
+            .collect();
+
+        assert_eq!(names, ["Fake stop", "Fake start", "Docker images"]);
     }
 }
