@@ -42,11 +42,11 @@ fn stderr(output: &Output) -> String {
 const COMMON_STEPS: &str = "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-reopen,colima-stop,colima-start,docker,uv,mise";
 
 /// The built-in steps that only exist on macOS.
-const MACOS_STEPS: &str = "mas";
+const MACOS_STEPS: &str = "mas,macos-updates";
 
 /// Number of built-in steps that are part of a run on this platform.
 #[cfg(target_os = "macos")]
-const PLATFORM_STEPS: usize = 1;
+const PLATFORM_STEPS: usize = 2;
 #[cfg(not(target_os = "macos"))]
 const PLATFORM_STEPS: usize = 0;
 
@@ -107,7 +107,7 @@ fn list_steps_lists_every_builtin_step() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
-    assert!(text.contains("Steps (13):"), "listing: {text}");
+    assert!(text.contains("Steps (14):"), "listing: {text}");
     assert!(text.contains("brew"), "listing: {text}");
     assert!(text.contains("brew-casks"), "listing: {text}");
     assert!(text.contains("colima-stop"), "listing: {text}");
@@ -115,6 +115,7 @@ fn list_steps_lists_every_builtin_step() {
     assert!(text.contains("uv"), "listing: {text}");
     assert!(text.contains("mise"), "listing: {text}");
     assert!(text.contains("mas"), "listing: {text}");
+    assert!(text.contains("macos-updates"), "listing: {text}");
 }
 
 #[test]

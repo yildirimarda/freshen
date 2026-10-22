@@ -211,6 +211,7 @@ pub struct RunOptions {
     assume_yes: bool,
     force_kill: bool,
     cleanup: bool,
+    install_macos_updates: bool,
     selection: StepSelection,
     preflight: PreflightConfig,
     package_manager: PackageManagerConfig,
@@ -256,6 +257,14 @@ impl RunOptions {
     #[must_use]
     pub fn with_cleanup(mut self, cleanup: bool) -> Self {
         self.cleanup = cleanup;
+        self
+    }
+
+    /// Sets `--install-macos-updates`: install the macOS system updates
+    /// instead of only reporting them.
+    #[must_use]
+    pub fn with_install_macos_updates(mut self, install: bool) -> Self {
+        self.install_macos_updates = install;
         self
     }
 
@@ -358,6 +367,16 @@ impl RunOptions {
     #[must_use]
     pub fn cleanup_enabled(&self) -> bool {
         self.cleanup
+    }
+
+    /// Returns `true` when `--install-macos-updates` asks for the macOS system
+    /// updates to be installed.
+    ///
+    /// The macOS system updates are only reported without this flag, because
+    /// installing them needs administrator rights and can restart the machine.
+    #[must_use]
+    pub fn install_macos_updates(&self) -> bool {
+        self.install_macos_updates
     }
 
     /// The `--only`/`--skip` selection.
@@ -543,6 +562,7 @@ mod tests {
         assert!(!options.assume_yes());
         assert!(!options.force_kill());
         assert!(!options.cleanup_enabled());
+        assert!(!options.install_macos_updates());
         assert!(options.selection().is_empty());
         assert_eq!(options.step_timeout(), None);
         assert_eq!(options.global_timeout(), None);
@@ -566,6 +586,7 @@ mod tests {
             .with_assume_yes(true)
             .with_force_kill(true)
             .with_cleanup(true)
+            .with_install_macos_updates(true)
             .with_step_timeout(Some(std::time::Duration::from_secs(60)))
             .with_global_timeout(Some(std::time::Duration::from_secs(600)))
             .with_snapshot_retention(4)
@@ -575,6 +596,7 @@ mod tests {
         assert!(options.assume_yes());
         assert!(options.force_kill());
         assert!(options.cleanup_enabled());
+        assert!(options.install_macos_updates());
         assert_eq!(options.snapshot_retention(), 4);
         assert_eq!(options.jobs(), 3);
         assert_eq!(

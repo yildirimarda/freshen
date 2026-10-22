@@ -17,6 +17,7 @@ pub mod homebrew;
 pub mod listing;
 pub mod locale;
 pub mod lock;
+pub mod macos_updates;
 mod network;
 pub mod options;
 pub mod output;
@@ -54,6 +55,10 @@ pub use containers::{
 };
 pub use listing::{list_steps, DetectionState, StepList, StepListing};
 pub use lock::{LockError, RunLock};
+pub use macos_updates::{
+    parse_software_update_list, pending_reboot, SoftwareUpdateClient, SoftwareUpdateOutput,
+    MACOS_UPDATES,
+};
 pub use options::{PlanError, RunOptions, SelectionFlag, StepSelection, DEFAULT_JOBS};
 pub use output::{route_to_stderr, route_to_stdout};
 pub use package_manager::{
