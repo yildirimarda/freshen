@@ -52,10 +52,11 @@ pub use config::{
     PreflightSection, RunSection, TimeoutSection, CONFIG_DIR_NAME, CONFIG_FILE_NAME,
 };
 pub use containers::{
-    detect_active_runtime, parse_compose_projects, parse_standalone_containers,
-    ActiveContainerRuntime, ColimaRuntime, ComposeProject, ContainerRuntime, ContainerRuntimeKind,
-    ContainerRuntimeProbe, ContainerRuntimeSource, DockerDesktopRuntime, HostContainerRuntimeProbe,
-    RancherDesktopRuntime, StandaloneContainer,
+    detect_active_runtime, detect_compose_command, parse_compose_projects,
+    parse_standalone_containers, ActiveContainerRuntime, ColimaRuntime, ComposeCommand,
+    ComposeCommandProbe, ComposeProject, ContainerRuntime, ContainerRuntimeKind,
+    ContainerRuntimeProbe, ContainerRuntimeSource, DockerDesktopRuntime, HostComposeCommandProbe,
+    HostContainerRuntimeProbe, RancherDesktopRuntime, StandaloneContainer,
 };
 pub use listing::{list_steps, DetectionState, StepList, StepListing};
 pub use lock::{LockError, RunLock};

@@ -158,6 +158,7 @@ fn stops_colima_and_restores_containers_around_the_formula_upgrade() {
     assert_eq!(
         tools.step_calls(),
         [
+            "docker compose version",
             "brew update",
             "brew outdated --formula --quiet",
             "colima status",
@@ -238,6 +239,7 @@ fn up_to_date_colima_is_never_stopped() {
     assert_eq!(
         tools.step_calls(),
         [
+            "docker compose version",
             "brew update",
             "brew outdated --formula --quiet",
             "brew outdated --formula",
@@ -284,6 +286,7 @@ fn a_stopped_colima_is_not_started_and_docker_updates_are_skipped() {
     assert_eq!(
         tools.step_calls(),
         [
+            "docker compose version",
             "brew update",
             "brew outdated --formula --quiet",
             "colima status",
@@ -310,7 +313,7 @@ fn a_stopped_colima_is_not_started_and_docker_updates_are_skipped() {
         !tools
             .step_calls()
             .iter()
-            .any(|call| call.starts_with("docker ")),
+            .any(|call| call.starts_with("docker ") && call != "docker compose version"),
         "calls: {:?}",
         tools.step_calls()
     );
@@ -429,6 +432,75 @@ fn containers_are_restored_even_when_the_formula_upgrade_fails() {
     assert!(text.contains("1 failed"), "summary: {text}");
     assert!(
         text.contains("Starting colima and containers"),
+        "output: {text}"
+    );
+}
+
+#[test]
+fn falls_back_to_docker_compose_when_the_docker_plugin_is_missing() {
+    let tools = StubTools::new(&["brew", "colima", "docker", "docker-compose"]);
+    install_brew(&tools);
+    install_colima(&tools);
+    tools.set_script(
+        "docker",
+        r#"case "$*" in
+  "compose version")
+    exit 1
+    ;;
+  "ps --format "*)
+    printf '%s' "$FRESHEN_PS_OUTPUT"
+    ;;
+esac"#,
+    );
+    tools.set_script(
+        "docker-compose",
+        r#"case "$*" in
+  "ls --format json")
+    printf '%s' "$FRESHEN_COMPOSE_JSON"
+    ;;
+esac"#,
+    );
+
+    let output = run(&tools, &Scenario::default());
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(
+        calls.contains(&"docker compose version".to_owned()),
+        "calls: {calls:?}"
+    );
+    assert!(
+        calls.contains(
+            &"docker-compose -p web -f /srv/web/compose.yml -f /srv/web/override.yml down"
+                .to_owned()
+        ),
+        "calls: {calls:?}"
+    );
+    assert!(
+        calls.contains(
+            &"docker-compose -p web -f /srv/web/compose.yml -f /srv/web/override.yml up -d"
+                .to_owned()
+        ),
+        "calls: {calls:?}"
+    );
+    assert!(
+        calls.contains(
+            &"docker-compose -p web -f /srv/web/compose.yml -f /srv/web/override.yml pull --quiet"
+                .to_owned()
+        ),
+        "calls: {calls:?}"
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.starts_with("docker compose -p")),
+        "calls: {calls:?}"
+    );
+
+    let text = stdout(&output);
+    assert!(text.contains("docker-compose down: web"), "output: {text}");
+    assert!(
+        text.contains("docker-compose pull + up -d: web"),
         "output: {text}"
     );
 }

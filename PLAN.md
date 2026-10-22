@@ -177,6 +177,8 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Make the Colima/lima and container steps discover both Homebrew installations (`/opt/homebrew` and `/usr/local`) instead of only the `brew` on `PATH`, so an outdated `colima`/`lima` formula in either architecture stops the containers before the upgrade, covered by tests with injected prefixes
 - [ ] Complete the Docker Desktop AppleScript fallback: wait for the app to exit after the quit and start it again by its app bundle when `docker desktop start` is unavailable, so older versions finish the stop/start cycle around their cask upgrade, covered by stub-based tests
 - [ ] Stop standalone Lima instances only when the `lima` formula itself is being upgraded, not on a Colima-only upgrade, so an unrelated VM keeps running, covered by stub-based tests
+- [ ] Prefer `podman compose` when the active runtime is Podman even if a Docker compose implementation is also installed, so a forced `--container-runtime podman` run does not fall back to the Docker CLI, covered by tests with injected command lookups
+- [ ] Use the active runtime's container CLI (`podman ps`, `podman image prune`) for standalone container listing and image cleanup when Podman is active, so a Podman-only host without the Docker CLI still restores containers, covered by stub-based tests
 
 ## Milestone 5: Linux
 
