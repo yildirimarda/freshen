@@ -147,7 +147,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add Rancher Desktop: stop and start it with `rdctl shutdown` and `rdctl start` around its cask upgrade and restore containers, covered by stub-based tests
 - [x] Add Podman machine: stop and start it with `podman machine stop` and `podman machine start` around a Podman upgrade and restore containers, covered by stub-based tests
 - [x] Add standalone Lima instances (`limactl list`, `stop`, `start`) that are not managed by Colima, covered by stub-based tests
-- [ ] Detect the compose command in use (`docker compose`, `docker-compose`, `podman compose`) and use it consistently for pull, up and down, covered by tests with injected command lookups
+- [x] Detect the compose command in use (`docker compose`, `docker-compose`, `podman compose`) and use it consistently for pull, up and down, covered by tests with injected command lookups
 - [ ] Add native Docker Engine on Linux to the runtime abstraction (restart through `systemctl restart docker` with a warning about running containers when `live-restore` is off), covered by tests with injected facts
 - [ ] Update the README and docs to describe the supported container runtimes and replace the Colima-only wording, once the runtime abstraction exists
 - [ ] Add a read-only Homebrew cask metadata probe to `--check` (or a dedicated command) so the real-tools job verifies the recorded `brew info --cask --json=v2` transcript and fails on cask JSON parser drift, covered by tests
