@@ -137,7 +137,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Handle apps that were running as login items or menu-bar-only agents without a Dock icon
 - [x] Add Mac App Store updates via `mas outdated` / `mas upgrade`, with a skip when not signed in
 - [x] Add macOS system updates: list via `softwareupdate --list` (report-only by default), opt-in `--install-macos-updates`, and detect pending reboot
-- [ ] Update Xcode Command Line Tools when `softwareupdate` lists them, and handle the common "CLT out of date after macOS update" brew error
+- [x] Update Xcode Command Line Tools when `softwareupdate` lists them, and handle the common "CLT out of date after macOS update" brew error
 - [ ] Add `brew doctor` and `brew bundle cleanup` (when a Brewfile exists) as report-only checks
 - [ ] Handle Rosetta / dual-arch Homebrew installs (`/opt/homebrew` and `/usr/local`)
 - [ ] Introduce a `ContainerRuntime` abstraction (detect, is_running, stop, start, and which formulae or casks trigger a restart) and move the existing Colima/lima logic behind it as the first implementation without changing behaviour, covered by the existing parity and idempotency tests
