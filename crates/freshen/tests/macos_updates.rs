@@ -27,6 +27,11 @@ fn stderr(output: &Output) -> String {
 #[cfg(target_os = "macos")]
 const LIST_OUTPUT: &str = "Software Update Tool\n\nFinding available software\nSoftware Update found the following new or updated software:\n* Label: macOS Sonoma 14.5-23F79\n    Title: macOS Sonoma Update, Version: 14.5, Size: 4.7GB, Recommended: YES, Action: restart,\n";
 
+/// The list `softwareupdate --list` prints on a machine that offers an update
+/// for the Xcode Command Line Tools.
+#[cfg(target_os = "macos")]
+const COMMAND_LINE_TOOLS_LIST: &str = "Software Update Tool\n\nFinding available software\nSoftware Update found the following new or updated software:\n* Label: Command Line Tools for Xcode-16.4\n    Title: Command Line Tools for Xcode, Version: 16.4, Size: 1.1GB, Recommended: YES,\n";
+
 #[cfg(target_os = "macos")]
 #[test]
 fn the_available_updates_are_reported_and_not_installed() {
@@ -176,6 +181,89 @@ fn an_update_that_needs_a_restart_is_reported() {
         text.contains("will restart the machine"),
         "the summary does not report the pending restart: {text}"
     );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn the_command_line_tools_are_installed_when_the_listing_names_them() {
+    let tools = StubTools::new(&["softwareupdate", "sudo"]);
+    tools.set_responses(
+        "softwareupdate",
+        &[
+            // The list before the step runs.
+            StubOutput::stdout(COMMAND_LINE_TOOLS_LIST),
+            // The list after the step ran: the tools are up to date.
+            StubOutput::stdout("No new software available.\n"),
+        ],
+    );
+    tools.set_responses(
+        "sudo",
+        &[StubOutput::stdout(
+            "Install of Command Line Tools for Xcode done.\n",
+        )],
+    );
+
+    let output = tools
+        .command()
+        .args(["--only", "macos-updates", "--yes"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        [
+            "softwareupdate --list",
+            "sudo -n softwareupdate --install Command Line Tools for Xcode",
+            "softwareupdate --list",
+        ]
+    );
+
+    let text = stdout(&output);
+    assert!(
+        text.contains("Command Line Tools for Xcode"),
+        "the tools are not in the summary: {text}"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_command_line_tools_installation_that_needs_administrator_rights_is_only_a_warning() {
+    let tools = StubTools::new(&["softwareupdate", "sudo"]);
+    tools.set_responses(
+        "softwareupdate",
+        &[
+            StubOutput::stdout(COMMAND_LINE_TOOLS_LIST),
+            StubOutput::stdout(COMMAND_LINE_TOOLS_LIST),
+        ],
+    );
+    tools.set_responses(
+        "sudo",
+        &[StubOutput::stderr("sudo: a password is required\n").with_status(1)],
+    );
+
+    let output = tools
+        .command()
+        .args(["--only", "macos-updates", "--yes"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        [
+            "softwareupdate --list",
+            "sudo -n softwareupdate --install Command Line Tools for Xcode",
+            "softwareupdate --list",
+        ]
+    );
+
+    let text = stdout(&output);
+    assert!(
+        text.contains("needs administrator rights"),
+        "the warning is missing: {text}"
+    );
+    assert!(text.contains("0 failed"), "the step must not fail: {text}");
 }
 
 #[cfg(not(target_os = "macos"))]

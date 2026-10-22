@@ -12,6 +12,11 @@
 //! restart afterwards. The step therefore only reports the available updates,
 //! unless `--install-macos-updates` asks for the installation.
 //!
+//! The Xcode Command Line Tools are the exception: they are developer tools
+//! that Homebrew needs, and macOS offers them for an update just like a macOS
+//! update. They are therefore installed when the listing names them, see
+//! [`crate::xcode`].
+//!
 //! The step only runs on macOS, because `softwareupdate` exists only there.
 
 use std::sync::{Arc, Mutex};
@@ -22,6 +27,7 @@ use crate::platform::Platform;
 use crate::process::{CommandSpec, NETWORK_RETRIES};
 use crate::registry::Registry;
 use crate::step::{CheckReport, Detection, Operation, OutdatedItem, Step, StepError, StepId};
+use crate::xcode;
 
 /// The macOS system updates step.
 pub const MACOS_UPDATES: StepId = "macos-updates";
@@ -132,6 +138,9 @@ pub trait SoftwareUpdateClient: Send + Sync {
 
     /// The output of the installation of the pending updates.
     fn install(&self) -> SoftwareUpdateOutput;
+
+    /// The output of the installation of the Xcode Command Line Tools.
+    fn install_command_line_tools(&self) -> SoftwareUpdateOutput;
 }
 
 /// The real `softwareupdate` command line.
@@ -156,6 +165,16 @@ impl SoftwareUpdateClient for SoftwareUpdateCommandClient {
         // cached credentials or fails right away.
         let command = CommandSpec::new("sudo")
             .args(["-n", "softwareupdate", "--install", "--all"])
+            .neutral_locale();
+
+        run(command)
+    }
+
+    fn install_command_line_tools(&self) -> SoftwareUpdateOutput {
+        // `sudo -n` never asks for a password: the installation either uses
+        // cached credentials or fails right away.
+        let command = CommandSpec::new("sudo")
+            .args(["-n", "softwareupdate", "--install", xcode::CLT_LABEL])
             .neutral_locale();
 
         run(command)
@@ -256,28 +275,63 @@ impl MacosUpdatesStep {
         Ok(text)
     }
 
-    /// Reports the available updates without installing anything.
-    ///
-    /// The list of the run before the step is reused, so the update server is
-    /// not asked for the same list twice.
-    fn report(&self) -> Result<(), StepError> {
+    /// The listing of the pending updates, reused from the check of the run.
+    fn listing(&self, operation: Operation) -> Result<String, StepError> {
         let cached = self.last_list.lock().ok().and_then(|last| last.clone());
-        let text = match cached {
-            Some(text) => text,
-            None => self.list(Operation::Run)?,
-        };
+        match cached {
+            Some(text) => Ok(text),
+            None => self.list(operation),
+        }
+    }
 
-        let items = parse_software_update_list(&text);
-        human!(
-            "macos-updates: {} update(s) available; nothing installed (use --install-macos-updates)",
-            items.len()
-        );
+    /// Prints the available updates.
+    ///
+    /// The macOS updates themselves are only reported, so the message says
+    /// that nothing was installed. The Xcode Command Line Tools are installed
+    /// separately, and the message then names them instead.
+    fn report_listing(&self, text: &str, installs_command_line_tools: bool) {
+        let items = parse_software_update_list(text);
+        if installs_command_line_tools {
+            human!(
+                "macos-updates: {} update(s) available; the macOS updates are not installed (use --install-macos-updates)",
+                items.len()
+            );
+        } else {
+            human!(
+                "macos-updates: {} update(s) available; nothing installed (use --install-macos-updates)",
+                items.len()
+            );
+        }
         for item in &items {
             human!("  - {item}");
         }
-        if pending_reboot(&text) {
+        if pending_reboot(text) {
             human!("macos-updates: installing them will restart the machine");
         }
+    }
+
+    /// Installs the Xcode Command Line Tools.
+    ///
+    /// They are developer tools that Homebrew needs, so they are installed
+    /// when macOS offers an update for them, even when the macOS updates
+    /// themselves are only reported. A missing password is not fatal: the
+    /// message says which command to run by hand.
+    fn install_command_line_tools(&self) -> Result<(), StepError> {
+        human!("macos-updates: install (Xcode Command Line Tools)");
+        let output = self.client.install_command_line_tools();
+        if !output.is_success() {
+            let printed = output.text().trim();
+            if needs_administrator(printed) {
+                human!("warning: {}", xcode::administrator_message());
+                return Ok(());
+            }
+            return Err(StepError::new(
+                MACOS_UPDATES,
+                Operation::Run,
+                format!("installing the Xcode Command Line Tools failed: {printed}"),
+            ));
+        }
+        human!("macos-updates: the Xcode Command Line Tools are up to date");
         Ok(())
     }
 }
@@ -313,17 +367,26 @@ impl Step for MacosUpdatesStep {
     }
 
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
-        if !options.install_macos_updates() {
-            return self.report();
+        if options.install_macos_updates() {
+            human!("macos-updates: install (macOS system updates)");
+            let output = self.client.install();
+            if !output.is_success() {
+                return Err(self.failure(Operation::Run, &output));
+            }
+            if pending_reboot(output.text()) {
+                human!("macos-updates: the machine has to restart to finish the update");
+            }
+            return Ok(());
         }
 
-        human!("macos-updates: install (macOS system updates)");
-        let output = self.client.install();
-        if !output.is_success() {
-            return Err(self.failure(Operation::Run, &output));
-        }
-        if pending_reboot(output.text()) {
-            human!("macos-updates: the machine has to restart to finish the update");
+        // The macOS updates are only reported, but the Xcode Command Line
+        // Tools are developer tools that Homebrew needs: they are installed
+        // when macOS offers an update for them.
+        let text = self.listing(Operation::Run)?;
+        let command_line_tools = xcode::lists_command_line_tools(&text);
+        self.report_listing(&text, command_line_tools);
+        if command_line_tools {
+            self.install_command_line_tools()?;
         }
         Ok(())
     }
@@ -382,9 +445,14 @@ pub fn parse_software_update_list(output: &str) -> Vec<OutdatedItem> {
     parse_pending_updates(output)
         .into_iter()
         .map(|update| {
-            let mut item = OutdatedItem::new(update.label);
+            let label = update.label;
+            let command_line_tools = xcode::is_command_line_tools(&label);
+            let mut item = OutdatedItem::new(label);
             if let Some(version) = update.version {
                 item = item.with_latest(version);
+            }
+            if command_line_tools {
+                return item.with_reason(xcode::CLT_REASON);
             }
             match update.action.as_deref() {
                 Some("restart") => item.with_reason(RESTART_REASON),
@@ -524,6 +592,7 @@ mod tests {
     struct FakeSoftwareUpdate {
         list: SoftwareUpdateOutput,
         install: SoftwareUpdateOutput,
+        install_command_line_tools: SoftwareUpdateOutput,
         calls: Mutex<Vec<String>>,
     }
 
@@ -532,6 +601,7 @@ mod tests {
             Self {
                 list: SoftwareUpdateOutput::success(""),
                 install: SoftwareUpdateOutput::success(""),
+                install_command_line_tools: SoftwareUpdateOutput::success(""),
                 calls: Mutex::new(Vec::new()),
             }
         }
@@ -563,6 +633,11 @@ mod tests {
         fn install(&self) -> SoftwareUpdateOutput {
             self.record("install");
             self.install.clone()
+        }
+
+        fn install_command_line_tools(&self) -> SoftwareUpdateOutput {
+            self.record("install-command-line-tools");
+            self.install_command_line_tools.clone()
         }
     }
 
@@ -723,6 +798,104 @@ mod tests {
         assert_eq!(client.calls(), ["install"]);
     }
 
+    /// The listing of a machine that offers an update for the Xcode Command
+    /// Line Tools.
+    const COMMAND_LINE_TOOLS_LISTING: &str =
+        "Software Update found the following new or updated software:\n\
+         * Label: Command Line Tools for Xcode-16.4\n\
+         \x20   Title: Command Line Tools for Xcode, Version: 16.4, Size: 1.1GB, Recommended: YES,\n";
+
+    #[test]
+    fn the_step_installs_the_command_line_tools_when_the_listing_names_them() {
+        let client = Arc::new(FakeSoftwareUpdate {
+            list: SoftwareUpdateOutput::success(COMMAND_LINE_TOOLS_LISTING),
+            ..FakeSoftwareUpdate::new()
+        });
+        let step = step_with(&client);
+
+        assert!(step.run().is_ok());
+        assert_eq!(client.calls(), ["list", "install-command-line-tools"]);
+    }
+
+    #[test]
+    fn the_step_installs_everything_with_the_opt_in_even_with_the_command_line_tools() {
+        let client = Arc::new(FakeSoftwareUpdate {
+            list: SoftwareUpdateOutput::success(COMMAND_LINE_TOOLS_LISTING),
+            ..FakeSoftwareUpdate::new()
+        });
+        let step = step_with(&client);
+
+        let options = RunOptions::new().with_install_macos_updates(true);
+
+        assert!(step.run_with_options(&options).is_ok());
+        assert_eq!(client.calls(), ["install"]);
+    }
+
+    #[test]
+    fn the_check_report_explains_that_homebrew_needs_the_command_line_tools() {
+        let client = Arc::new(FakeSoftwareUpdate {
+            list: SoftwareUpdateOutput::success(COMMAND_LINE_TOOLS_LISTING),
+            ..FakeSoftwareUpdate::new()
+        });
+        let step = step_with(&client);
+
+        let report = step
+            .check()
+            .unwrap_or_else(|error| panic!("check failed: {error}"));
+
+        assert_eq!(report.pending(), 1);
+        assert_eq!(
+            report.items()[0].name(),
+            "Command Line Tools for Xcode-16.4"
+        );
+        assert_eq!(
+            report.items()[0].reason(),
+            Some("Homebrew needs an up-to-date version")
+        );
+    }
+
+    #[test]
+    fn a_command_line_tools_installation_that_needs_administrator_rights_is_a_warning() {
+        let client = Arc::new(FakeSoftwareUpdate {
+            list: SoftwareUpdateOutput::success(COMMAND_LINE_TOOLS_LISTING),
+            install_command_line_tools: SoftwareUpdateOutput::failure(
+                "sudo: a password is required\n",
+            ),
+            ..FakeSoftwareUpdate::new()
+        });
+        let step = step_with(&client);
+
+        assert!(step.run().is_ok());
+        assert_eq!(client.calls(), ["list", "install-command-line-tools"]);
+    }
+
+    #[test]
+    fn a_failed_command_line_tools_installation_is_reported() {
+        let client = Arc::new(FakeSoftwareUpdate {
+            list: SoftwareUpdateOutput::success(COMMAND_LINE_TOOLS_LISTING),
+            install_command_line_tools: SoftwareUpdateOutput::failure(
+                "Error: the installation could not be started\n",
+            ),
+            ..FakeSoftwareUpdate::new()
+        });
+        let step = step_with(&client);
+
+        let error = step
+            .run()
+            .err()
+            .unwrap_or_else(|| panic!("the installation should fail"));
+
+        assert_eq!(error.step(), MACOS_UPDATES);
+        assert_eq!(error.operation(), Operation::Run);
+        assert!(
+            error
+                .message()
+                .contains("installing the Xcode Command Line Tools failed"),
+            "message: {}",
+            error.message()
+        );
+    }
+
     #[test]
     fn a_failed_list_is_reported() {
         let client = Arc::new(FakeSoftwareUpdate {
@@ -855,6 +1028,10 @@ mod tests {
             }
 
             fn install(&self) -> SoftwareUpdateOutput {
+                SoftwareUpdateOutput::success("")
+            }
+
+            fn install_command_line_tools(&self) -> SoftwareUpdateOutput {
                 SoftwareUpdateOutput::success("")
             }
         }

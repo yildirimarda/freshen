@@ -25,12 +25,13 @@ use crate::options::RunOptions;
 use crate::output::{flush, human, human_print};
 use crate::platform::Platform;
 use crate::policy::AppLists;
-use crate::process::{CommandSpec, ProcessOutput, NETWORK_RETRIES};
+use crate::process::{CommandSpec, ProcessError, ProcessOutput, NETWORK_RETRIES};
 use crate::registry::Registry;
 use crate::snapshot::{self, SnapshotSection};
-use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
+use crate::step::{CheckReport, Detection, Operation, OutdatedItem, Step, StepError, StepId};
 use crate::system::detect_terminal_app;
 use crate::warnings::warn_about_breakable_sessions;
+use crate::xcode;
 
 pub(crate) const BREW: StepId = "brew";
 pub(crate) const FORMULAE: StepId = "brew-formulae";
@@ -497,7 +498,32 @@ fn detect_brew() -> Detection {
 fn run_brew(step: StepId, spec: CommandSpec) -> Result<ProcessOutput, StepError> {
     spec.retry_transient_network(NETWORK_RETRIES)
         .run()
-        .map_err(|error| StepError::run_from_process(step, &error))
+        .map_err(|error| brew_failure(step, Operation::Run, &error))
+}
+
+/// The failure of a Homebrew command.
+///
+/// Homebrew refuses to work when the Xcode Command Line Tools are too old,
+/// which is what happens right after a macOS update. That failure gets a
+/// message that names the fix instead of the raw output of the command.
+fn brew_failure(step: StepId, operation: Operation, error: &ProcessError) -> StepError {
+    if let Some(output) = error.output() {
+        let printed = format!("{}{}", output.stdout(), output.stderr());
+        if let Some(failure) = command_line_tools_failure(step, operation, &printed) {
+            return failure;
+        }
+    }
+    StepError::from_process(step, operation, error)
+}
+
+/// The failure of a Homebrew command whose output says that the Xcode Command
+/// Line Tools are too old.
+fn command_line_tools_failure(
+    step: StepId,
+    operation: Operation,
+    printed: &str,
+) -> Option<StepError> {
+    xcode::is_outdated(printed).then(|| StepError::new(step, operation, xcode::outdated_message()))
 }
 
 fn lines(output: &str) -> Vec<String> {
@@ -516,7 +542,7 @@ fn outdated(step: StepId, args: &[&str]) -> Result<CheckReport, StepError> {
         .neutral_locale()
         .retry_transient_network(NETWORK_RETRIES)
         .run()
-        .map_err(|error| StepError::check_from_process(step, &error))?;
+        .map_err(|error| brew_failure(step, Operation::Check, &error))?;
     Ok(CheckReport::from_items(
         lines(output.stdout())
             .iter()
@@ -1460,15 +1486,15 @@ impl Step for ReopenStep {
 mod tests {
     use super::{
         administrator_skip_message, apps_of, cask_app_artifacts, cask_metadata,
-        installed_app_paths, is_pinned, own_bundle_id, parse_outdated, quit_bundle_ids_of,
-        quit_plan, register, running_services, services_for_formulae, CaskError, CasksStep,
-        ReopenQueue, ReopenStep, CASKS, FORMULAE, REOPEN, SERVICES,
+        command_line_tools_failure, installed_app_paths, is_pinned, own_bundle_id, parse_outdated,
+        quit_bundle_ids_of, quit_plan, register, running_services, services_for_formulae,
+        CaskError, CasksStep, ReopenQueue, ReopenStep, CASKS, FORMULAE, REOPEN, SERVICES,
     };
     use crate::apps::{AppScan, AppSystem, QuitOutcome, Reopen, RunningApp, SessionState};
     use crate::platform::Platform;
     use crate::policy::AppLists;
     use crate::registry::Registry;
-    use crate::step::{Step, StepId};
+    use crate::step::{Operation, Step, StepId};
     use std::path::Path;
     use std::sync::{Arc, Mutex};
 
@@ -1515,6 +1541,42 @@ mod tests {
             .iter()
             .map(|step| step.id())
             .collect()
+    }
+
+    #[test]
+    fn the_error_about_the_outdated_command_line_tools_names_the_fix() {
+        let failure = command_line_tools_failure(
+            FORMULAE,
+            Operation::Run,
+            "Error: Your Command Line Tools are too outdated. \
+             Update them from Software Update in the App Store.\n",
+        )
+        .unwrap_or_else(|| panic!("the failure should be reported"));
+
+        assert_eq!(failure.step(), FORMULAE);
+        assert_eq!(failure.operation(), Operation::Run);
+        assert!(
+            failure.message().contains("Command Line Tools"),
+            "message: {}",
+            failure.message()
+        );
+        assert!(
+            failure
+                .message()
+                .contains("softwareupdate --install \"Command Line Tools for Xcode\""),
+            "message: {}",
+            failure.message()
+        );
+    }
+
+    #[test]
+    fn another_homebrew_failure_is_not_mistaken_for_the_outdated_command_line_tools() {
+        assert!(command_line_tools_failure(
+            FORMULAE,
+            Operation::Run,
+            "Error: No available formula with the name \"jq\".\n"
+        )
+        .is_none());
     }
 
     #[test]
