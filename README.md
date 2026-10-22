@@ -1,6 +1,6 @@
 # freshen
 
-One command to keep a developer machine current: **Homebrew**, **Docker (Colima) images**, **uv tools**, **mise** (Node & friends), **Mac App Store apps** and **macOS system updates** — in the right order, without babysitting.
+One command to keep a developer machine current: **Homebrew**, **container images** (Colima, OrbStack, Docker Desktop, Rancher Desktop, Podman or native Docker Engine), **uv tools**, **mise** (Node & friends), **Mac App Store apps** and **macOS system updates** — in the right order, without babysitting.
 
 ```bash
 freshen
@@ -13,7 +13,7 @@ The implementation is the Rust workspace under `crates/`: `freshen-lib` holds al
 | Step | Commands |
 |---|---|
 | Homebrew | `brew update` → `brew upgrade --formula` → quit running apps → `brew upgrade --cask` (with `--greedy` only for casks that need it) → reopen the apps it quit. With `--cleanup`: `brew autoremove` → `brew cleanup --prune=all` before reopening. `brew doctor` and `brew bundle cleanup` report what they found and change nothing |
-| Colima / Docker | If `colima`/`lima` itself is about to be upgraded: bring compose projects down, stop standalone containers, stop Colima, upgrade, start Colima, bring everything back up. Afterwards: `docker compose pull` + `up -d` for running compose projects (only changed containers are recreated). With `--cleanup`: `docker image prune -f` |
+| Containers | Detects the active runtime (Colima, OrbStack, Docker Desktop, Rancher Desktop, Podman or native Docker Engine) from `DOCKER_HOST`, `docker context show` or well-known sockets; stops it before upgrading its package and restarts it afterwards, bringing compose projects and standalone containers back. With `--cleanup`: `docker image prune -f`. Override with `--container-runtime` |
 | uv | `uv tool upgrade --all`. With `--cleanup`: `uv cache prune` |
 | mise | `mise self-update` (only if mise was not installed via brew) → `mise upgrade`, plus a warning for processes still running on an old Node, Python, Java or Go version, naming the app that started them. With `--cleanup`: `mise prune -y` |
 | Mac App Store | `mas outdated` to list the App Store apps with a pending update → `mas upgrade` to install them. macOS only, and skipped when no Apple Account is signed in |
@@ -59,7 +59,7 @@ Session managers checked before an upgrade: zellij, tmux, OpenSSH, GNU screen, b
 
 - macOS, Linux or Windows; a prebuilt `freshen` binary or Rust 1.81+ to build from source
 - [Homebrew](https://brew.sh) — required for the Homebrew section
-- Optional: `colima` + `docker`, `uv`, `mise`, `mas` (Mac App Store, macOS only); the macOS system updates need no extra tool, `softwareupdate` is part of macOS
+- Optional: any supported container runtime (`colima`/`lima`, `orbstack`, `docker-desktop`, `rancher-desktop`, `podman`, native `docker`), `uv`, `mise`, `mas` (Mac App Store, macOS only); the macOS system updates need no extra tool, `softwareupdate` is part of macOS
 
 ## Usage
 
@@ -115,9 +115,9 @@ or when `NO_PROXY` matches the target, the check connects directly.
 
 Every step inherits the process environment. freshen never clears it: it only
 adds the variables a tool needs (for example `HOMEBREW_NO_AUTO_UPDATE`) and
-removes the few it must override, so `brew`, `uv`, `mise`, `docker`, `colima`
-and the `curl`/`git` processes they start see the same proxy and certificate
-variables. Export them in your shell or service manager before running
+removes the few it must override, so `brew`, `uv`, `mise`, `docker`, `colima`,
+`orbstack`, `rdctl`, `podman` and the `curl`/`git` processes they start see the
+same proxy and certificate variables. Export them in your shell or service manager before running
 `freshen`.
 
 The commands whose output freshen parses are the one exception: they run with
