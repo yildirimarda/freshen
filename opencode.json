@@ -90,6 +90,29 @@
           "name": "Qwen3.8 27B (local)"
         }
       }
+    },
+    "nvidia-nim": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "NVIDIA NIM",
+      "options": {
+        "baseURL": "https://integrate.api.nvidia.com/v1",
+        "apiKey": "{env:NVIDIA_API_KEY}",
+        "timeout": 600000
+      },
+      "models": {
+        "z-ai/glm-5.3": {
+          "name": "GLM 5.3",
+          "tool_call": true,
+          "reasoning": true,
+          "limit": { "context": 1000000, "output": 16384 }
+        },
+        "deepseek-ai/deepseek-v4.1-flash": {
+          "name": "DeepSeek V4.1 Flash",
+          "tool_call": true,
+          "reasoning": true,
+          "limit": { "context": 1000000, "output": 16384 }
+        }
+      }
     }
   },
   "compaction": {

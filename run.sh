@@ -26,6 +26,7 @@ AMBITIOUS=0
 HEADROOM=0
 ARG_TEXT=""
 ANTHROPIC_KEY=""
+NVIDIA_KEY="$(security find-generic-password -s nvidia -w 2>/dev/null || true)"
 
 # ── Local per-machine overrides: .agentloop.local (gitignored) ───────────────
 # Change model/engine without touching git. KEY=VALUE lines, no quotes:
@@ -268,6 +269,7 @@ in_container() {
     -v agent-claude-home:/home/agent/.claude \
     -e OPENROUTER_API_KEY="$OPENROUTER_KEY" \
     -e ANTHROPIC_API_KEY="$ANTHROPIC_KEY" \
+    -e NVIDIA_API_KEY="$NVIDIA_KEY" \
     -e CODEX_API_KEY="$CODEX_KEY" \
     -e GH_TOKEN="${GH_RUN_TOKEN:-$GH_AGENT_TOKEN}" \
     -e GH_PROMPT_DISABLED=1 \
