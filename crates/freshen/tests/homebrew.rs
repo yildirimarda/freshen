@@ -945,6 +945,143 @@ fn a_denied_automation_request_still_upgrades_the_casks() {
     );
 }
 
+/// The tools for a cask app that updates itself with Sparkle.
+///
+/// The `ps` stub shows the Sparkle updater of the app for the first
+/// `updater_reads` reads of the process table, so a test can let the update
+/// finish while freshen waits for it.
+#[cfg(unix)]
+fn updating_app_tools(updater_reads: u32) -> (StubTools, std::path::PathBuf, std::path::PathBuf) {
+    let tools = StubTools::new(&["brew", "defaults", "ps", "osascript", "open", "kill"]);
+    tools.set_script(
+        "brew",
+        r#"case "$*" in
+  "outdated --formula --quiet")
+    printf 'jq\n'
+    ;;
+  "outdated --cask --greedy --quiet")
+    printf 'firefox\n'
+    ;;
+  "info --cask --json=v2 firefox")
+    printf '%s\n' "$FRESHEN_BREW_INFO_JSON"
+    ;;
+esac"#,
+    );
+
+    let app = tools.home().join("Applications/Firefox.app");
+    std::fs::create_dir_all(app.join("Contents/Frameworks/Sparkle.framework"))
+        .unwrap_or_else(|error| panic!("failed to create test app: {error}"));
+
+    tools.set_script("defaults", "printf 'com.example.firefox\\n'");
+
+    let state = tools.home().join("ps.txt");
+    std::fs::write(
+        &state,
+        format!("{}/Contents/MacOS/firefox\n", app.display()),
+    )
+    .unwrap_or_else(|error| panic!("failed to write process table: {error}"));
+
+    let updater = tools.home().join("updater.txt");
+    std::fs::write(
+        &updater,
+        format!(
+            "{}/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate\n",
+            app.display()
+        ),
+    )
+    .unwrap_or_else(|error| panic!("failed to write updater state: {error}"));
+
+    tools.set_script(
+        "ps",
+        &format!(
+            r#"count_file="$FRESHEN_STUB_STATE/ps.count"
+count=0
+if [ -f "$count_file" ]; then read -r count < "$count_file"; fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$count_file"
+while IFS= read -r line; do printf '%s\n' "$line"; done < "$FRESHEN_PS_STATE"
+if [ "$count" -le {updater_reads} ]; then
+  while IFS= read -r line; do printf '%s\n' "$line"; done < "$FRESHEN_PS_UPDATER"
+fi"#
+        ),
+    );
+    tools.set_script("osascript", ": > \"$FRESHEN_PS_STATE\"");
+
+    (tools, state, updater)
+}
+
+/// Runs freshen against an app that updates itself.
+#[cfg(unix)]
+fn run_updating_apps(
+    tools: &StubTools,
+    state: &std::path::Path,
+    updater: &std::path::Path,
+    extra_env: &[(&str, &str)],
+) -> Output {
+    let mut command = tools.command();
+    command
+        .env("FRESHEN_BREW_INFO_JSON", CASK_INFO)
+        .env("FRESHEN_PS_STATE", state)
+        .env("FRESHEN_PS_UPDATER", updater)
+        .envs(extra_env.iter().copied())
+        .args(["--only", HOMEBREW_STEPS, "--yes", "--cleanup"]);
+    command
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
+}
+
+#[cfg(unix)]
+#[test]
+fn an_app_that_is_updating_itself_is_not_quit() {
+    let (tools, state, updater) = updating_app_tools(99);
+
+    let output = run_updating_apps(&tools, &state, &updater, &[("UPDATE_TIMEOUT", "0")]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(
+        !calls.iter().any(|call| call.contains("to quit")),
+        "the app was quit: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call.contains("open -g -b")),
+        "the app was reopened: {calls:?}"
+    );
+
+    let text = stdout(&output);
+    assert!(
+        text.contains("Firefox.app is updating itself"),
+        "output: {text}"
+    );
+    assert!(text.contains("did not finish"), "output: {text}");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_app_that_finishes_updating_is_quit_after_freshen_waited_for_it() {
+    let (tools, state, updater) = updating_app_tools(3);
+
+    let output = run_updating_apps(&tools, &state, &updater, &[("UPDATE_TIMEOUT", "30")]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(
+        calls.iter().any(|call| call.contains("to quit")),
+        "the app was not quit: {calls:?}"
+    );
+    assert!(
+        calls.iter().any(|call| call.contains("open -g -b")),
+        "the app was not reopened: {calls:?}"
+    );
+
+    let text = stdout(&output);
+    assert!(
+        text.contains("Waiting up to 30s for Firefox.app to finish updating itself (Sparkle)"),
+        "output: {text}"
+    );
+    assert!(text.contains("Quitting: Firefox.app"), "output: {text}");
+}
+
 #[cfg(unix)]
 #[test]
 fn force_kill_terminates_an_app_that_does_not_quit_gracefully() {

@@ -23,6 +23,7 @@ A failing step never aborts the run. Failures are collected and listed at the en
 
 - **Formulae are upgraded before apps are closed**, so apps stay open during the slow part.
 - **Apps are only quit when a cask upgrade will replace them.** Quit is graceful (AppleScript, 3 s timeout so a "Save changes?" dialog cannot hang the run). Apps that do not quit within `QUIT_TIMEOUT` are left alone unless `--force-kill` is given.
+- **An app that updates itself is waited for, not quit.** Apps that update themselves (Sparkle, or the auto-updater of an Electron app) replace their own bundle while they run, so quitting them mid-update would leave a broken app behind. freshen detects the running updater, waits up to `UPDATE_TIMEOUT` seconds for the update to finish and only then quits the app. An app whose update does not finish in time is left running and is not reopened.
 - **A denied Automation permission is explained, not ignored.** When macOS refuses to send Apple events (error -1743), freshen names the System Settings pane to allow: System Settings > Privacy & Security > Automation.
 - **A cask that needs an administrator password is skipped when there is no terminal.** Homebrew installs a macOS installer package (`pkg`) or a `sudo` script with `sudo`, which asks for the password on the terminal. A run without a terminal (a cron job, a CI job) skips those casks and names the reason instead of waiting for a password that never comes, and the message tells you which `brew upgrade --cask` command to run by hand.
 - **The terminal running freshen is never quit.** Detection uses `__CFBundleIdentifier`, `TERM_PROGRAM`, environment markers and, on Linux and Windows, the parent process chain. See [supported terminals](#supported-terminals-and-session-managers).
@@ -59,6 +60,7 @@ freshen --yes                 # no prompt
 freshen --force-kill          # kill apps that refuse to quit (unsaved data may be lost)
 freshen --cleanup             # also prune caches, old versions and dangling images
 QUIT_TIMEOUT=40 freshen       # wait longer for apps to quit
+UPDATE_TIMEOUT=120 freshen    # wait longer for an app that updates itself
 freshen --dry-run             # detect and plan, change nothing
 freshen --check               # report outdated items, change nothing (exit 2 if updates are pending)
 freshen --check --jobs 8      # query up to eight steps at the same time
@@ -76,6 +78,7 @@ freshen --package-manager-wait 0                      # abort instead of waiting
 | Variable | Default | Meaning |
 |---|---|---|
 | `QUIT_TIMEOUT` | `20` | Seconds to wait for an app to quit |
+| `UPDATE_TIMEOUT` | `60` | Seconds to wait for an app that is updating itself to finish its update |
 | `FRESHEN_SKIP_PREFLIGHT` | unset | Set to `1` to disable every preflight and package-manager check |
 | `FRESHEN_LOCK_DIR` | platform state directory | Override where the single-run lock file lives |
 

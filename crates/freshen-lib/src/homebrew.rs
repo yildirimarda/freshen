@@ -1113,6 +1113,13 @@ impl CasksStep {
             human!("warning: {name} is on the never-quit list, not quitting it.");
         }
 
+        for app in scan.updating() {
+            human!(
+                "{} is updating itself, so freshen waits for the update to finish before quitting it.",
+                app.name()
+            );
+        }
+
         if scan.is_empty() {
             return QuitChoice::Quit;
         }
