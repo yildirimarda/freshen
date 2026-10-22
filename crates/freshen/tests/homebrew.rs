@@ -2067,3 +2067,72 @@ fn a_missing_brew_skips_the_doctor_and_the_bundle_cleanup() {
         stdout(&output)
     );
 }
+
+#[cfg(unix)]
+fn write_brew_script(prefix: &std::path::Path, label: &str) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let program = prefix.join("bin").join("brew");
+    std::fs::create_dir_all(program.parent().unwrap_or(prefix))
+        .unwrap_or_else(|error| panic!("failed to create {}: {error}", program.display()));
+    let script = format!(
+        "#!/bin/sh\n\
+         {{\n\
+           printf '%s' '{label}'\n\
+           for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
+           printf '\\n'\n\
+         }} >> \"${{FRESHEN_STUB_LOG:?FRESHEN_STUB_LOG is not set}}\"\n"
+    );
+    std::fs::write(&program, script)
+        .unwrap_or_else(|error| panic!("failed to write {}: {error}", program.display()));
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+        .unwrap_or_else(|error| panic!("failed to make {} executable: {error}", program.display()));
+}
+
+#[cfg(unix)]
+#[test]
+fn updates_both_the_native_and_the_intel_homebrew_installation() {
+    let tools = StubTools::new(&[]);
+    let root = tools.home().join("brews");
+    let arm = root.join("opt/homebrew");
+    let intel = root.join("usr/local");
+    write_brew_script(&arm, "arm");
+    write_brew_script(&intel, "intel");
+
+    let system_path = std::env::var("PATH").unwrap_or_default();
+    let path = format!(
+        "{}:{}:{system_path}",
+        intel.join("bin").display(),
+        arm.join("bin").display()
+    );
+    let prefixes = format!("{}:{}", intel.display(), arm.display());
+
+    let output = tools
+        .command()
+        .env("PATH", path)
+        .env("FRESHEN_BREW_PREFIXES", prefixes)
+        .args(["--only", "brew,brew-formulae"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+
+    let calls: Vec<String> = tools
+        .calls()
+        .into_iter()
+        .filter(|call| !call.contains("list --versions") && !call.contains("bundle dump"))
+        .collect();
+    assert!(
+        calls.contains(&"intel update".to_owned()),
+        "calls: {calls:?}"
+    );
+    assert!(calls.contains(&"arm update".to_owned()), "calls: {calls:?}");
+    assert!(
+        calls.contains(&"intel outdated --formula --quiet".to_owned()),
+        "calls: {calls:?}"
+    );
+    assert!(
+        calls.contains(&"arm outdated --formula --quiet".to_owned()),
+        "calls: {calls:?}"
+    );
+}
