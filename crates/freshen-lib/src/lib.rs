@@ -52,7 +52,8 @@ pub use config::{
     PreflightSection, RunSection, TimeoutSection, CONFIG_DIR_NAME, CONFIG_FILE_NAME,
 };
 pub use containers::{
-    parse_compose_projects, parse_standalone_containers, ComposeProject, StandaloneContainer,
+    parse_compose_projects, parse_standalone_containers, ColimaRuntime, ComposeProject,
+    ContainerRuntime, StandaloneContainer,
 };
 pub use listing::{list_steps, DetectionState, StepList, StepListing};
 pub use lock::{LockError, RunLock};
