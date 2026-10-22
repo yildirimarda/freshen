@@ -453,15 +453,25 @@ pub trait ContainerRuntime: Send + Sync {
 ///
 /// Colima manages a Lima VM that runs Docker. Upgrading either the `colima`
 /// or the `lima` formula can restart the VM, so both trigger a stop/start
-/// cycle.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct ColimaRuntime;
+/// cycle. Standalone Lima instances that Colima does not manage are stopped
+/// and started through `limactl` in the same cycle.
+#[derive(Debug, Default, Clone)]
+pub struct ColimaRuntime {
+    state: Arc<Mutex<ColimaState>>,
+}
+
+#[derive(Debug, Default)]
+struct ColimaState {
+    observed: bool,
+    colima_running: bool,
+    standalone_lima: Vec<String>,
+}
 
 impl ColimaRuntime {
     /// Creates the Colima/lima runtime.
     #[must_use]
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
 }
 
@@ -479,7 +489,7 @@ impl ContainerRuntime for ColimaRuntime {
     }
 
     fn detect(&self) -> Detection {
-        if command_exists(self.command()) {
+        if command_exists("colima") || command_exists("limactl") {
             Detection::Installed
         } else {
             Detection::NotInstalled
@@ -487,21 +497,55 @@ impl ContainerRuntime for ColimaRuntime {
     }
 
     fn is_running(&self) -> bool {
-        CommandSpec::new(self.command()).arg("status").run().is_ok()
+        let colima_running = colima_is_running();
+        let standalone_lima = running_standalone_lima_instances();
+        {
+            let mut state = lock(&self.state);
+            state.observed = true;
+            state.colima_running = colima_running;
+            state.standalone_lima = standalone_lima.clone();
+        }
+        colima_running || !standalone_lima.is_empty()
     }
 
     fn stop(&self) -> Result<(), ProcessError> {
-        CommandSpec::new(self.command())
-            .arg("stop")
-            .run()
-            .map(|_| ())
+        let (colima_running, standalone_lima) = self.observed_state();
+        let mut failures = Vec::new();
+
+        if colima_running {
+            if let Err(error) = CommandSpec::new("colima").arg("stop").run() {
+                failures.push(error);
+            }
+        }
+
+        for instance in &standalone_lima {
+            human!("limactl stop: {instance}");
+            if let Err(error) = CommandSpec::new("limactl").args(["stop", instance]).run() {
+                failures.push(error);
+            }
+        }
+
+        first_process_failure(failures)
     }
 
     fn start(&self) -> Result<(), ProcessError> {
-        CommandSpec::new(self.command())
-            .arg("start")
-            .run()
-            .map(|_| ())
+        let (colima_running, standalone_lima) = self.observed_state();
+        let mut failures = Vec::new();
+
+        if colima_running {
+            if let Err(error) = CommandSpec::new("colima").arg("start").run() {
+                failures.push(error);
+            }
+        }
+
+        for instance in &standalone_lima {
+            human!("limactl start: {instance}");
+            if let Err(error) = CommandSpec::new("limactl").args(["start", instance]).run() {
+                failures.push(error);
+            }
+        }
+
+        first_process_failure(failures)
     }
 
     fn restart_formulae(&self) -> &'static [&'static str] {
@@ -510,6 +554,92 @@ impl ContainerRuntime for ColimaRuntime {
 
     fn restart_casks(&self) -> &'static [&'static str] {
         &[]
+    }
+}
+
+impl ColimaRuntime {
+    fn observed_state(&self) -> (bool, Vec<String>) {
+        let state = lock(&self.state);
+        if state.observed {
+            return (state.colima_running, state.standalone_lima.clone());
+        }
+        drop(state);
+
+        (colima_is_running(), running_standalone_lima_instances())
+    }
+}
+
+fn colima_is_running() -> bool {
+    command_exists("colima") && CommandSpec::new("colima").arg("status").run().is_ok()
+}
+
+fn running_standalone_lima_instances() -> Vec<String> {
+    if !command_exists("limactl") {
+        return Vec::new();
+    }
+
+    let Ok(output) = CommandSpec::new("limactl")
+        .args(["list", "--json"])
+        .neutral_locale()
+        .run()
+    else {
+        return Vec::new();
+    };
+
+    parse_running_standalone_lima_instances(output.stdout())
+}
+
+fn parse_running_standalone_lima_instances(output: &str) -> Vec<String> {
+    let mut instances = Vec::new();
+    let trimmed = output.trim();
+    if trimmed.is_empty() {
+        return instances;
+    }
+
+    if let Ok(Value::Array(values)) = serde_json::from_str::<Value>(trimmed) {
+        for value in &values {
+            push_running_standalone_lima_instance(&mut instances, value);
+        }
+        return instances;
+    }
+
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Ok(value) = serde_json::from_str::<Value>(line) {
+            push_running_standalone_lima_instance(&mut instances, &value);
+        }
+    }
+
+    instances
+}
+
+fn push_running_standalone_lima_instance(instances: &mut Vec<String>, value: &Value) {
+    let Some(name) = value.get("name").and_then(Value::as_str) else {
+        return;
+    };
+    let status = value
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !status.eq_ignore_ascii_case("running") || is_colima_managed_instance(name) {
+        return;
+    }
+    if !instances.iter().any(|existing| existing == name) {
+        instances.push(name.to_owned());
+    }
+}
+
+fn is_colima_managed_instance(name: &str) -> bool {
+    name == "colima" || name.starts_with("colima-")
+}
+
+fn first_process_failure(failures: Vec<ProcessError>) -> Result<(), ProcessError> {
+    match failures.into_iter().next() {
+        Some(error) => Err(error),
+        None => Ok(()),
     }
 }
 
@@ -951,7 +1081,7 @@ pub fn parse_standalone_containers(output: &str) -> Vec<StandaloneContainer> {
 /// cleanup, reopen and finally the Docker image step.
 #[must_use]
 pub fn register(registry: Registry) -> Registry {
-    register_with_runtime(registry, ColimaRuntime)
+    register_with_runtime(registry, ColimaRuntime::new())
 }
 
 /// Registers the container steps for a specific container runtime.
@@ -1487,11 +1617,12 @@ fn command_exists(program: &str) -> bool {
 mod tests {
     use super::{
         compose_command, detect_active_runtime, parse_compose_projects,
-        parse_standalone_containers, podman_machine_running, register, register_for,
-        register_with_runtime, ActiveContainerRuntime, ColimaRuntime, ComposeProject,
-        ContainerRuntime, ContainerRuntimeKind, ContainerRuntimeProbe, ContainerRuntimeSource,
-        DockerDesktopRuntime, OrbStackRuntime, PodmanRuntime, RancherDesktopRuntime,
-        StandaloneContainer, COLIMA_START, COLIMA_STOP, DOCKER, PS_FORMAT,
+        parse_running_standalone_lima_instances, parse_standalone_containers,
+        podman_machine_running, register, register_for, register_with_runtime,
+        ActiveContainerRuntime, ColimaRuntime, ComposeProject, ContainerRuntime,
+        ContainerRuntimeKind, ContainerRuntimeProbe, ContainerRuntimeSource, DockerDesktopRuntime,
+        OrbStackRuntime, PodmanRuntime, RancherDesktopRuntime, StandaloneContainer, COLIMA_START,
+        COLIMA_STOP, DOCKER, PS_FORMAT,
     };
     use crate::homebrew;
     use crate::options::RunOptions;
@@ -1945,6 +2076,47 @@ mod tests {
         assert!(!podman_machine_running("[]"));
         assert!(!podman_machine_running(""));
         assert!(!podman_machine_running("not json"));
+    }
+
+    #[test]
+    fn running_standalone_lima_instances_exclude_colima_and_stopped_instances() {
+        let output = concat!(
+            r#"{"name":"colima","status":"Running"}"#,
+            "\n",
+            r#"{"name":"colima-dev","status":"Running"}"#,
+            "\n",
+            r#"{"name":"default","status":"Running"}"#,
+            "\n",
+            r#"{"name":"stopped","status":"Stopped"}"#,
+            "\n",
+        );
+
+        assert_eq!(parse_running_standalone_lima_instances(output), ["default"]);
+    }
+
+    #[test]
+    fn running_standalone_lima_instances_accept_an_array_and_skip_duplicates() {
+        let output = r#"[
+            {"name":"default","status":"running"},
+            {"name":"default","status":"Running"},
+            {"name":"colima","status":"Running"},
+            {"name":"work","status":"Running"}
+        ]"#;
+
+        assert_eq!(
+            parse_running_standalone_lima_instances(output),
+            ["default", "work"]
+        );
+    }
+
+    #[test]
+    fn malformed_lima_output_yields_no_instances() {
+        for output in ["", "not json", "{}", r#"{"name":"default"}"#, "[]"] {
+            assert!(
+                parse_running_standalone_lima_instances(output).is_empty(),
+                "input: {output:?}"
+            );
+        }
     }
 
     #[test]

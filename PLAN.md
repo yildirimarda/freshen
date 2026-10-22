@@ -176,6 +176,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Report the `brew doctor` warnings and the `brew bundle cleanup` packages in the run summary and in the `--json`/`--markdown` reports, so a structured report names them instead of only printing a human-readable line
 - [ ] Make the Colima/lima and container steps discover both Homebrew installations (`/opt/homebrew` and `/usr/local`) instead of only the `brew` on `PATH`, so an outdated `colima`/`lima` formula in either architecture stops the containers before the upgrade, covered by tests with injected prefixes
 - [ ] Complete the Docker Desktop AppleScript fallback: wait for the app to exit after the quit and start it again by its app bundle when `docker desktop start` is unavailable, so older versions finish the stop/start cycle around their cask upgrade, covered by stub-based tests
+- [ ] Stop standalone Lima instances only when the `lima` formula itself is being upgraded, not on a Colima-only upgrade, so an unrelated VM keeps running, covered by stub-based tests
 
 ## Milestone 5: Linux
 
