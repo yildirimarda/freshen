@@ -591,6 +591,77 @@ impl ContainerRuntime for DockerDesktopRuntime {
     }
 }
 
+/// The OrbStack application on macOS.
+///
+/// OrbStack ships as the `orbstack` cask, so its cask upgrade triggers the
+/// stop/start cycle. `orbctl status` reports whether the VM is running, and
+/// `orbctl stop` / `orbctl start` control it.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct OrbStackRuntime;
+
+impl OrbStackRuntime {
+    /// Creates the OrbStack runtime.
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl ContainerRuntime for OrbStackRuntime {
+    fn name(&self) -> &'static str {
+        "orbstack"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "OrbStack"
+    }
+
+    fn command(&self) -> &'static str {
+        "orbctl"
+    }
+
+    fn detect(&self) -> Detection {
+        if command_exists(self.command()) {
+            Detection::Installed
+        } else {
+            Detection::NotInstalled
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        match CommandSpec::new(self.command()).arg("status").run() {
+            Ok(output) => {
+                let status = output.stdout().trim().to_ascii_lowercase();
+                status.is_empty()
+                    || (!status.contains("stopped") && !status.contains("not running"))
+            }
+            Err(_) => false,
+        }
+    }
+
+    fn stop(&self) -> Result<(), ProcessError> {
+        CommandSpec::new(self.command())
+            .arg("stop")
+            .run()
+            .map(|_| ())
+    }
+
+    fn start(&self) -> Result<(), ProcessError> {
+        CommandSpec::new(self.command())
+            .arg("start")
+            .run()
+            .map(|_| ())
+    }
+
+    fn restart_formulae(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn restart_casks(&self) -> &'static [&'static str] {
+        &["orbstack"]
+    }
+}
+
 /// A compose project and the config files needed to address it again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComposeProject {
@@ -743,11 +814,12 @@ pub fn register_with_runtime(
 /// Registers the container steps for the detected runtime.
 ///
 /// A runtime that has no implementation yet keeps the Colima/lima steps, so
-/// detection never removes container handling from a run. Docker Desktop is
-/// the only runtime besides Colima/lima that has its own implementation.
+/// detection never removes container handling from a run. Colima/lima,
+/// OrbStack and Docker Desktop have their own implementations.
 #[must_use]
 pub fn register_for(registry: Registry, kind: Option<ContainerRuntimeKind>) -> Registry {
     match kind {
+        Some(ContainerRuntimeKind::OrbStack) => register_with_runtime(registry, OrbStackRuntime),
         Some(ContainerRuntimeKind::DockerDesktop) => {
             register_with_runtime(registry, DockerDesktopRuntime)
         }
@@ -1253,7 +1325,7 @@ mod tests {
         parse_standalone_containers, register, register_for, register_with_runtime,
         ActiveContainerRuntime, ColimaRuntime, ComposeProject, ContainerRuntime,
         ContainerRuntimeKind, ContainerRuntimeProbe, ContainerRuntimeSource, DockerDesktopRuntime,
-        StandaloneContainer, COLIMA_START, COLIMA_STOP, DOCKER, PS_FORMAT,
+        OrbStackRuntime, StandaloneContainer, COLIMA_START, COLIMA_STOP, DOCKER, PS_FORMAT,
     };
     use crate::homebrew;
     use crate::options::RunOptions;
@@ -1553,8 +1625,55 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_runtime_keeps_the_colima_steps() {
-        let registry = register_for(Registry::new(), Some(ContainerRuntimeKind::OrbStack));
+    fn orbstack_runtime_declares_its_cask_as_the_restart_trigger() {
+        let runtime = OrbStackRuntime::new();
+
+        assert_eq!(runtime.name(), "orbstack");
+        assert_eq!(runtime.display_name(), "OrbStack");
+        assert_eq!(runtime.command(), "orbctl");
+        assert!(runtime.restart_formulae().is_empty());
+        assert_eq!(runtime.restart_casks(), ["orbstack"]);
+        assert!(runtime.triggers_restart("orbstack"));
+        assert!(!runtime.triggers_restart("orbctl"));
+        assert!(!runtime.triggers_restart("docker"));
+        assert!(!runtime.triggers_restart("colima"));
+    }
+
+    #[test]
+    fn orbstack_stops_before_casks_and_starts_after_them() {
+        let registry = homebrew::register(register_for(
+            Registry::new(),
+            Some(ContainerRuntimeKind::OrbStack),
+        ));
+        let ordered: Vec<StepId> = registry
+            .ordered_for(Platform::Macos)
+            .unwrap_or_else(|error| panic!("registry order failed: {error}"))
+            .iter()
+            .map(|step| step.id())
+            .collect();
+
+        assert_eq!(
+            ordered,
+            [
+                "brew",
+                "brew-formulae",
+                "colima-stop",
+                "brew-services",
+                "brew-casks",
+                "colima-start",
+                "brew-autoremove",
+                "brew-cleanup",
+                "brew-doctor",
+                "brew-bundle-cleanup",
+                "brew-reopen",
+                "docker",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_runtime_without_an_implementation_keeps_the_colima_steps() {
+        let registry = register_for(Registry::new(), Some(ContainerRuntimeKind::RancherDesktop));
         let names: Vec<_> = registry
             .steps()
             .map(|step| step.display_name().to_owned())
