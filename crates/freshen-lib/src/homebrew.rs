@@ -2325,13 +2325,15 @@ impl Step for ReopenStep {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::brew_installs_from;
     use super::{
-        administrator_skip_message, apps_of, brew_installs_from, brewfile_in, cask_app_artifacts,
-        cask_metadata, command_line_tools_failure, install_arch, installed_app_paths, is_pinned,
-        own_bundle_id, parse_bundle_cleanup, parse_doctor_findings, parse_outdated,
-        quit_bundle_ids_of, quit_plan, register, running_services, services_for_formulae,
-        BundleCleanupStep, BundlePackage, CaskError, CasksStep, DoctorFinding, ReopenQueue,
-        ReopenStep, CASKS, FORMULAE, REOPEN, SERVICES,
+        administrator_skip_message, apps_of, brewfile_in, cask_app_artifacts, cask_metadata,
+        command_line_tools_failure, install_arch, installed_app_paths, is_pinned, own_bundle_id,
+        parse_bundle_cleanup, parse_doctor_findings, parse_outdated, quit_bundle_ids_of, quit_plan,
+        register, running_services, services_for_formulae, BundleCleanupStep, BundlePackage,
+        CaskError, CasksStep, DoctorFinding, ReopenQueue, ReopenStep, CASKS, FORMULAE, REOPEN,
+        SERVICES,
     };
     use crate::apps::{AppScan, AppSystem, QuitOutcome, Reopen, RunningApp, SessionState};
     use crate::platform::Platform;
@@ -2339,7 +2341,9 @@ mod tests {
     use crate::registry::Registry;
     use crate::step::{CheckReport, Detection, Operation, SkipReason, Step, StepId};
     use crate::system::Arch;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
+    #[cfg(unix)]
+    use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
     #[derive(Default)]

@@ -148,7 +148,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add Podman machine: stop and start it with `podman machine stop` and `podman machine start` around a Podman upgrade and restore containers, covered by stub-based tests
 - [x] Add standalone Lima instances (`limactl list`, `stop`, `start`) that are not managed by Colima, covered by stub-based tests
 - [x] Detect the compose command in use (`docker compose`, `docker-compose`, `podman compose`) and use it consistently for pull, up and down, covered by tests with injected command lookups
-- [ ] Add native Docker Engine on Linux to the runtime abstraction (restart through `systemctl restart docker` with a warning about running containers when `live-restore` is off), covered by tests with injected facts
+- [x] Add native Docker Engine on Linux to the runtime abstraction (restart through `systemctl restart docker` with a warning about running containers when `live-restore` is off), covered by tests with injected facts
 - [ ] Update the README and docs to describe the supported container runtimes and replace the Colima-only wording, once the runtime abstraction exists
 - [ ] Add a read-only Homebrew cask metadata probe to `--check` (or a dedicated command) so the real-tools job verifies the recorded `brew info --cask --json=v2` transcript and fails on cask JSON parser drift, covered by tests
 - [ ] Apply the package include/exclude list to the mise step, so an excluded mise tool is not upgraded (mise upgrades every plugin in one command, so the list needs a per-tool upgrade path), covered by tests
@@ -201,6 +201,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Make the Homebrew steps work with Homebrew on Linux (`/home/linuxbrew/.linuxbrew`, no casks), covered by tests with injected paths
 - [ ] Add image-based distributions: `rpm-ostree upgrade` (Fedora Silverblue/Kinoite) and `bootc upgrade` as staged upgrades that announce the pending reboot, covered by recorded transcripts
 - [ ] (Optional, low priority) Detect Termux on Android (`TERMUX_VERSION`, `PREFIX` under `/data/data/com.termux`) and treat it as a Linux variant that upgrades with `pkg update` and `pkg upgrade` without root, covered by tests with injected environment
+- [ ] Trigger the native Docker Engine stop/restart cycle when apt, dnf, pacman or zypper upgrades the Docker package (`docker.io`/`docker-ce`), not only when the Homebrew `docker` formula is outdated, covered by stub-based tests
 
 ## Milestone 6: Windows
 
@@ -279,6 +280,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Build cache and volume reporting with `docker system df`, and opt-in `docker builder prune`
 - [ ] Support Docker contexts and remote engines safely (never touch a non-local context unless selected)
 - [ ] Restart containers that were running before a runtime restart even if they were started with `docker run --restart no`, using the recorded snapshot
+- [ ] Detect and control a rootless Docker Engine (`$XDG_RUNTIME_DIR/docker.sock`, `systemctl --user restart docker`), so it is not mistaken for an unreachable system daemon, covered by tests with injected facts
 
 ## Milestone 9: Configuration and UX
 

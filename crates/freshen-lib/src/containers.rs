@@ -443,6 +443,11 @@ pub trait ContainerRuntime: Send + Sync {
     /// Casks whose upgrade needs the runtime to be stopped and started.
     fn restart_casks(&self) -> &'static [&'static str];
 
+    /// Platforms on which this runtime can be controlled.
+    fn platforms(&self) -> &'static [Platform] {
+        &CONTAINER_PLATFORMS
+    }
+
     /// Whether upgrading `package` needs a stop/start cycle.
     fn triggers_restart(&self, package: &str) -> bool {
         self.restart_formulae().contains(&package) || self.restart_casks().contains(&package)
@@ -718,6 +723,169 @@ impl ContainerRuntime for DockerDesktopRuntime {
 
     fn restart_casks(&self) -> &'static [&'static str] {
         &["docker-desktop"]
+    }
+}
+
+/// The facts and commands used to control a native Docker Engine through
+/// systemd.
+///
+/// Reading them through a trait keeps the runtime testable without a real
+/// Docker installation: a test injects whether the tools exist, whether the
+/// `docker` unit is active and whether live-restore is enabled, and records the
+/// systemctl actions.
+pub trait DockerEngineProbe: Send + Sync {
+    /// Returns `true` when `program` is an executable on `PATH`.
+    fn command_exists(&self, program: &str) -> bool;
+
+    /// Returns `true` when the systemd unit is active.
+    fn unit_active(&self, unit: &str) -> bool;
+
+    /// Returns the Docker daemon's live-restore setting, or `None` when it
+    /// cannot be read.
+    fn live_restore_enabled(&self) -> Option<bool>;
+
+    /// Runs a systemctl action such as `stop` or `restart` for `unit`.
+    fn run_systemctl(&self, action: &str, unit: &str) -> Result<(), ProcessError>;
+}
+
+/// Reads the native Docker Engine facts from the running host.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct HostDockerEngineProbe;
+
+impl DockerEngineProbe for HostDockerEngineProbe {
+    fn command_exists(&self, program: &str) -> bool {
+        crate::executable::command_exists(program)
+    }
+
+    fn unit_active(&self, unit: &str) -> bool {
+        if !self.command_exists("systemctl") {
+            return false;
+        }
+
+        CommandSpec::new("systemctl")
+            .args(["is-active", "--quiet", unit])
+            .run()
+            .is_ok()
+    }
+
+    fn live_restore_enabled(&self) -> Option<bool> {
+        if !self.command_exists("docker") {
+            return None;
+        }
+
+        let output = CommandSpec::new("docker")
+            .args(["info", "--format", "{{.LiveRestoreEnabled}}"])
+            .neutral_locale()
+            .run()
+            .ok()?;
+        parse_live_restore_enabled(output.stdout())
+    }
+
+    fn run_systemctl(&self, action: &str, unit: &str) -> Result<(), ProcessError> {
+        CommandSpec::new("systemctl")
+            .args([action, unit])
+            .run()
+            .map(|_| ())
+    }
+}
+
+fn parse_live_restore_enabled(output: &str) -> Option<bool> {
+    match output.trim().to_ascii_lowercase().as_str() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+/// Warns that a Docker restart interrupts running containers when the daemon
+/// does not keep them alive during the restart.
+const LIVE_RESTORE_WARNING: &str =
+    "warning: Docker live-restore is off; restarting Docker will stop running containers.";
+
+fn live_restore_warning(enabled: Option<bool>) -> Option<&'static str> {
+    (enabled == Some(false)).then_some(LIVE_RESTORE_WARNING)
+}
+
+/// A native Docker Engine managed by systemd on Linux.
+///
+/// Upgrading the `docker` formula needs the daemon to be restarted. The unit is
+/// stopped before the upgrade and restarted afterwards. When live-restore is
+/// off, restarting the daemon stops every running container, so the runtime
+/// warns about that first.
+pub struct NativeDockerRuntime {
+    probe: Arc<dyn DockerEngineProbe>,
+}
+
+impl NativeDockerRuntime {
+    /// Creates the native Docker Engine runtime.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            probe: Arc::new(HostDockerEngineProbe),
+        }
+    }
+
+    /// Creates the runtime with injected facts and commands.
+    #[must_use]
+    pub fn with_probe(probe: impl DockerEngineProbe + 'static) -> Self {
+        Self {
+            probe: Arc::new(probe),
+        }
+    }
+}
+
+impl Default for NativeDockerRuntime {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ContainerRuntime for NativeDockerRuntime {
+    fn name(&self) -> &'static str {
+        "docker-engine"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Docker Engine"
+    }
+
+    fn command(&self) -> &'static str {
+        "docker"
+    }
+
+    fn detect(&self) -> Detection {
+        if self.probe.command_exists("docker") && self.probe.command_exists("systemctl") {
+            Detection::Installed
+        } else {
+            Detection::NotInstalled
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        self.probe.unit_active("docker")
+    }
+
+    fn stop(&self) -> Result<(), ProcessError> {
+        if let Some(warning) = live_restore_warning(self.probe.live_restore_enabled()) {
+            human!("{warning}");
+        }
+        self.probe.run_systemctl("stop", "docker")
+    }
+
+    fn start(&self) -> Result<(), ProcessError> {
+        self.probe.run_systemctl("restart", "docker")
+    }
+
+    fn restart_formulae(&self) -> &'static [&'static str] {
+        &["docker"]
+    }
+
+    fn restart_casks(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn platforms(&self) -> &'static [Platform] {
+        &[Platform::Linux]
     }
 }
 
@@ -1259,8 +1427,8 @@ pub fn register_with_compose(
 ///
 /// A runtime that has no implementation yet keeps the Colima/lima steps, so
 /// detection never removes container handling from a run. Colima/lima,
-/// OrbStack, Docker Desktop, Rancher Desktop and Podman have their own
-/// implementations.
+/// OrbStack, Docker Desktop, Rancher Desktop, Podman and native Docker Engine
+/// have their own implementations.
 #[must_use]
 pub fn register_for(registry: Registry, kind: Option<ContainerRuntimeKind>) -> Registry {
     match kind {
@@ -1272,6 +1440,9 @@ pub fn register_for(registry: Registry, kind: Option<ContainerRuntimeKind>) -> R
             register_with_runtime(registry, RancherDesktopRuntime)
         }
         Some(ContainerRuntimeKind::Podman) => register_with_runtime(registry, PodmanRuntime),
+        Some(ContainerRuntimeKind::NativeDocker) => {
+            register_with_runtime(registry, NativeDockerRuntime::new())
+        }
         _ => register(registry),
     }
 }
@@ -1442,7 +1613,7 @@ impl Step for ContainerStopStep {
     }
 
     fn platforms(&self) -> &'static [Platform] {
-        &CONTAINER_PLATFORMS
+        self.runtime.platforms()
     }
 }
 
@@ -1588,7 +1759,7 @@ impl Step for ContainerStartStep {
     }
 
     fn platforms(&self) -> &'static [Platform] {
-        &CONTAINER_PLATFORMS
+        self.runtime.platforms()
     }
 }
 
@@ -1689,7 +1860,7 @@ impl Step for DockerStep {
     }
 
     fn platforms(&self) -> &'static [Platform] {
-        &CONTAINER_PLATFORMS
+        self.runtime.platforms()
     }
 }
 
@@ -1787,13 +1958,15 @@ fn command_exists(program: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        detect_active_runtime, detect_compose_command, parse_compose_projects,
+        detect_active_runtime, detect_compose_command, live_restore_warning,
+        parse_compose_projects, parse_live_restore_enabled,
         parse_running_standalone_lima_instances, parse_standalone_containers,
         podman_machine_running, register, register_for, register_with_runtime,
         ActiveContainerRuntime, ColimaRuntime, ComposeCommand, ComposeCommandProbe, ComposeProject,
         ContainerRuntime, ContainerRuntimeKind, ContainerRuntimeProbe, ContainerRuntimeSource,
-        DockerDesktopRuntime, OrbStackRuntime, PodmanRuntime, RancherDesktopRuntime,
-        StandaloneContainer, COLIMA_START, COLIMA_STOP, DOCKER, PS_FORMAT,
+        DockerDesktopRuntime, DockerEngineProbe, NativeDockerRuntime, OrbStackRuntime,
+        PodmanRuntime, RancherDesktopRuntime, StandaloneContainer, COLIMA_START, COLIMA_STOP,
+        DOCKER, PS_FORMAT,
     };
     use crate::homebrew;
     use crate::options::RunOptions;
@@ -1804,6 +1977,7 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
 
     fn ordered_ids(platform: Platform) -> Vec<StepId> {
         homebrew::register(register(Registry::new()))
@@ -2384,17 +2558,188 @@ mod tests {
     }
 
     #[test]
-    fn a_runtime_without_an_implementation_keeps_the_colima_steps() {
-        let registry = register_for(Registry::new(), Some(ContainerRuntimeKind::NativeDocker));
-        let names: Vec<_> = registry
-            .steps()
-            .map(|step| step.display_name().to_owned())
-            .collect();
+    fn an_unknown_runtime_keeps_the_colima_steps() {
+        for kind in [None, Some(ContainerRuntimeKind::Colima)] {
+            let registry = register_for(Registry::new(), kind);
+            let names: Vec<_> = registry
+                .steps()
+                .map(|step| step.display_name().to_owned())
+                .collect();
+
+            assert_eq!(
+                names,
+                ["Colima/lima stop", "Colima/lima start", "Docker images"]
+            );
+        }
+    }
+
+    struct FakeDockerEngineProbe {
+        commands: HashSet<&'static str>,
+        active: bool,
+        live_restore: Option<bool>,
+        calls: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl FakeDockerEngineProbe {
+        fn installed() -> (Self, Arc<Mutex<Vec<String>>>) {
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let probe = Self {
+                commands: ["docker", "systemctl"].into_iter().collect(),
+                active: true,
+                live_restore: Some(true),
+                calls: Arc::clone(&calls),
+            };
+
+            (probe, calls)
+        }
+
+        fn without(command: &'static str) -> Self {
+            let (mut probe, _) = Self::installed();
+            probe.commands.remove(command);
+            probe
+        }
+    }
+
+    impl DockerEngineProbe for FakeDockerEngineProbe {
+        fn command_exists(&self, program: &str) -> bool {
+            self.commands.contains(program)
+        }
+
+        fn unit_active(&self, unit: &str) -> bool {
+            self.active && unit == "docker"
+        }
+
+        fn live_restore_enabled(&self) -> Option<bool> {
+            self.live_restore
+        }
+
+        fn run_systemctl(&self, action: &str, unit: &str) -> Result<(), ProcessError> {
+            let mut calls = self
+                .calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            calls.push(format!("{action} {unit}"));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn native_docker_runtime_declares_the_docker_formula_on_linux() {
+        let (probe, _) = FakeDockerEngineProbe::installed();
+        let runtime = NativeDockerRuntime::with_probe(probe);
+
+        assert_eq!(runtime.name(), "docker-engine");
+        assert_eq!(runtime.display_name(), "Docker Engine");
+        assert_eq!(runtime.command(), "docker");
+        assert_eq!(runtime.restart_formulae(), ["docker"]);
+        assert!(runtime.restart_casks().is_empty());
+        assert!(runtime.triggers_restart("docker"));
+        assert!(!runtime.triggers_restart("docker-desktop"));
+        assert_eq!(runtime.platforms(), [Platform::Linux]);
+        assert_eq!(runtime.detect(), Detection::Installed);
+        assert!(runtime.is_running());
+    }
+
+    #[test]
+    fn native_docker_requires_the_docker_and_systemctl_commands() {
+        let (probe, _) = FakeDockerEngineProbe::installed();
+        assert_eq!(
+            NativeDockerRuntime::with_probe(probe).detect(),
+            Detection::Installed
+        );
+
+        for missing in ["docker", "systemctl"] {
+            let runtime = NativeDockerRuntime::with_probe(FakeDockerEngineProbe::without(missing));
+
+            assert_eq!(
+                runtime.detect(),
+                Detection::NotInstalled,
+                "missing {missing}"
+            );
+        }
+    }
+
+    #[test]
+    fn native_docker_is_running_only_when_the_systemd_unit_is_active() {
+        let (mut probe, _) = FakeDockerEngineProbe::installed();
+        probe.active = false;
+
+        assert!(!NativeDockerRuntime::with_probe(probe).is_running());
+    }
+
+    #[test]
+    fn native_docker_stops_then_restarts_the_daemon() {
+        let (probe, calls) = FakeDockerEngineProbe::installed();
+        let runtime = NativeDockerRuntime::with_probe(probe);
+
+        runtime
+            .stop()
+            .unwrap_or_else(|error| panic!("stop failed: {error}"));
+        runtime
+            .start()
+            .unwrap_or_else(|error| panic!("start failed: {error}"));
+
+        let calls = calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(*calls, ["stop docker", "restart docker"]);
+    }
+
+    #[test]
+    fn live_restore_warning_only_when_disabled() {
+        assert_eq!(
+            live_restore_warning(Some(false)),
+            Some(super::LIVE_RESTORE_WARNING)
+        );
+        assert_eq!(live_restore_warning(Some(true)), None);
+        assert_eq!(live_restore_warning(None), None);
+    }
+
+    #[test]
+    fn live_restore_parsing_accepts_true_and_false() {
+        assert_eq!(parse_live_restore_enabled("true\n"), Some(true));
+        assert_eq!(parse_live_restore_enabled(" FALSE "), Some(false));
+        assert_eq!(parse_live_restore_enabled(""), None);
+        assert_eq!(parse_live_restore_enabled("maybe"), None);
+    }
+
+    #[test]
+    fn native_docker_steps_are_linux_only() {
+        let registry = homebrew::register(register_for(
+            Registry::new(),
+            Some(ContainerRuntimeKind::NativeDocker),
+        ));
+        let ordered = |platform| -> Vec<StepId> {
+            registry
+                .ordered_for(platform)
+                .unwrap_or_else(|error| panic!("registry order failed: {error}"))
+                .iter()
+                .map(|step| step.id())
+                .collect()
+        };
 
         assert_eq!(
-            names,
-            ["Colima/lima stop", "Colima/lima start", "Docker images"]
+            ordered(Platform::Linux),
+            [
+                "brew",
+                "colima-stop",
+                "brew-formulae",
+                "colima-start",
+                "brew-services",
+                "brew-casks",
+                "brew-autoremove",
+                "brew-cleanup",
+                "brew-doctor",
+                "brew-bundle-cleanup",
+                "brew-reopen",
+                "docker",
+            ]
         );
+
+        let macos = ordered(Platform::Macos);
+        assert!(!macos.contains(&COLIMA_STOP), "steps: {macos:?}");
+        assert!(!macos.contains(&COLIMA_START), "steps: {macos:?}");
+        assert!(!macos.contains(&DOCKER), "steps: {macos:?}");
     }
 
     struct FakeRuntime;

@@ -125,7 +125,14 @@ impl StubTools {
             .env("FRESHEN_APP_ROOTS", self.dir.join("Applications"))
             .env("USERPROFILE", &self.dir)
             .env("XDG_CONFIG_HOME", self.config_home())
-            .env("APPDATA", self.app_data());
+            .env("APPDATA", self.app_data())
+            .env(
+                "DOCKER_HOST",
+                format!(
+                    "unix://{}",
+                    self.dir.join(".colima/default/docker.sock").display()
+                ),
+            );
         command
     }
 

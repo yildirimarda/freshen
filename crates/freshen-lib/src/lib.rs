@@ -55,8 +55,9 @@ pub use containers::{
     detect_active_runtime, detect_compose_command, parse_compose_projects,
     parse_standalone_containers, ActiveContainerRuntime, ColimaRuntime, ComposeCommand,
     ComposeCommandProbe, ComposeProject, ContainerRuntime, ContainerRuntimeKind,
-    ContainerRuntimeProbe, ContainerRuntimeSource, DockerDesktopRuntime, HostComposeCommandProbe,
-    HostContainerRuntimeProbe, RancherDesktopRuntime, StandaloneContainer,
+    ContainerRuntimeProbe, ContainerRuntimeSource, DockerDesktopRuntime, DockerEngineProbe,
+    HostComposeCommandProbe, HostContainerRuntimeProbe, HostDockerEngineProbe, NativeDockerRuntime,
+    RancherDesktopRuntime, StandaloneContainer,
 };
 pub use listing::{list_steps, DetectionState, StepList, StepListing};
 pub use lock::{LockError, RunLock};
