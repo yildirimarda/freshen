@@ -573,6 +573,19 @@ impl<'a> Runner<'a> {
                 continue;
             }
 
+            let disabled_prerequisite = step
+                .prerequisites()
+                .iter()
+                .find(|&&pre| !options.is_step_enabled(pre))
+                .copied();
+            if let Some(pre) = disabled_prerequisite {
+                planned.push(PlannedStep::Skip {
+                    step,
+                    reason: SkipReason::PrerequisiteDisabled(pre),
+                });
+                continue;
+            }
+
             let conflict = planned
                 .iter()
                 .copied()
@@ -1026,6 +1039,7 @@ mod tests {
         run_error: &'static str,
         fail_cleanup: bool,
         conflicts: &'static [StepId],
+        prerequisites: &'static [StepId],
         sleep: Duration,
         check_sleep: Duration,
         interrupt_on_run: bool,
@@ -1046,6 +1060,7 @@ mod tests {
                 run_error: "upgrade failed",
                 fail_cleanup: false,
                 conflicts: &[],
+                prerequisites: &[],
                 sleep: Duration::ZERO,
                 check_sleep: Duration::ZERO,
                 interrupt_on_run: false,
@@ -1065,6 +1080,11 @@ mod tests {
 
         fn conflicting(mut self, conflicts: &'static [StepId]) -> Self {
             self.conflicts = conflicts;
+            self
+        }
+
+        fn prerequisites(mut self, prerequisites: &'static [StepId]) -> Self {
+            self.prerequisites = prerequisites;
             self
         }
 
@@ -1183,6 +1203,10 @@ mod tests {
         fn restore(&self) -> Result<(), StepError> {
             self.calls.restore.fetch_add(1, Ordering::SeqCst);
             Ok(())
+        }
+
+        fn prerequisites(&self) -> &'static [StepId] {
+            self.prerequisites
         }
 
         fn conflicts(&self) -> &'static [StepId] {
@@ -1575,6 +1599,28 @@ mod tests {
 
         assert_eq!(summary.steps()[0].status(), StepStatus::Skipped);
         assert_eq!(summary.steps()[1].status(), StepStatus::Ok);
+    }
+
+    #[test]
+    fn a_step_with_a_disabled_prerequisite_is_skipped_with_the_reason() {
+        let brew = FakeStep::new("brew", "Homebrew");
+        let formulae_dep = FakeStep::new("formulae-dep", "Formulae dep").prerequisites(&["brew"]);
+        let mut overrides = BTreeMap::new();
+        overrides.insert("brew".to_owned(), false);
+        let options = RunOptions::new().with_step_overrides(overrides);
+        let steps: [&dyn Step; 2] = [&brew, &formulae_dep];
+
+        let summary = Runner::with_options(steps, options).run();
+
+        assert_eq!(summary.steps().len(), 2);
+        assert_eq!(summary.steps()[0].status(), StepStatus::Skipped);
+        assert_eq!(summary.steps()[0].skip_reason(), Some(SkipReason::Disabled));
+        assert_eq!(summary.steps()[1].status(), StepStatus::Skipped);
+        assert_eq!(
+            summary.steps()[1].skip_reason(),
+            Some(SkipReason::PrerequisiteDisabled("brew"))
+        );
+        assert!(summary.to_string().contains("prerequisite `brew` disabled"));
     }
 
     #[test]
