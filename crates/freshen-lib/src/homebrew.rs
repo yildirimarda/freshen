@@ -498,6 +498,21 @@ impl CaskMetadata {
     }
 }
 
+/// A read-only probe that verifies the recorded `brew info --cask --json=v2`
+/// fixtures against the parser. Fails when the fixtures no longer parse,
+/// which indicates parser drift.
+pub fn cask_metadata_probe() -> Result<(), CaskError> {
+    let fixtures = [
+        include_str!("../tests/fixtures/brew-info-casks.json"),
+        include_str!("../tests/fixtures/brew-info-casks-greedy.json"),
+        include_str!("../tests/fixtures/brew-info-casks-administrator.json"),
+    ];
+    for json in fixtures {
+        cask_metadata(json)?;
+    }
+    Ok(())
+}
+
 /// Parses the cask metadata from a recorded `brew info --cask --json=v2`
 /// transcript.
 ///
@@ -1769,6 +1784,13 @@ impl Step for CasksStep {
     }
 
     fn check_with_options(&self, options: &RunOptions) -> Result<CheckReport, StepError> {
+        cask_metadata_probe().map_err(|error| {
+            StepError::new(
+                CASKS,
+                Operation::Check,
+                format!("cask metadata probe failed: {error}"),
+            )
+        })?;
         let brews = BrewSet::detect();
         let mut items = Vec::new();
         for install in brews.installs() {
@@ -3353,6 +3375,24 @@ mod tests {
         assert_eq!(
             install_arch(Path::new("/custom/brew"), &Arch::Aarch64),
             Arch::Aarch64
+        );
+    }
+
+    #[test]
+    fn the_cask_metadata_probe_parses_all_recorded_fixtures() {
+        assert!(
+            super::cask_metadata_probe().is_ok(),
+            "the fixtures should parse without parser drift"
+        );
+    }
+
+    #[test]
+    fn the_cask_metadata_probe_fails_on_parser_drift() {
+        // A fixture that does not match the parser's expected format should
+        // cause the probe to return an error.
+        assert!(
+            super::cask_metadata("not valid json").is_err(),
+            "invalid JSON should trigger parser drift"
         );
     }
 }
