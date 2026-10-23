@@ -486,18 +486,15 @@ fn skipped_casks_appear_in_the_json_and_markdown_reports() {
     let output = run(&tools, &["--only", HOMEBREW_STEPS, "--json"]);
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
-    let report: serde_json::Value = serde_json::from_str(&text)
-        .unwrap_or_else(|e| panic!("invalid JSON: {e}: {text}"));
+    let report: serde_json::Value =
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("invalid JSON: {e}: {text}"));
     let cask_step = report["steps"]
         .as_array()
         .unwrap()
         .iter()
         .find(|s| s["id"].as_str() == Some("brew-casks"))
         .expect("brew-casks step missing");
-    assert_eq!(
-        cask_step["skipped_items"],
-        serde_json::json!(["1password"])
-    );
+    assert_eq!(cask_step["skipped_items"], serde_json::json!(["1password"]));
 
     let markdown_tools = StubTools::new(&["brew"]);
     markdown_tools.set_responses(
@@ -520,7 +517,11 @@ fn skipped_casks_appear_in_the_json_and_markdown_reports() {
         ]),
     );
     let markdown_output = run(&markdown_tools, &["--only", HOMEBREW_STEPS, "--markdown"]);
-    assert!(markdown_output.status.success(), "stderr: {}", stderr(&markdown_output));
+    assert!(
+        markdown_output.status.success(),
+        "stderr: {}",
+        stderr(&markdown_output)
+    );
     let md_text = stdout(&markdown_output);
     assert!(md_text.contains("## Skipped items"), "markdown: {md_text}");
     assert!(md_text.contains("- 1password"), "markdown: {md_text}");

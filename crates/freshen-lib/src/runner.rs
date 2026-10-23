@@ -937,7 +937,10 @@ fn run_step(
                     }
                 };
 
-            result.with_changes(changes).with_cleanups(cleanups).with_skipped_items(skipped_items)
+            result
+                .with_changes(changes)
+                .with_cleanups(cleanups)
+                .with_skipped_items(skipped_items)
         }
         Err(_error) if interrupt() => StepResult::interrupted(step, started.elapsed()),
         Err(error) if error.is_registry_unreachable() => {
