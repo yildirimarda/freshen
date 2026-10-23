@@ -12,6 +12,56 @@ use std::process::Output;
 
 use support::{output_with_retry, StubOutput, StubTools};
 
+/// Named insertion: the initial update call.
+fn brew_update() -> &'static [&'static str] {
+    &["brew update"]
+}
+
+/// Named insertion: formula-related query and upgrade steps.
+fn brew_formula_steps() -> &'static [&'static str] {
+    &[
+        "brew outdated --formula",
+        "brew outdated --formula --quiet",
+        "brew list --pinned --formula",
+        "brew services list",
+        "brew upgrade --formula",
+    ]
+}
+
+/// Named insertion: cask-related query steps.
+fn brew_cask_query_steps() -> &'static [&'static str] {
+    &[
+        "brew outdated --cask --greedy",
+        "brew outdated --cask --greedy --quiet",
+    ]
+}
+
+/// Named insertion: autoremove steps.
+fn brew_autoremove_steps() -> &'static [&'static str] {
+    &["brew autoremove --dry-run", "brew autoremove"]
+}
+
+/// Named insertion: cleanup steps.
+fn brew_cleanup_steps() -> &'static [&'static str] {
+    &[
+        "brew cleanup --dry-run --prune=all",
+        "brew cleanup --prune=all",
+    ]
+}
+
+/// The base transcript built from named insertions.
+fn brew_transcript() -> Vec<&'static str> {
+    let mut t = Vec::new();
+    t.extend_from_slice(brew_update());
+    t.extend_from_slice(brew_formula_steps());
+    t.extend_from_slice(brew_cask_query_steps());
+    t.extend_from_slice(&["brew info --cask --json=v2 firefox"]);
+    t.extend_from_slice(&["brew upgrade --cask"]);
+    t.extend_from_slice(brew_autoremove_steps());
+    t.extend_from_slice(brew_cleanup_steps());
+    t
+}
+
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
@@ -175,22 +225,10 @@ fn a_ported_step_replays_a_recorded_command_transcript() {
     assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
     assert_eq!(
         tools.step_calls(),
-        [
-            "brew update",
-            "brew outdated --formula",
-            "brew outdated --formula --quiet",
-            "brew list --pinned --formula",
-            "brew services list",
-            "brew upgrade --formula",
-            "brew outdated --cask --greedy",
-            "brew outdated --cask --greedy --quiet",
-            "brew info --cask --json=v2 firefox",
-            "brew upgrade --cask",
-            "brew autoremove --dry-run",
-            "brew autoremove",
-            "brew cleanup --dry-run --prune=all",
-            "brew cleanup --prune=all",
-        ]
+        brew_transcript()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
     );
 
     let text = stdout(&output);
