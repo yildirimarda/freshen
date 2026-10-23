@@ -1559,6 +1559,7 @@ impl CasksStep {
                     let (upgraded, skipped) = self.select_casks(&casks, &metadata);
                     for cask in &skipped {
                         human!("warning: {}", administrator_skip_message(cask));
+                        crate::skipped_items::record(cask);
                     }
                     selected = upgraded;
                     needs_greedy = selected.iter().any(|cask| metadata.needs_greedy(cask));

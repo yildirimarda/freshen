@@ -139,6 +139,7 @@ pub struct StepResult {
     duration: Duration,
     changes: Vec<VersionChange>,
     cleanups: Vec<CleanupReport>,
+    skipped_items: Vec<String>,
     skip_reason: Option<SkipReason>,
     error: Option<StepError>,
 }
@@ -152,6 +153,7 @@ impl StepResult {
             duration,
             changes: Vec::new(),
             cleanups: Vec::new(),
+            skipped_items: Vec::new(),
             skip_reason: None,
             error: None,
         }
@@ -164,6 +166,11 @@ impl StepResult {
 
     fn with_cleanups(mut self, cleanups: Vec<CleanupReport>) -> Self {
         self.cleanups = cleanups;
+        self
+    }
+
+    fn with_skipped_items(mut self, skipped_items: Vec<String>) -> Self {
+        self.skipped_items = skipped_items;
         self
     }
 
@@ -248,6 +255,13 @@ impl StepResult {
     #[must_use]
     pub fn cleanups(&self) -> &[CleanupReport] {
         &self.cleanups
+    }
+
+    /// Items skipped by the step, for example casks that need an administrator
+    /// password.
+    #[must_use]
+    pub fn skipped_items(&self) -> &[String] {
+        &self.skipped_items
     }
 
     /// Why the step was skipped, when it was.
@@ -906,6 +920,7 @@ fn run_step(
                 Err(error) => StepResult::failed(step, started.elapsed(), error),
             };
             let cleanups = recorder.finish();
+            let skipped_items = crate::skipped_items::take();
 
             let changes =
                 if result.status() == StepStatus::Interrupted || result.skip_reason().is_some() {
@@ -922,7 +937,10 @@ fn run_step(
                     }
                 };
 
-            result.with_changes(changes).with_cleanups(cleanups)
+            result
+                .with_changes(changes)
+                .with_cleanups(cleanups)
+                .with_skipped_items(skipped_items)
         }
         Err(_error) if interrupt() => StepResult::interrupted(step, started.elapsed()),
         Err(error) if error.is_registry_unreachable() => {
