@@ -30,6 +30,7 @@ pub mod registry;
 pub mod report;
 pub mod runner;
 pub mod signals;
+pub mod skipped_items;
 pub mod snapshot;
 pub mod step;
 pub mod system;

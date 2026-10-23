@@ -461,6 +461,72 @@ fn a_cask_that_needs_an_administrator_password_is_skipped_without_a_terminal() {
 }
 
 #[test]
+fn skipped_casks_appear_in_the_json_and_markdown_reports() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_responses(
+        "brew",
+        &homebrew_responses(&[
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::stdout("jq\n"),
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::stdout("firefox\n1password\n"),
+            StubOutput::stdout(CASK_INFO_WITH_ADMINISTRATOR),
+            StubOutput::new(),
+            StubOutput::stdout("==> Would autoremove 1 unneeded formula:\nold-dependency\n"),
+            StubOutput::new(),
+            StubOutput::stdout("Would remove: /tmp/old (1.2MB)\n"),
+            StubOutput::new(),
+        ]),
+    );
+
+    let output = run(&tools, &["--only", HOMEBREW_STEPS, "--json"]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    let report: serde_json::Value = serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("invalid JSON: {e}: {text}"));
+    let cask_step = report["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"].as_str() == Some("brew-casks"))
+        .expect("brew-casks step missing");
+    assert_eq!(
+        cask_step["skipped_items"],
+        serde_json::json!(["1password"])
+    );
+
+    let markdown_tools = StubTools::new(&["brew"]);
+    markdown_tools.set_responses(
+        "brew",
+        &homebrew_responses(&[
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::stdout("jq\n"),
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::stdout("firefox\n1password\n"),
+            StubOutput::stdout(CASK_INFO_WITH_ADMINISTRATOR),
+            StubOutput::new(),
+            StubOutput::stdout("==> Would autoremove 1 unneeded formula:\nold-dependency\n"),
+            StubOutput::new(),
+            StubOutput::stdout("Would remove: /tmp/old (1.2MB)\n"),
+            StubOutput::new(),
+        ]),
+    );
+    let markdown_output = run(&markdown_tools, &["--only", HOMEBREW_STEPS, "--markdown"]);
+    assert!(markdown_output.status.success(), "stderr: {}", stderr(&markdown_output));
+    let md_text = stdout(&markdown_output);
+    assert!(md_text.contains("## Skipped items"), "markdown: {md_text}");
+    assert!(md_text.contains("- 1password"), "markdown: {md_text}");
+}
+
+#[test]
 fn no_cask_is_upgraded_when_every_cask_needs_an_administrator_password() {
     let tools = StubTools::new(&["brew"]);
     tools.set_responses(

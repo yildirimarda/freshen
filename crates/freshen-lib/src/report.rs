@@ -45,6 +45,7 @@ pub(crate) fn run_json(summary: &RunSummary) -> String {
                 "changes": changes,
                 "cleanup": cleanup,
                 "skip_reason": result.skip_reason().map(|reason| reason.to_string()),
+                "skipped_items": result.skipped_items().to_vec(),
                 "error": result.error().map(|error| error.to_string()),
             })
         })
@@ -167,6 +168,31 @@ pub(crate) fn run_markdown(summary: &RunSummary) -> String {
                 }
                 out.push('\n');
             }
+        }
+    }
+
+    if summary
+        .steps()
+        .iter()
+        .any(|result| !result.skipped_items().is_empty())
+    {
+        out.push_str("\n## Skipped items\n\n");
+        for result in summary
+            .steps()
+            .iter()
+            .filter(|result| !result.skipped_items().is_empty())
+        {
+            out.push_str(&format!(
+                "### {} (`{}`)\n\n",
+                escape_cell(result.name()),
+                result.id()
+            ));
+            for item in result.skipped_items() {
+                out.push_str("- ");
+                out.push_str(item);
+                out.push('\n');
+            }
+            out.push('\n');
         }
     }
 
