@@ -611,10 +611,10 @@ pub fn is_automation_denied(output: &str) -> bool {
 /// The fix is a permission in System Settings, so the message names the pane
 /// instead of reporting the app as one that cannot be quit.
 #[must_use]
-pub fn automation_denied_message(app_name: &str) -> String {
+pub fn automation_denied_message(app_name: &str, terminal_name: &str) -> String {
     format!(
         "{app_name} could not be quit: macOS denied the request to control it (error -1743). \
-         Allow the terminal that runs freshen to control it in \
+         Allow {terminal_name} to control it in \
          System Settings > Privacy & Security > Automation, then run freshen again."
     )
 }
@@ -1136,7 +1136,11 @@ fn quit_with_apple_event<S: AppSystem + ?Sized>(
     if system.quit(app.bundle_id()) == QuitOutcome::Denied {
         // The request never reached the app, so waiting for it to exit would
         // only burn the timeout.
-        warn(&automation_denied_message(app.name()));
+        let terminal_app = crate::system::detect_terminal_app(|key| std::env::var(key).ok());
+        let terminal_name = terminal_app
+            .as_ref()
+            .map_or("the terminal that runs freshen", |app| app.name());
+        warn(&automation_denied_message(app.name(), terminal_name));
         if policy.force_kill() {
             kill_app(system, app, policy);
         }
@@ -2235,9 +2239,10 @@ mod tests {
 
     #[test]
     fn the_automation_denial_message_names_the_system_settings_pane() {
-        let message = automation_denied_message("Firefox.app");
+        let message = automation_denied_message("Firefox.app", "Terminal");
 
         assert!(message.contains("Firefox.app"), "{message}");
+        assert!(message.contains("Terminal"), "{message}");
         assert!(
             message.contains("System Settings > Privacy & Security > Automation"),
             "{message}"
