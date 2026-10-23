@@ -65,10 +65,7 @@ fn brew_cask_query_steps() -> &'static [&'static str] {
 
 /// Named insertion: autoremove steps.
 fn brew_autoremove_steps() -> &'static [&'static str] {
-    &[
-        "brew autoremove --dry-run",
-        "brew autoremove",
-    ]
+    &["brew autoremove --dry-run", "brew autoremove"]
 }
 
 /// Named insertion: cleanup steps.
@@ -100,7 +97,10 @@ fn full_app_transcript(app_path: &std::path::Path) -> Vec<String> {
     t.extend(brew_formula_steps().iter().map(|&s| s.to_string()));
     t.extend(brew_cask_query_steps().iter().map(|&s| s.to_string()));
     t.push("brew info --cask --json=v2 firefox".to_string());
-    t.push(format!("defaults read {} CFBundleIdentifier", info.display()));
+    t.push(format!(
+        "defaults read {} CFBundleIdentifier",
+        info.display()
+    ));
     t.push("ps -axo command=".to_string());
     t.push(format!("defaults read {} LSUIElement", info.display()));
     t.push(
@@ -184,7 +184,10 @@ fn command_transcript_matches_the_zsh_homebrew_block() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let mut expected: Vec<String> = brew_transcript().into_iter().map(String::from).collect();
     // Adjust for this test: info includes both firefox and google-chrome.
-    if let Some(pos) = expected.iter().position(|s| s == "brew info --cask --json=v2 firefox") {
+    if let Some(pos) = expected
+        .iter()
+        .position(|s| s == "brew info --cask --json=v2 firefox")
+    {
         expected[pos] = "brew info --cask --json=v2 firefox google-chrome".to_string();
     }
     assert_eq!(tools.step_calls(), expected);
@@ -224,10 +227,7 @@ fn no_outdated_casks_skips_the_cask_upgrade() {
         "brew autoremove --dry-run".to_string(),
         "brew cleanup --dry-run --prune=all".to_string(),
     ]);
-    assert_eq!(
-        tools.step_calls(),
-        expected
-    );
+    assert_eq!(tools.step_calls(), expected);
     assert!(
         stdout(&output).contains("No outdated formulae."),
         "output: {}",
@@ -412,10 +412,7 @@ fn invalid_cask_metadata_does_not_stop_the_cask_upgrade() {
     if let Some(pos) = expected.iter().position(|s| s == "brew upgrade --cask") {
         expected[pos] = "brew upgrade --cask --greedy".to_string();
     }
-    assert_eq!(
-        tools.step_calls(),
-        expected
-    );
+    assert_eq!(tools.step_calls(), expected);
     assert!(
         stderr(&output).contains("could not read cask metadata"),
         "stderr: {}",
@@ -451,7 +448,10 @@ fn a_failing_formula_upgrade_does_not_stop_the_cask_steps() {
     assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
     assert_eq!(
         tools.step_calls(),
-        brew_transcript().into_iter().map(String::from).collect::<Vec<String>>()
+        brew_transcript()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
     );
     let text = stdout(&output);
     assert!(
@@ -487,17 +487,20 @@ fn a_cask_that_needs_an_administrator_password_is_skipped_without_a_terminal() {
     let output = run(&tools, &["--only", HOMEBREW_STEPS]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    let mut expected = brew_transcript().into_iter().map(String::from).collect::<Vec<String>>();
-    if let Some(pos) = expected.iter().position(|s| s == "brew info --cask --json=v2 firefox") {
+    let mut expected = brew_transcript()
+        .into_iter()
+        .map(String::from)
+        .collect::<Vec<String>>();
+    if let Some(pos) = expected
+        .iter()
+        .position(|s| s == "brew info --cask --json=v2 firefox")
+    {
         expected[pos] = "brew info --cask --json=v2 firefox 1password".to_string();
     }
     if let Some(pos) = expected.iter().position(|s| s == "brew upgrade --cask") {
         expected[pos] = "brew upgrade --cask firefox".to_string();
     }
-    assert_eq!(
-        tools.step_calls(),
-        expected
-    );
+    assert_eq!(tools.step_calls(), expected);
 
     let text = stdout(&output);
     assert!(text.contains("skipping cask `1password`"), "output: {text}");
@@ -789,10 +792,7 @@ fn quits_running_cask_apps_before_the_upgrade_and_reopens_after_cleanup() {
     let output = run_apps(&tools, &state, &[], &[]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert_eq!(
-        tools.step_calls(),
-        full_app_transcript(&app)
-    );
+    assert_eq!(tools.step_calls(), full_app_transcript(&app));
 
     let text = stdout(&output);
     assert!(
@@ -889,10 +889,7 @@ fn yes_at_the_prompt_quits_apps_and_upgrades_casks() {
     let output = run_apps_with_stdin(&tools, &state, "yes\n");
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert_eq!(
-        tools.step_calls(),
-        full_app_transcript(&app)
-    );
+    assert_eq!(tools.step_calls(), full_app_transcript(&app));
 
     let text = stdout(&output);
     assert!(
@@ -1004,10 +1001,7 @@ fn skip_quitting_at_the_prompt_upgrades_casks_without_quitting_apps() {
     expected.push("brew upgrade --cask".to_string());
     expected.extend(brew_autoremove_steps().iter().map(|&s| s.to_string()));
     expected.extend(brew_cleanup_steps().iter().map(|&s| s.to_string()));
-    assert_eq!(
-        tools.step_calls(),
-        expected
-    );
+    assert_eq!(tools.step_calls(), expected);
 
     let text = stdout(&output);
     assert!(
@@ -1038,10 +1032,7 @@ fn skip_casks_at_the_prompt_skips_the_cask_upgrade() {
     expected.extend(app_pre_upgrade_steps(&app));
     expected.extend(brew_autoremove_steps().iter().map(|&s| s.to_string()));
     expected.extend(brew_cleanup_steps().iter().map(|&s| s.to_string()));
-    assert_eq!(
-        tools.step_calls(),
-        expected
-    );
+    assert_eq!(tools.step_calls(), expected);
 
     let text = stdout(&output);
     assert!(
@@ -1078,14 +1069,14 @@ fn never_quits_the_terminal_running_the_script() {
     expected.extend(brew_formula_steps().iter().map(|&s| s.to_string()));
     expected.extend(brew_cask_query_steps().iter().map(|&s| s.to_string()));
     expected.push("brew info --cask --json=v2 firefox".to_string());
-    expected.push(format!("defaults read {} CFBundleIdentifier", info_path.display()));
+    expected.push(format!(
+        "defaults read {} CFBundleIdentifier",
+        info_path.display()
+    ));
     expected.push("brew upgrade --cask".to_string());
     expected.extend(brew_autoremove_steps().iter().map(|&s| s.to_string()));
     expected.extend(brew_cleanup_steps().iter().map(|&s| s.to_string()));
-    assert_eq!(
-        tools.step_calls(),
-        expected
-    );
+    assert_eq!(tools.step_calls(), expected);
 
     let text = stdout(&output);
     assert!(

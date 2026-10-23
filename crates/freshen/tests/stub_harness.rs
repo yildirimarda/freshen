@@ -38,10 +38,7 @@ fn brew_cask_query_steps() -> &'static [&'static str] {
 
 /// Named insertion: autoremove steps.
 fn brew_autoremove_steps() -> &'static [&'static str] {
-    &[
-        "brew autoremove --dry-run",
-        "brew autoremove",
-    ]
+    &["brew autoremove --dry-run", "brew autoremove"]
 }
 
 /// Named insertion: cleanup steps.
@@ -225,15 +222,13 @@ fn a_ported_step_replays_a_recorded_command_transcript() {
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
 
-    assert_eq!(
-        output.status.code(),
-        Some(1),
-        "stderr: {}",
-        stderr(&output)
-    );
+    assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
     assert_eq!(
         tools.step_calls(),
-        brew_transcript().into_iter().map(String::from).collect::<Vec<String>>()
+        brew_transcript()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
     );
 
     let text = stdout(&output);
