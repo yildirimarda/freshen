@@ -579,7 +579,7 @@ pub fn quit_choice(answer: &str) -> QuitChoice {
 }
 
 /// What happened when an app was asked to quit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum QuitOutcome {
     /// The quit request was delivered to the app.
     #[default]
@@ -589,8 +589,8 @@ pub enum QuitOutcome {
     /// The Automation permission was never granted, so the app never saw the
     /// request. This is a missing permission, not an app that refuses to quit.
     Denied,
-    /// The quit request failed for another reason.
-    Failed,
+    /// The quit request failed for another reason, with the error message.
+    Failed(String),
 }
 
 /// Returns `true` when the `osascript` output describes a denied Automation
@@ -1133,18 +1133,29 @@ fn quit_with_apple_event<S: AppSystem + ?Sized>(
     app: &RunningApp,
     policy: &QuitPolicy,
 ) -> bool {
-    if system.quit(app.bundle_id()) == QuitOutcome::Denied {
-        // The request never reached the app, so waiting for it to exit would
-        // only burn the timeout.
-        let terminal_app = crate::system::detect_terminal_app(|key| std::env::var(key).ok());
-        let terminal_name = terminal_app
-            .as_ref()
-            .map_or("the terminal that runs freshen", |app| app.name());
-        warn(&automation_denied_message(app.name(), terminal_name));
-        if policy.force_kill() {
-            kill_app(system, app, policy);
+    match system.quit(app.bundle_id()) {
+        QuitOutcome::Denied => {
+            // The request never reached the app, so waiting for it to exit would
+            // only burn the timeout.
+            let terminal_app = crate::system::detect_terminal_app(|key| std::env::var(key).ok());
+            let terminal_name = terminal_app
+                .as_ref()
+                .map_or("the terminal that runs freshen", |app| app.name());
+            warn(&automation_denied_message(app.name(), terminal_name));
+            if policy.force_kill() {
+                kill_app(system, app, policy);
+            }
+            return false;
         }
-        return false;
+        QuitOutcome::Failed(message) => {
+            warn(&format!(
+                "{} could not be quit: {}. Upgrade will be attempted anyway.",
+                app.name(),
+                message
+            ));
+            return false;
+        }
+        QuitOutcome::Quit => {}
     }
 
     wait_until_stopped(system, app, policy)
@@ -1556,7 +1567,7 @@ impl AppSystem for MacAppSystem {
                 if is_automation_denied(&output) {
                     QuitOutcome::Denied
                 } else {
-                    QuitOutcome::Failed
+                    QuitOutcome::Failed(output.trim().to_owned())
                 }
             }
         }
@@ -1720,6 +1731,11 @@ mod tests {
             self
         }
 
+        fn fails_with(mut self, message: impl Into<String>) -> Self {
+            self.quit_outcome = QuitOutcome::Failed(message.into());
+            self
+        }
+
         /// The process cannot be ended, so the app has to be asked to quit.
         fn cannot_terminate(mut self) -> Self {
             self.terminate_succeeds = false;
@@ -1786,7 +1802,7 @@ mod tests {
                 lock(&self.running).clear();
                 lock(&self.running_bundles).clear();
             }
-            self.quit_outcome
+            self.quit_outcome.clone()
         }
 
         fn force_kill(&self, pids: &[u32]) {
@@ -2249,6 +2265,25 @@ mod tests {
         );
         assert!(message.contains("-1743"), "{message}");
         assert!(!message.contains("did not quit"), "{message}");
+    }
+
+    #[test]
+    fn a_failed_apple_script_quit_reports_the_error_message() {
+        let system = FakeSystem::new()
+            .with_app("/Applications/Firefox.app", "com.firefox", &[10])
+            .fails_with("execution error: Application isn't running. (-600)");
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/Firefox.app"]),
+            None,
+            &AppLists::new(),
+        );
+
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
+
+        assert_eq!(bundle_ids(&reopen), ["com.firefox"]);
+        assert!(lock(&system.killed).is_empty());
+        assert!(running(&system, "/Applications/Firefox.app"));
     }
 
     #[test]
