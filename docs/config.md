@@ -93,9 +93,8 @@ A disabled step is reported as skipped with the reason "disabled in the
 configuration file", in the run summary and in `--list-steps`. A step id that
 is not registered is an error, so a typo does not silently do nothing.
 
-Disabling a step does not disable the steps that depend on it: the Homebrew
-formulae step still runs when `brew` is disabled, because it detects Homebrew
-on its own.
+Disabling a step also skips any steps that declare it as a prerequisite,
+because they need the disabled step to run.
 
 `freshen --list-steps` names every step, so the ids to use here are the ones
 in that listing.

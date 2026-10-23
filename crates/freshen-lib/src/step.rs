@@ -59,6 +59,8 @@ pub enum SkipReason {
     Disabled,
     /// The step conflicts with an earlier step that is part of the run.
     Conflict(StepId),
+    /// A prerequisite step is disabled in the configuration file.
+    PrerequisiteDisabled(StepId),
     /// The package registry the step needs could not be reached.
     RegistryUnreachable,
     /// The account the step manages is not signed in to its service.
@@ -83,6 +85,7 @@ impl SkipReason {
             Self::NotSelected(SelectionFlag::Skip) => "excluded by --skip",
             Self::Disabled => "disabled in the configuration file",
             Self::Conflict(_) => "conflicts with another step",
+            Self::PrerequisiteDisabled(_) => "prerequisite disabled",
             Self::RegistryUnreachable => "registry unreachable",
             Self::NotSignedIn => "not signed in",
             Self::MissingConfiguration => "no configuration file found",
@@ -95,6 +98,9 @@ impl fmt::Display for SkipReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Conflict(conflict) => write!(f, "conflicts with `{conflict}`"),
+            Self::PrerequisiteDisabled(prerequisite) => {
+                write!(f, "prerequisite `{prerequisite}` disabled")
+            }
             other => f.write_str(other.as_str()),
         }
     }

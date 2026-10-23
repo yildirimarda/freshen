@@ -208,6 +208,12 @@ fn list_step(
     let skip_reason = selection_reason(options.selection(), id)
         .or_else(|| (!options.is_step_enabled(id)).then_some(SkipReason::Disabled))
         .or_else(|| {
+            step.prerequisites()
+                .iter()
+                .find(|&&pre| !options.is_step_enabled(pre))
+                .map(|&pre| SkipReason::PrerequisiteDisabled(pre))
+        })
+        .or_else(|| {
             conflicts
                 .get(&id)
                 .map(|&earlier| SkipReason::Conflict(earlier))
@@ -574,6 +580,26 @@ mod tests {
 
         assert_eq!(listed.steps()[0].skip_reason(), Some(SkipReason::Disabled));
         assert_eq!(listed.steps()[1].skip_reason(), None);
+    }
+
+    #[test]
+    fn a_step_with_a_disabled_prerequisite_is_skipped() {
+        let registry = registry([
+            TestStep::new("brew", &Platform::ALL),
+            TestStep::new("formulae-dep", &Platform::ALL).after(&["brew"]),
+        ]);
+        let mut overrides = BTreeMap::new();
+        overrides.insert("brew".to_owned(), false);
+        let options = RunOptions::new().with_step_overrides(overrides);
+
+        let listed = list_steps(&registry, &options, Platform::Linux);
+
+        assert_eq!(listed.steps()[0].skip_reason(), Some(SkipReason::Disabled));
+        assert_eq!(
+            listed.steps()[1].skip_reason(),
+            Some(SkipReason::PrerequisiteDisabled("brew"))
+        );
+        assert!(listed.to_string().contains("prerequisite `brew` disabled"));
     }
 
     #[test]

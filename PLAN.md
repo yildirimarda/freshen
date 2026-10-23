@@ -152,7 +152,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Update the README and docs to describe the supported container runtimes and replace the Colima-only wording, once the runtime abstraction exists
 - [x] Add a read-only Homebrew cask metadata probe to `--check` (or a dedicated command) so the real-tools job verifies the recorded `brew info --cask --json=v2` transcript and fails on cask JSON parser drift, covered by tests
 - [x] Apply the package include/exclude list to the mise step, so an excluded mise tool is not upgraded (mise upgrades every plugin in one command, so the list needs a per-tool upgrade path), covered by tests
-- [ ] Skip the steps whose prerequisite is disabled in the configuration file, so disabling `brew` also skips the Homebrew steps that need it, covered by tests
+- [x] Skip the steps whose prerequisite is disabled in the configuration file, so disabling `brew` also skips the Homebrew steps that need it, covered by tests
 - [ ] Name the host terminal application in the Automation denial message (for example `Terminal`), so the user knows which entry to switch on in the System Settings Automation pane, covered by tests
 - [ ] Report why an AppleScript quit failed when the failure is not a denied Automation request (for example error -600 "application isn't running"), instead of the generic "did not quit" message, covered by tests with injected osascript output
 - [ ] Report the casks that were skipped because their installer needs an administrator password in the run summary and in the `--json`/`--markdown` reports, so a structured report names them instead of only printing a human-readable warning
