@@ -39,6 +39,97 @@ const CASK_INFO_WITHOUT_APP_ARTIFACTS: &str = r#"{
 const HOMEBREW_STEPS: &str =
     "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-reopen";
 
+/// Named insertion: the initial update call.
+fn brew_update() -> &'static [&'static str] {
+    &["brew update"]
+}
+
+/// Named insertion: formula-related query and upgrade steps.
+fn brew_formula_steps() -> &'static [&'static str] {
+    &[
+        "brew outdated --formula",
+        "brew outdated --formula --quiet",
+        "brew list --pinned --formula",
+        "brew services list",
+        "brew upgrade --formula",
+    ]
+}
+
+/// Named insertion: cask-related query steps.
+fn brew_cask_query_steps() -> &'static [&'static str] {
+    &[
+        "brew outdated --cask --greedy",
+        "brew outdated --cask --greedy --quiet",
+    ]
+}
+
+/// Named insertion: autoremove steps.
+fn brew_autoremove_steps() -> &'static [&'static str] {
+    &[
+        "brew autoremove --dry-run",
+        "brew autoremove",
+    ]
+}
+
+/// Named insertion: cleanup steps.
+fn brew_cleanup_steps() -> &'static [&'static str] {
+    &[
+        "brew cleanup --dry-run --prune=all",
+        "brew cleanup --prune=all",
+    ]
+}
+
+/// The base transcript built from named insertions.
+fn brew_transcript() -> Vec<&'static str> {
+    let mut t = Vec::new();
+    t.extend_from_slice(brew_update());
+    t.extend_from_slice(brew_formula_steps());
+    t.extend_from_slice(brew_cask_query_steps());
+    t.extend_from_slice(&["brew info --cask --json=v2 firefox"]);
+    t.extend_from_slice(&["brew upgrade --cask"]);
+    t.extend_from_slice(brew_autoremove_steps());
+    t.extend_from_slice(brew_cleanup_steps());
+    t
+}
+
+/// Named insertion: the full transcript for an app that is quit and reopened.
+fn full_app_transcript(app_path: &std::path::Path) -> Vec<String> {
+    let info = app_path.join("Contents/Info");
+    let mut t = Vec::new();
+    t.extend(brew_update().iter().map(|&s| s.to_string()));
+    t.extend(brew_formula_steps().iter().map(|&s| s.to_string()));
+    t.extend(brew_cask_query_steps().iter().map(|&s| s.to_string()));
+    t.push("brew info --cask --json=v2 firefox".to_string());
+    t.push(format!("defaults read {} CFBundleIdentifier", info.display()));
+    t.push("ps -axo command=".to_string());
+    t.push(format!("defaults read {} LSUIElement", info.display()));
+    t.push(
+        "osascript -e tell application \"System Events\" -e set appProcess to first process whose bundle identifier is \"com.example.firefox\" -e get value of attribute \"AXHidden\" of appProcess -e end tell".to_string()
+    );
+    t.push(
+        "osascript -e tell application \"System Events\" -e set appProcess to first process whose bundle identifier is \"com.example.firefox\" -e tell appProcess -e get {position of window 1, size of window 1} -e end tell -e end tell".to_string()
+    );
+    t.push(
+        "osascript -e with timeout of 3 seconds -e tell application id \"com.example.firefox\" to quit -e end timeout".to_string()
+    );
+    t.push("ps -axo command=".to_string());
+    t.push("brew upgrade --cask".to_string());
+    t.extend(brew_autoremove_steps().iter().map(|&s| s.to_string()));
+    t.extend(brew_cleanup_steps().iter().map(|&s| s.to_string()));
+    t.push("open -g -b com.example.firefox".to_string());
+    t
+}
+
+/// Named insertion: steps for managing an app before upgrading its cask.
+fn app_pre_upgrade_steps(app_path: &std::path::Path) -> Vec<String> {
+    let info = app_path.join("Contents/Info");
+    vec![
+        format!("defaults read {} CFBundleIdentifier", info.display()),
+        "ps -axo command=".to_string(),
+        format!("defaults read {} LSUIElement", info.display()),
+    ]
+}
+
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
@@ -91,25 +182,12 @@ fn command_transcript_matches_the_zsh_homebrew_block() {
     let output = run(&tools, &["--only", HOMEBREW_STEPS]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert_eq!(
-        tools.step_calls(),
-        [
-            "brew update",
-            "brew outdated --formula",
-            "brew outdated --formula --quiet",
-            "brew list --pinned --formula",
-            "brew services list",
-            "brew upgrade --formula",
-            "brew outdated --cask --greedy",
-            "brew outdated --cask --greedy --quiet",
-            "brew info --cask --json=v2 firefox google-chrome",
-            "brew upgrade --cask",
-            "brew autoremove --dry-run",
-            "brew autoremove",
-            "brew cleanup --dry-run --prune=all",
-            "brew cleanup --prune=all",
-        ]
-    );
+    let mut expected: Vec<String> = brew_transcript().into_iter().map(String::from).collect();
+    // Adjust for this test: info includes both firefox and google-chrome.
+    if let Some(pos) = expected.iter().position(|s| s == "brew info --cask --json=v2 firefox") {
+        expected[pos] = "brew info --cask --json=v2 firefox google-chrome".to_string();
+    }
+    assert_eq!(tools.step_calls(), expected);
 
     let text = stdout(&output);
     assert!(
@@ -136,17 +214,19 @@ fn no_outdated_casks_skips_the_cask_upgrade() {
     let output = run(&tools, &["--only", HOMEBREW_STEPS]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let mut expected: Vec<String> = Vec::new();
+    expected.extend(brew_update().iter().map(|&s| s.to_string()));
+    expected.extend_from_slice(&[
+        "brew outdated --formula".to_string(),
+        "brew outdated --formula --quiet".to_string(),
+        "brew outdated --cask --greedy".to_string(),
+        "brew outdated --cask --greedy --quiet".to_string(),
+        "brew autoremove --dry-run".to_string(),
+        "brew cleanup --dry-run --prune=all".to_string(),
+    ]);
     assert_eq!(
         tools.step_calls(),
-        [
-            "brew update",
-            "brew outdated --formula",
-            "brew outdated --formula --quiet",
-            "brew outdated --cask --greedy",
-            "brew outdated --cask --greedy --quiet",
-            "brew autoremove --dry-run",
-            "brew cleanup --dry-run --prune=all",
-        ]
+        expected
     );
     assert!(
         stdout(&output).contains("No outdated formulae."),
@@ -327,24 +407,14 @@ fn invalid_cask_metadata_does_not_stop_the_cask_upgrade() {
     let output = run(&tools, &["--only", HOMEBREW_STEPS]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let mut expected: Vec<String> = brew_transcript().into_iter().map(String::from).collect();
+    // This test passes `--greedy` for the cask upgrade because of greedy cask info.
+    if let Some(pos) = expected.iter().position(|s| s == "brew upgrade --cask") {
+        expected[pos] = "brew upgrade --cask --greedy".to_string();
+    }
     assert_eq!(
         tools.step_calls(),
-        [
-            "brew update",
-            "brew outdated --formula",
-            "brew outdated --formula --quiet",
-            "brew list --pinned --formula",
-            "brew services list",
-            "brew upgrade --formula",
-            "brew outdated --cask --greedy",
-            "brew outdated --cask --greedy --quiet",
-            "brew info --cask --json=v2 firefox",
-            "brew upgrade --cask --greedy",
-            "brew autoremove --dry-run",
-            "brew autoremove",
-            "brew cleanup --dry-run --prune=all",
-            "brew cleanup --prune=all",
-        ]
+        expected
     );
     assert!(
         stderr(&output).contains("could not read cask metadata"),
@@ -381,22 +451,7 @@ fn a_failing_formula_upgrade_does_not_stop_the_cask_steps() {
     assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
     assert_eq!(
         tools.step_calls(),
-        [
-            "brew update",
-            "brew outdated --formula",
-            "brew outdated --formula --quiet",
-            "brew list --pinned --formula",
-            "brew services list",
-            "brew upgrade --formula",
-            "brew outdated --cask --greedy",
-            "brew outdated --cask --greedy --quiet",
-            "brew info --cask --json=v2 firefox",
-            "brew upgrade --cask",
-            "brew autoremove --dry-run",
-            "brew autoremove",
-            "brew cleanup --dry-run --prune=all",
-            "brew cleanup --prune=all",
-        ]
+        brew_transcript().into_iter().map(String::from).collect::<Vec<String>>()
     );
     let text = stdout(&output);
     assert!(
@@ -432,24 +487,16 @@ fn a_cask_that_needs_an_administrator_password_is_skipped_without_a_terminal() {
     let output = run(&tools, &["--only", HOMEBREW_STEPS]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let mut expected = brew_transcript().into_iter().map(String::from).collect::<Vec<String>>();
+    if let Some(pos) = expected.iter().position(|s| s == "brew info --cask --json=v2 firefox") {
+        expected[pos] = "brew info --cask --json=v2 firefox 1password".to_string();
+    }
+    if let Some(pos) = expected.iter().position(|s| s == "brew upgrade --cask") {
+        expected[pos] = "brew upgrade --cask firefox".to_string();
+    }
     assert_eq!(
         tools.step_calls(),
-        [
-            "brew update",
-            "brew outdated --formula",
-            "brew outdated --formula --quiet",
-            "brew list --pinned --formula",
-            "brew services list",
-            "brew upgrade --formula",
-            "brew outdated --cask --greedy",
-            "brew outdated --cask --greedy --quiet",
-            "brew info --cask --json=v2 firefox 1password",
-            "brew upgrade --cask firefox",
-            "brew autoremove --dry-run",
-            "brew autoremove",
-            "brew cleanup --dry-run --prune=all",
-            "brew cleanup --prune=all",
-        ]
+        expected
     );
 
     let text = stdout(&output);
@@ -742,33 +789,9 @@ fn quits_running_cask_apps_before_the_upgrade_and_reopens_after_cleanup() {
     let output = run_apps(&tools, &state, &[], &[]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    let info = app.join("Contents/Info");
     assert_eq!(
         tools.step_calls(),
-        [
-            "brew update".to_owned(),
-            "brew outdated --formula".to_owned(),
-            "brew outdated --formula --quiet".to_owned(),
-            "brew list --pinned --formula".to_owned(),
-            "brew services list".to_owned(),
-            "brew upgrade --formula".to_owned(),
-            "brew outdated --cask --greedy".to_owned(),
-            "brew outdated --cask --greedy --quiet".to_owned(),
-            "brew info --cask --json=v2 firefox".to_owned(),
-            format!("defaults read {} CFBundleIdentifier", info.display()),
-            "ps -axo command=".to_owned(),
-            format!("defaults read {} LSUIElement", info.display()),
-            "osascript -e tell application \"System Events\" -e set appProcess to first process whose bundle identifier is \"com.example.firefox\" -e get value of attribute \"AXHidden\" of appProcess -e end tell".to_owned(),
-            "osascript -e tell application \"System Events\" -e set appProcess to first process whose bundle identifier is \"com.example.firefox\" -e tell appProcess -e get {position of window 1, size of window 1} -e end tell -e end tell".to_owned(),
-            "osascript -e with timeout of 3 seconds -e tell application id \"com.example.firefox\" to quit -e end timeout".to_owned(),
-            "ps -axo command=".to_owned(),
-            "brew upgrade --cask".to_owned(),
-            "brew autoremove --dry-run".to_owned(),
-            "brew autoremove".to_owned(),
-            "brew cleanup --dry-run --prune=all".to_owned(),
-            "brew cleanup --prune=all".to_owned(),
-            "open -g -b com.example.firefox".to_owned(),
-        ]
+        full_app_transcript(&app)
     );
 
     let text = stdout(&output);
@@ -866,33 +889,9 @@ fn yes_at_the_prompt_quits_apps_and_upgrades_casks() {
     let output = run_apps_with_stdin(&tools, &state, "yes\n");
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    let info = app.join("Contents/Info");
     assert_eq!(
         tools.step_calls(),
-        [
-            "brew update".to_owned(),
-            "brew outdated --formula".to_owned(),
-            "brew outdated --formula --quiet".to_owned(),
-            "brew list --pinned --formula".to_owned(),
-            "brew services list".to_owned(),
-            "brew upgrade --formula".to_owned(),
-            "brew outdated --cask --greedy".to_owned(),
-            "brew outdated --cask --greedy --quiet".to_owned(),
-            "brew info --cask --json=v2 firefox".to_owned(),
-            format!("defaults read {} CFBundleIdentifier", info.display()),
-            "ps -axo command=".to_owned(),
-            format!("defaults read {} LSUIElement", info.display()),
-            "osascript -e tell application \"System Events\" -e set appProcess to first process whose bundle identifier is \"com.example.firefox\" -e get value of attribute \"AXHidden\" of appProcess -e end tell".to_owned(),
-            "osascript -e tell application \"System Events\" -e set appProcess to first process whose bundle identifier is \"com.example.firefox\" -e tell appProcess -e get {position of window 1, size of window 1} -e end tell -e end tell".to_owned(),
-            "osascript -e with timeout of 3 seconds -e tell application id \"com.example.firefox\" to quit -e end timeout".to_owned(),
-            "ps -axo command=".to_owned(),
-            "brew upgrade --cask".to_owned(),
-            "brew autoremove --dry-run".to_owned(),
-            "brew autoremove".to_owned(),
-            "brew cleanup --dry-run --prune=all".to_owned(),
-            "brew cleanup --prune=all".to_owned(),
-            "open -g -b com.example.firefox".to_owned(),
-        ]
+        full_app_transcript(&app)
     );
 
     let text = stdout(&output);
@@ -996,28 +995,18 @@ fn skip_quitting_at_the_prompt_upgrades_casks_without_quitting_apps() {
     let output = run_apps_with_stdin(&tools, &state, "s\n");
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    let info = app.join("Contents/Info");
+    let mut expected: Vec<String> = Vec::new();
+    expected.extend(brew_update().iter().map(|&s| s.to_string()));
+    expected.extend(brew_formula_steps().iter().map(|&s| s.to_string()));
+    expected.extend(brew_cask_query_steps().iter().map(|&s| s.to_string()));
+    expected.push("brew info --cask --json=v2 firefox".to_string());
+    expected.extend(app_pre_upgrade_steps(&app));
+    expected.push("brew upgrade --cask".to_string());
+    expected.extend(brew_autoremove_steps().iter().map(|&s| s.to_string()));
+    expected.extend(brew_cleanup_steps().iter().map(|&s| s.to_string()));
     assert_eq!(
         tools.step_calls(),
-        [
-            "brew update".to_owned(),
-            "brew outdated --formula".to_owned(),
-            "brew outdated --formula --quiet".to_owned(),
-            "brew list --pinned --formula".to_owned(),
-            "brew services list".to_owned(),
-            "brew upgrade --formula".to_owned(),
-            "brew outdated --cask --greedy".to_owned(),
-            "brew outdated --cask --greedy --quiet".to_owned(),
-            "brew info --cask --json=v2 firefox".to_owned(),
-            format!("defaults read {} CFBundleIdentifier", info.display()),
-            "ps -axo command=".to_owned(),
-            format!("defaults read {} LSUIElement", info.display()),
-            "brew upgrade --cask".to_owned(),
-            "brew autoremove --dry-run".to_owned(),
-            "brew autoremove".to_owned(),
-            "brew cleanup --dry-run --prune=all".to_owned(),
-            "brew cleanup --prune=all".to_owned(),
-        ]
+        expected
     );
 
     let text = stdout(&output);
@@ -1041,27 +1030,17 @@ fn skip_casks_at_the_prompt_skips_the_cask_upgrade() {
     let output = run_apps_with_stdin(&tools, &state, "n\n");
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    let info = app.join("Contents/Info");
+    let mut expected: Vec<String> = Vec::new();
+    expected.extend(brew_update().iter().map(|&s| s.to_string()));
+    expected.extend(brew_formula_steps().iter().map(|&s| s.to_string()));
+    expected.extend(brew_cask_query_steps().iter().map(|&s| s.to_string()));
+    expected.push("brew info --cask --json=v2 firefox".to_string());
+    expected.extend(app_pre_upgrade_steps(&app));
+    expected.extend(brew_autoremove_steps().iter().map(|&s| s.to_string()));
+    expected.extend(brew_cleanup_steps().iter().map(|&s| s.to_string()));
     assert_eq!(
         tools.step_calls(),
-        [
-            "brew update".to_owned(),
-            "brew outdated --formula".to_owned(),
-            "brew outdated --formula --quiet".to_owned(),
-            "brew list --pinned --formula".to_owned(),
-            "brew services list".to_owned(),
-            "brew upgrade --formula".to_owned(),
-            "brew outdated --cask --greedy".to_owned(),
-            "brew outdated --cask --greedy --quiet".to_owned(),
-            "brew info --cask --json=v2 firefox".to_owned(),
-            format!("defaults read {} CFBundleIdentifier", info.display()),
-            "ps -axo command=".to_owned(),
-            format!("defaults read {} LSUIElement", info.display()),
-            "brew autoremove --dry-run".to_owned(),
-            "brew autoremove".to_owned(),
-            "brew cleanup --dry-run --prune=all".to_owned(),
-            "brew cleanup --prune=all".to_owned(),
-        ]
+        expected
     );
 
     let text = stdout(&output);
@@ -1093,31 +1072,19 @@ fn never_quits_the_terminal_running_the_script() {
     );
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let info_path = tools.home().join("Applications/Firefox.app/Contents/Info");
+    let mut expected: Vec<String> = Vec::new();
+    expected.extend(brew_update().iter().map(|&s| s.to_string()));
+    expected.extend(brew_formula_steps().iter().map(|&s| s.to_string()));
+    expected.extend(brew_cask_query_steps().iter().map(|&s| s.to_string()));
+    expected.push("brew info --cask --json=v2 firefox".to_string());
+    expected.push(format!("defaults read {} CFBundleIdentifier", info_path.display()));
+    expected.push("brew upgrade --cask".to_string());
+    expected.extend(brew_autoremove_steps().iter().map(|&s| s.to_string()));
+    expected.extend(brew_cleanup_steps().iter().map(|&s| s.to_string()));
     assert_eq!(
         tools.step_calls(),
-        [
-            "brew update".to_owned(),
-            "brew outdated --formula".to_owned(),
-            "brew outdated --formula --quiet".to_owned(),
-            "brew list --pinned --formula".to_owned(),
-            "brew services list".to_owned(),
-            "brew upgrade --formula".to_owned(),
-            "brew outdated --cask --greedy".to_owned(),
-            "brew outdated --cask --greedy --quiet".to_owned(),
-            "brew info --cask --json=v2 firefox".to_owned(),
-            format!(
-                "defaults read {} CFBundleIdentifier",
-                tools
-                    .home()
-                    .join("Applications/Firefox.app/Contents/Info")
-                    .display()
-            ),
-            "brew upgrade --cask".to_owned(),
-            "brew autoremove --dry-run".to_owned(),
-            "brew autoremove".to_owned(),
-            "brew cleanup --dry-run --prune=all".to_owned(),
-            "brew cleanup --prune=all".to_owned(),
-        ]
+        expected
     );
 
     let text = stdout(&output);
