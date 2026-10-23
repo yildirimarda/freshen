@@ -301,6 +301,67 @@ fn the_package_exclude_list_limits_the_uv_tool_upgrade() {
     );
 }
 
+#[test]
+fn the_package_exclude_list_limits_the_mise_tool_upgrade() {
+    let tools = StubTools::new(&["brew", "mise"]);
+    tools.set_responses("brew", &[support::StubOutput::new().with_status(1)]);
+    let outdated = "node    20         20.0.0   20.1.0\npython  3.11       3.11.0   3.11.1\n";
+    tools.set_responses(
+        "mise",
+        &[
+            // The snapshot (`mise ls`) consumes the first response.
+            support::StubOutput::new(),
+            // The `check()` query (`mise outdated`).
+            support::StubOutput::new(),
+            // The self-update (`mise self-update -y`).
+            support::StubOutput::new(),
+            // The upgrade query (`mise outdated`) when a filter is set.
+            support::StubOutput::stdout(outdated),
+            // Per-tool upgrade (`mise upgrade node`).
+            support::StubOutput::new(),
+            // The prune list (`mise ls --prunable --json`).
+            support::StubOutput::stdout("{}"),
+            // The prune (`mise prune -y`).
+            support::StubOutput::new(),
+        ],
+    );
+    write_config(&tools.config_path(), "[exclude]\npackages = [\"python\"]\n");
+
+    let output = tools
+        .command()
+        .args(["--only", "mise", "--cleanup"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(
+        output.status.success(),
+        "stderr: {} stdout: {}",
+        stderr(&output),
+        stdout(&output)
+    );
+
+    let calls = tools.step_calls();
+    assert!(
+        calls.contains(&"mise outdated".to_owned()),
+        "calls: {calls:?} stdout: {}",
+        stdout(&output)
+    );
+    assert!(
+        calls.contains(&"mise upgrade node".to_owned()),
+        "calls: {calls:?} stdout: {} stderr: {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    assert!(
+        !calls.contains(&"mise upgrade python".to_owned()),
+        "calls: {calls:?}"
+    );
+    assert!(
+        !calls.contains(&"mise upgrade".to_owned()),
+        "calls: {calls:?}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn an_excluded_cask_is_not_reported_as_outdated() {
