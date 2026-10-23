@@ -550,6 +550,57 @@ esac"#,
     (tools, app, state)
 }
 
+/// Creates app tools where the AppleScript quit fails with an error message.
+#[cfg(unix)]
+fn app_tools_with_quit_error(
+    error_message: &str,
+) -> (StubTools, std::path::PathBuf, std::path::PathBuf) {
+    let tools = StubTools::new(&["brew", "defaults", "ps", "osascript", "open", "kill"]);
+    tools.set_script(
+        "brew",
+        r#"case "$*" in
+  "outdated --formula --quiet")
+    printf 'jq\n'
+    ;;
+  "outdated --cask --greedy --quiet")
+    printf 'firefox\n'
+    ;;
+  "info --cask --json=v2 firefox")
+    printf '%s\n' "$FRESHEN_BREW_INFO_JSON"
+    ;;
+  "autoremove --dry-run")
+    printf '==> Would autoremove 1 unneeded formula:\nold-dependency\n'
+    ;;
+  "cleanup --dry-run --prune=all")
+    printf 'Would remove: /tmp/old (1.2MB)\n'
+    ;;
+esac"#,
+    );
+
+    let app = tools.home().join("Applications/Firefox.app");
+    std::fs::create_dir_all(&app)
+        .unwrap_or_else(|error| panic!("failed to create test app: {error}"));
+
+    tools.set_script("defaults", "printf 'com.example.firefox\n'");
+    let state = tools.home().join("ps.txt");
+    std::fs::write(
+        &state,
+        format!("  123 {}/Contents/MacOS/firefox\n", app.display()),
+    )
+    .unwrap_or_else(|error| panic!("failed to write process table: {error}"));
+    tools.set_script(
+        "ps",
+        "while IFS= read -r line; do printf '%s\n' \"$line\"; done < \"$FRESHEN_PS_STATE\"",
+    );
+    let quit_body = format!(
+        "printf '{}\\n' >&2\nexit 1",
+        error_message.replace("'", "'\"'\"'")
+    );
+    tools.set_script("osascript", &osascript_script(&quit_body));
+
+    (tools, app, state)
+}
+
 /// The `osascript` stub that answers the questions freshen asks about an app.
 ///
 /// The hidden state and the place of the window are answered from the
@@ -1032,6 +1083,30 @@ fn a_denied_automation_request_names_the_system_settings_pane() {
     assert!(
         !text.contains("did not quit"),
         "the app was reported as unquittable: {text}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_apple_script_quit_reports_the_error_message() {
+    let (tools, _app, state) =
+        app_tools_with_quit_error("execution error: Application isn't running. (-600)");
+
+    let output = run_apps(&tools, &state, &[("QUIT_TIMEOUT", "1")], &[]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("execution error: Application isn't running"),
+        "output should contain the AppleScript error: {text}"
+    );
+    assert!(
+        text.contains("(-600)"),
+        "output should contain the error code: {text}"
+    );
+    assert!(
+        !text.contains("did not quit"),
+        "the generic message should not appear: {text}"
     );
 }
 
