@@ -163,6 +163,64 @@ impl Step for UvStep {
 
 struct MiseStep;
 
+impl MiseStep {
+    /// Upgrades the installed tools, honouring the package filter.
+    ///
+    /// Without a filter every outdated tool is upgraded in one command, which
+    /// is what the zsh script does. With a filter each selected tool is
+    /// upgraded on its own, so a tool that is not in the lists stays untouched.
+    fn upgrade_tools(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
+        let filter = options.filters().packages();
+        if filter.is_empty() {
+            human!("mise: upgrade (node and other tools)");
+            if let Err(error) = CommandSpec::new("mise")
+                .arg("upgrade")
+                .retry_transient_network(NETWORK_RETRIES)
+                .run()
+            {
+                failures.push(StepError::run_from_process(MISE, &error));
+            }
+            return;
+        }
+
+        let output = match CommandSpec::new("mise")
+            .arg("outdated")
+            .neutral_locale()
+            .retry_transient_network(NETWORK_RETRIES)
+            .run()
+        {
+            Ok(output) => output,
+            Err(error) => {
+                failures.push(StepError::run_from_process(MISE, &error));
+                return;
+            }
+        };
+
+        let output_str = output.stdout();
+        let tools: Vec<String> = parse_mise_outdated(output_str)
+            .into_iter()
+            .filter(|item| filter.includes(item.name()))
+            .map(|item| item.name().to_owned())
+            .collect();
+
+        if tools.is_empty() {
+            human!("No outdated mise tools left after applying the include/exclude lists.");
+            return;
+        }
+
+        for tool in tools {
+            human!("mise: upgrade {tool}");
+            if let Err(error) = CommandSpec::new("mise")
+                .args(["upgrade", &tool])
+                .retry_transient_network(NETWORK_RETRIES)
+                .run()
+            {
+                failures.push(StepError::run_from_process(MISE, &error));
+            }
+        }
+    }
+}
+
 impl Step for MiseStep {
     fn id(&self) -> StepId {
         MISE
@@ -177,15 +235,18 @@ impl Step for MiseStep {
     }
 
     fn check(&self) -> Result<CheckReport, StepError> {
+        self.check_with_options(&RunOptions::new())
+    }
+
+    fn check_with_options(&self, options: &RunOptions) -> Result<CheckReport, StepError> {
         let output = CommandSpec::new("mise")
             .arg("outdated")
             .neutral_locale()
             .retry_transient_network(NETWORK_RETRIES)
             .run()
             .map_err(|error| StepError::check_from_process(MISE, &error))?;
-        Ok(CheckReport::from_items(parse_mise_outdated(
-            output.stdout(),
-        )))
+        let report = CheckReport::from_items(parse_mise_outdated(output.stdout()));
+        Ok(report.filtered(|name| options.filters().packages().includes(name)))
     }
 
     fn run(&self) -> Result<(), StepError> {
@@ -206,14 +267,7 @@ impl Step for MiseStep {
             }
         }
 
-        human!("mise: upgrade (node and other tools)");
-        if let Err(error) = CommandSpec::new("mise")
-            .arg("upgrade")
-            .retry_transient_network(NETWORK_RETRIES)
-            .run()
-        {
-            failures.push(StepError::run_from_process(MISE, &error));
-        }
+        self.upgrade_tools(options, &mut failures);
 
         let prunable = prunable_tool_versions();
 
