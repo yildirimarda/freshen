@@ -488,12 +488,16 @@ fn skipped_casks_appear_in_the_json_and_markdown_reports() {
     let text = stdout(&output);
     let report: serde_json::Value =
         serde_json::from_str(&text).unwrap_or_else(|e| panic!("invalid JSON: {e}: {text}"));
-    let cask_step = report["steps"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|s| s["id"].as_str() == Some("brew-casks"))
-        .expect("brew-casks step missing");
+    let cask_step = match if let Some(steps) = report["steps"].as_array() {
+        steps
+            .iter()
+            .find(|s| s["id"].as_str() == Some("brew-casks"))
+    } else {
+        panic!("steps array missing");
+    } {
+        Some(s) => s,
+        None => panic!("brew-casks step missing"),
+    };
     assert_eq!(cask_step["skipped_items"], serde_json::json!(["1password"]));
 
     let markdown_tools = StubTools::new(&["brew"]);
