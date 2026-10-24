@@ -123,6 +123,7 @@ impl StubTools {
             .env("FRESHEN_SKIP_PREFLIGHT", "1")
             .env("HOME", &self.dir)
             .env("FRESHEN_APP_ROOTS", self.dir.join("Applications"))
+            .env("FRESHEN_BREW_PREFIXES", self.dir.join("no-brew-prefix"))
             .env("USERPROFILE", &self.dir)
             .env("XDG_CONFIG_HOME", self.config_home())
             .env("APPDATA", self.app_data())
@@ -201,7 +202,10 @@ impl StubTools {
     /// Recorded invocations, one `"tool arg arg"` line per call, in order.
     pub fn calls(&self) -> Vec<String> {
         match fs::read_to_string(&self.log) {
-            Ok(text) => text.lines().map(|line| line.trim_end().to_owned()).collect(),
+            Ok(text) => text
+                .lines()
+                .map(|line| line.trim_end().to_owned())
+                .collect(),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(error) => panic!("failed to read stub log {}: {error}", self.log.display()),
         }
