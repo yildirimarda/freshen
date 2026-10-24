@@ -10,63 +10,10 @@ mod support;
 
 use std::process::Output;
 
-use support::{output_with_retry, StubOutput, StubTools};
-
-/// Named insertion: the initial update call.
-#[cfg(not(windows))]
-fn brew_update() -> &'static [&'static str] {
-    &["brew update"]
-}
-
-/// Named insertion: formula-related query and upgrade steps.
-#[cfg(not(windows))]
-fn brew_formula_steps() -> &'static [&'static str] {
-    &[
-        "brew outdated --formula",
-        "brew outdated --formula --quiet",
-        "brew list --pinned --formula",
-        "brew services list",
-        "brew upgrade --formula",
-    ]
-}
-
-/// Named insertion: cask-related query steps.
-#[cfg(not(windows))]
-fn brew_cask_query_steps() -> &'static [&'static str] {
-    &[
-        "brew outdated --cask --greedy",
-        "brew outdated --cask --greedy --quiet",
-    ]
-}
-
-/// Named insertion: autoremove steps.
-#[cfg(not(windows))]
-fn brew_autoremove_steps() -> &'static [&'static str] {
-    &["brew autoremove --dry-run", "brew autoremove"]
-}
-
-/// Named insertion: cleanup steps.
-#[cfg(not(windows))]
-fn brew_cleanup_steps() -> &'static [&'static str] {
-    &[
-        "brew cleanup --dry-run --prune=all",
-        "brew cleanup --prune=all",
-    ]
-}
-
-/// The base transcript built from named insertions.
-#[cfg(not(windows))]
-fn brew_transcript() -> Vec<&'static str> {
-    let mut t = Vec::new();
-    t.extend_from_slice(brew_update());
-    t.extend_from_slice(brew_formula_steps());
-    t.extend_from_slice(brew_cask_query_steps());
-    t.extend_from_slice(&["brew info --cask --json=v2 firefox"]);
-    t.extend_from_slice(&["brew upgrade --cask"]);
-    t.extend_from_slice(brew_autoremove_steps());
-    t.extend_from_slice(brew_cleanup_steps());
-    t
-}
+use support::{
+    brew_transcript, brew_update_transcript, output_with_retry, probe_transcript, slow_transcript,
+    stub_sequence_transcript, StubOutput, StubTools,
+};
 
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
@@ -183,7 +130,10 @@ fn a_stub_returns_canned_stdout_stderr_and_status_per_invocation() {
 
     assert_eq!(
         tools.step_calls(),
-        ["probe status", "probe status", "probe status"]
+        probe_transcript()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
     );
 }
 
@@ -266,15 +216,10 @@ fn runs_stub_tools_in_step_order() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
         tools.step_calls(),
-        [
-            "brew update",
-            "brew upgrade --formula",
-            "brew upgrade --cask --greedy",
-            "uv tool upgrade --all",
-            "mise upgrade",
-            "docker image prune -f",
-            "colima start",
-        ]
+        stub_sequence_transcript()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
     );
     assert!(stdout(&output).contains("7 ok, 0 planned, 0 skipped, 0 failed"));
 }
@@ -308,7 +253,13 @@ fn a_step_that_exceeds_the_step_timeout_is_reported_as_timed_out() {
     let output = tools.run("slow", &["--step-timeout", "1"]);
 
     assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
-    assert_eq!(tools.step_calls(), ["slow"]);
+    assert_eq!(
+        tools.step_calls(),
+        slow_transcript()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
+    );
     let text = stdout(&output);
     assert!(text.contains("0 failed, 1 timed out"), "summary: {text}");
     assert!(text.contains("timed out"), "summary: {text}");
@@ -346,7 +297,13 @@ fn a_failing_step_is_recorded_and_the_run_continues_to_exit_1() {
     );
 
     assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
-    assert_eq!(tools.step_calls(), ["brew update"]);
+    assert_eq!(
+        tools.step_calls(),
+        brew_update_transcript()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
+    );
 
     let text = stdout(&output);
     assert!(

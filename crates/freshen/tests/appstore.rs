@@ -13,6 +13,9 @@ use std::process::Output;
 use support::StubTools;
 
 #[cfg(target_os = "macos")]
+use support::{mas_account, mas_check_transcript, mas_full_transcript};
+
+#[cfg(target_os = "macos")]
 use support::StubOutput;
 
 fn stdout(output: &Output) -> String {
@@ -50,7 +53,10 @@ fn the_outdated_apps_are_reported_and_upgraded() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
         tools.step_calls(),
-        ["mas account", "mas outdated", "mas upgrade", "mas outdated"]
+        mas_full_transcript()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
     );
 
     let text = stdout(&output);
@@ -80,7 +86,14 @@ fn a_machine_without_a_signed_in_account_skips_the_step() {
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert_eq!(tools.step_calls(), ["mas account"]);
+    assert_eq!(
+        tools.step_calls(),
+        mas_account()
+            .to_vec()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
+    );
 
     let text = stdout(&output);
     assert!(
@@ -116,7 +129,13 @@ fn the_outdated_apps_are_reported_in_check_mode() {
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
 
     assert_eq!(output.status.code(), Some(2), "stderr: {}", stderr(&output));
-    assert_eq!(tools.step_calls(), ["mas account", "mas outdated"]);
+    assert_eq!(
+        tools.step_calls(),
+        mas_check_transcript()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
+    );
 
     let text = stdout(&output);
     assert!(

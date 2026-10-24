@@ -9,7 +9,7 @@ mod support;
 
 use std::process::Output;
 
-use support::StubTools;
+use support::{brew_formulae_transcript, StubTools};
 
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
@@ -100,15 +100,10 @@ fn json_report_contains_the_before_and_after_versions() {
     );
     assert_eq!(
         tools.step_calls(),
-        [
-            "brew outdated --formula",
-            "brew list --pinned --formula",
-            "brew outdated --formula --quiet",
-            "brew list --pinned --formula",
-            "brew services list",
-            "brew upgrade --formula",
-            "brew outdated --formula",
-        ]
+        brew_formulae_transcript()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
     );
 }
 

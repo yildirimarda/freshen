@@ -11,7 +11,7 @@ mod support;
 
 use std::process::Output;
 
-use support::StubTools;
+use support::{brew_autoremove_steps, StubTools};
 
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
@@ -110,7 +110,11 @@ esac"#
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
         tools.step_calls(),
-        ["brew autoremove --dry-run", "brew autoremove"]
+        brew_autoremove_steps()
+            .to_vec()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
     );
 }
 
