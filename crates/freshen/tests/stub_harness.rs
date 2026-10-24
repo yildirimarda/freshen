@@ -10,9 +10,13 @@ mod support;
 
 use std::process::Output;
 
+#[cfg(not(windows))]
+use support::brew_transcript;
+#[cfg(unix)]
+use support::slow_transcript;
 use support::{
-    brew_transcript, brew_update_transcript, output_with_retry, probe_transcript, slow_transcript,
-    stub_sequence_transcript, StubOutput, StubTools,
+    brew_update_transcript, output_with_retry, probe_transcript, stub_sequence_transcript,
+    StubOutput, StubTools,
 };
 
 fn stderr(output: &Output) -> String {
