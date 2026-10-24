@@ -10,9 +10,7 @@ mod support;
 
 use std::process::Output;
 
-use support::StubTools;
-
-const ALL_STEPS: &str = "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-reopen,colima-stop,colima-start,docker";
+use support::{StubTools, ALL_STEPS};
 
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
