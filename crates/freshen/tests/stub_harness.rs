@@ -13,11 +13,13 @@ use std::process::Output;
 use support::{output_with_retry, StubOutput, StubTools};
 
 /// Named insertion: the initial update call.
+#[cfg(not(windows))]
 fn brew_update() -> &'static [&'static str] {
     &["brew update"]
 }
 
 /// Named insertion: formula-related query and upgrade steps.
+#[cfg(not(windows))]
 fn brew_formula_steps() -> &'static [&'static str] {
     &[
         "brew outdated --formula",
@@ -29,6 +31,7 @@ fn brew_formula_steps() -> &'static [&'static str] {
 }
 
 /// Named insertion: cask-related query steps.
+#[cfg(not(windows))]
 fn brew_cask_query_steps() -> &'static [&'static str] {
     &[
         "brew outdated --cask --greedy",
@@ -37,11 +40,13 @@ fn brew_cask_query_steps() -> &'static [&'static str] {
 }
 
 /// Named insertion: autoremove steps.
+#[cfg(not(windows))]
 fn brew_autoremove_steps() -> &'static [&'static str] {
     &["brew autoremove --dry-run", "brew autoremove"]
 }
 
 /// Named insertion: cleanup steps.
+#[cfg(not(windows))]
 fn brew_cleanup_steps() -> &'static [&'static str] {
     &[
         "brew cleanup --dry-run --prune=all",
@@ -50,6 +55,7 @@ fn brew_cleanup_steps() -> &'static [&'static str] {
 }
 
 /// The base transcript built from named insertions.
+#[cfg(not(windows))]
 fn brew_transcript() -> Vec<&'static str> {
     let mut t = Vec::new();
     t.extend_from_slice(brew_update());
