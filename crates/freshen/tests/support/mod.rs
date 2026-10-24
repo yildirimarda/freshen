@@ -201,7 +201,7 @@ impl StubTools {
     /// Recorded invocations, one `"tool arg arg"` line per call, in order.
     pub fn calls(&self) -> Vec<String> {
         match fs::read_to_string(&self.log) {
-            Ok(text) => text.lines().map(str::to_owned).collect(),
+            Ok(text) => text.lines().map(|line| line.trim_end().to_owned()).collect(),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(error) => panic!("failed to read stub log {}: {error}", self.log.display()),
         }
