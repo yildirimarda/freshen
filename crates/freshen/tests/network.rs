@@ -12,7 +12,7 @@ mod support;
 
 use std::process::Output;
 
-use support::{StubOutput, StubTools};
+use support::{uv_network_retry_transcript, uv_network_transcript, StubOutput, StubTools};
 
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
@@ -47,11 +47,10 @@ fn a_transient_download_error_is_retried_until_it_succeeds() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
         tools.step_calls(),
-        [
-            "uv tool list --outdated",
-            "uv tool upgrade --all",
-            "uv tool upgrade --all"
-        ]
+        uv_network_retry_transcript()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
     );
     assert!(
         stdout(&output).contains("1 ok"),
@@ -73,7 +72,10 @@ fn an_unreachable_registry_skips_the_step_without_failing_the_run() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
         tools.step_calls(),
-        ["uv tool list --outdated", "uv tool upgrade --all"]
+        uv_network_transcript()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
     );
     let text = stdout(&output);
     assert!(text.contains("1 skipped"), "summary: {text}");
@@ -92,7 +94,10 @@ fn an_ordinary_failure_is_not_retried_or_skipped() {
     assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
     assert_eq!(
         tools.step_calls(),
-        ["uv tool list --outdated", "uv tool upgrade --all"]
+        uv_network_transcript()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
     );
     let text = stdout(&output);
     assert!(text.contains("1 failed"), "summary: {text}");

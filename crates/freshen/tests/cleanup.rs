@@ -9,7 +9,7 @@ mod support;
 
 use std::process::Output;
 
-use support::StubTools;
+use support::{destructive_cleanup_commands, destructive_dry_run_commands, StubTools};
 
 const STEPS: &str = "brew-autoremove,brew-cleanup,uv,mise,docker";
 
@@ -123,15 +123,10 @@ fn destructive_cleanup_never_runs_without_the_flag() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let calls = tools.step_calls();
-    for command in [
-        "brew autoremove",
-        "brew cleanup --prune=all",
-        "uv cache prune",
-        "mise prune -y",
-        "docker image prune -f",
-    ] {
+    let destructive = destructive_cleanup_commands();
+    for command in destructive {
         assert!(
-            !calls.iter().any(|call| call == command),
+            !calls.iter().any(|call| call == *command),
             "{command} ran without --cleanup: {calls:?}"
         );
     }
@@ -161,15 +156,10 @@ fn cleanup_logs_every_removed_item_and_the_reclaimed_space() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let calls = tools.step_calls();
-    for command in [
-        "brew autoremove",
-        "brew cleanup --prune=all",
-        "uv cache prune",
-        "mise prune -y",
-        "docker image prune -f",
-    ] {
+    let destructive = destructive_cleanup_commands();
+    for command in destructive {
         assert!(
-            calls.iter().any(|call| call == command),
+            calls.iter().any(|call| call == *command),
             "{command} did not run with --cleanup: {calls:?}"
         );
     }
@@ -211,13 +201,15 @@ esac"#,
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let calls = tools.step_calls();
     assert!(
-        calls.iter().any(|call| call == "brew autoremove --dry-run"),
+        calls
+            .iter()
+            .any(|call| call == destructive_dry_run_commands()[0]),
         "autoremove was not guarded by a dry run: {calls:?}"
     );
     assert!(
         calls
             .iter()
-            .any(|call| call == "brew cleanup --dry-run --prune=all"),
+            .any(|call| call == destructive_dry_run_commands()[1]),
         "cleanup was not guarded by a dry run: {calls:?}"
     );
     assert!(

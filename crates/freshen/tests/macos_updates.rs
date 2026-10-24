@@ -13,6 +13,12 @@ use std::process::Output;
 use support::StubTools;
 
 #[cfg(target_os = "macos")]
+use support::{
+    macos_updates_check_transcript, macos_updates_command_line_transcript,
+    macos_updates_install_transcript, macos_updates_report_transcript,
+};
+
+#[cfg(target_os = "macos")]
 use support::StubOutput;
 
 fn stdout(output: &Output) -> String {
@@ -56,7 +62,10 @@ fn the_available_updates_are_reported_and_not_installed() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
         tools.step_calls(),
-        ["softwareupdate --list", "softwareupdate --list"]
+        macos_updates_report_transcript()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
     );
 
     let text = stdout(&output);
@@ -108,11 +117,10 @@ fn the_updates_are_installed_with_the_opt_in() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
         tools.step_calls(),
-        [
-            "softwareupdate --list",
-            "sudo -n softwareupdate --install --all",
-            "softwareupdate --list",
-        ]
+        macos_updates_install_transcript()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
     );
 
     let text = stdout(&output);
@@ -139,7 +147,13 @@ fn the_available_updates_are_reported_in_check_mode() {
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
 
     assert_eq!(output.status.code(), Some(2), "stderr: {}", stderr(&output));
-    assert_eq!(tools.step_calls(), ["softwareupdate --list"]);
+    assert_eq!(
+        tools.step_calls(),
+        macos_updates_check_transcript()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
+    );
 
     let text = stdout(&output);
     assert!(
@@ -212,11 +226,10 @@ fn the_command_line_tools_are_installed_when_the_listing_names_them() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
         tools.step_calls(),
-        [
-            "softwareupdate --list",
-            "sudo -n softwareupdate --install Command Line Tools for Xcode",
-            "softwareupdate --list",
-        ]
+        macos_updates_command_line_transcript()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
     );
 
     let text = stdout(&output);
@@ -251,11 +264,10 @@ fn a_command_line_tools_installation_that_needs_administrator_rights_is_only_a_w
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
         tools.step_calls(),
-        [
-            "softwareupdate --list",
-            "sudo -n softwareupdate --install Command Line Tools for Xcode",
-            "softwareupdate --list",
-        ]
+        macos_updates_command_line_transcript()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
     );
 
     let text = stdout(&output);
