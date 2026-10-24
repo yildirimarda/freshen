@@ -19,9 +19,12 @@
 //! (`cargo test --all-features`) enables it.
 
 pub mod container_transcripts;
+pub mod tool_transcripts;
 
 #[allow(unused_imports)]
 pub use container_transcripts::*;
+#[allow(unused_imports)]
+pub use tool_transcripts::*;
 
 use std::fs;
 use std::io::{self, Write};

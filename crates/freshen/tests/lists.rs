@@ -207,21 +207,20 @@ fn the_cask_exclude_list_limits_the_cask_upgrade() {
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert_eq!(
-        tools.step_calls(),
-        [
-            "brew update",
-            "brew outdated --formula",
-            "brew outdated --formula --quiet",
-            "brew outdated --cask --greedy",
-            "brew info --cask --json=v2 firefox",
-            "brew outdated --cask --greedy --quiet",
-            "brew info --cask --json=v2 firefox",
-            "brew upgrade --cask firefox",
-            "brew outdated --cask --greedy",
-            "brew info --cask --json=v2 firefox",
-        ]
-    );
+    let mut expected: Vec<String> = Vec::new();
+    expected.extend(support::brew_update().iter().map(|&s| s.to_string()));
+    expected.extend_from_slice(&[
+        "brew outdated --formula".to_string(),
+        "brew outdated --formula --quiet".to_string(),
+        "brew outdated --cask --greedy".to_string(),
+        "brew info --cask --json=v2 firefox".to_string(),
+        "brew outdated --cask --greedy --quiet".to_string(),
+        "brew info --cask --json=v2 firefox".to_string(),
+        "brew upgrade --cask firefox".to_string(),
+        "brew outdated --cask --greedy".to_string(),
+        "brew info --cask --json=v2 firefox".to_string(),
+    ]);
+    assert_eq!(tools.step_calls(), expected);
     assert!(
         stdout(&output).contains("Casks to upgrade: firefox"),
         "output: {}",

@@ -186,11 +186,10 @@ fn a_second_run_does_not_upgrade_uv_tools_or_prune_the_cache_again() {
     let first_calls = tools.step_calls();
     assert_eq!(
         first_calls,
-        [
-            "uv tool list --outdated",
-            "uv tool upgrade --all",
-            "uv cache prune"
-        ],
+        support::uv_transcript()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>(),
         "first run calls"
     );
     assert!(
@@ -216,11 +215,10 @@ fn a_second_run_does_not_upgrade_uv_tools_or_prune_the_cache_again() {
     let second_calls = &all_calls[first_calls.len()..];
     assert_eq!(
         second_calls,
-        [
-            "uv tool list --outdated",
-            "uv tool upgrade --all",
-            "uv cache prune"
-        ],
+        support::uv_transcript()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>(),
         "second run calls"
     );
     assert!(
