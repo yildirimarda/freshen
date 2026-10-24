@@ -12,7 +12,7 @@ mod support;
 
 use std::process::Output;
 
-use support::StubTools;
+use support::{StubTools, brew_formula_upgrade, colima_stop, colima_start, limactl_stop, limactl_start, limactl_list_json};
 
 const STEPS: &str = "brew,brew-formulae,colima-stop,colima-start";
 
@@ -108,22 +108,22 @@ fn stops_standalone_lima_instances_around_the_lima_upgrade() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let calls = tools.step_calls();
-    let upgrade = index_of(&calls, "brew upgrade --formula");
-    let stop = index_of(&calls, "limactl stop default");
-    let start = index_of(&calls, "limactl start default");
+    let upgrade = index_of(&calls, brew_formula_upgrade()[4]);
+    let stop = index_of(&calls, limactl_stop("default").as_str());
+    let start = index_of(&calls, limactl_start("default").as_str());
 
     assert!(
-        index_of(&calls, "limactl list --json") < stop,
+        index_of(&calls, limactl_list_json()[0]) < stop,
         "calls: {calls:?}"
     );
     assert!(stop < upgrade, "calls: {calls:?}");
     assert!(upgrade < start, "calls: {calls:?}");
     assert!(
-        index_of(&calls, "colima stop") < upgrade,
+        index_of(&calls, colima_stop()[0]) < upgrade,
         "calls: {calls:?}"
     );
     assert!(
-        index_of(&calls, "colima start") > upgrade,
+        index_of(&calls, colima_start()[0]) > upgrade,
         "calls: {calls:?}"
     );
 
@@ -152,14 +152,14 @@ fn standalone_lima_is_stopped_even_when_colima_is_not_installed() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let calls = tools.step_calls();
-    let upgrade = index_of(&calls, "brew upgrade --formula");
+    let upgrade = index_of(&calls, brew_formula_upgrade()[4]);
 
     assert!(
-        index_of(&calls, "limactl stop default") < upgrade,
+        index_of(&calls, limactl_stop("default").as_str()) < upgrade,
         "calls: {calls:?}"
     );
     assert!(
-        index_of(&calls, "limactl start default") > upgrade,
+        index_of(&calls, limactl_start("default").as_str()) > upgrade,
         "calls: {calls:?}"
     );
     assert!(
@@ -203,11 +203,11 @@ fn colima_managed_instances_are_not_stopped_with_limactl() {
         "calls: {calls:?}"
     );
     assert!(
-        calls.contains(&"colima stop".to_owned()),
+        calls.contains(&colima_stop()[0].to_string()),
         "calls: {calls:?}"
     );
     assert!(
-        calls.contains(&"colima start".to_owned()),
+        calls.contains(&colima_start()[0].to_string()),
         "calls: {calls:?}"
     );
 }
@@ -231,7 +231,7 @@ fn a_failing_lima_start_is_recorded() {
     assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
     let calls = tools.step_calls();
     assert!(
-        calls.contains(&"limactl start default".to_owned()),
+        calls.contains(&limactl_start("default")),
         "calls: {calls:?}"
     );
     assert!(

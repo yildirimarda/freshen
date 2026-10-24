@@ -18,6 +18,10 @@
 //! the probe steps described by `FRESHEN_TEST_STEPS`. The project test command
 //! (`cargo test --all-features`) enables it.
 
+pub mod container_transcripts;
+
+pub use container_transcripts::*;
+
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;

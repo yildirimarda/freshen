@@ -10,19 +10,15 @@ mod support;
 
 use std::process::Output;
 
-use support::StubTools;
+use support::{StubTools, ALL_STEPS, PS_CALL, COMPOSE_JSON, PS_OUTPUT, web, db,
+    docker_version, brew_update, brew_formula_query, brew_formula_upgrade,
+    brew_cask_query, brew_autoremove, brew_cleanup,
+    colima_stop, colima_start,
+    docker_stop_containers, docker_start_containers,
+    docker_image_prune,
+};
 
-const ALL_STEPS: &str = "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-reopen,colima-stop,colima-start,docker";
 
-const PS_CALL: &str =
-    "docker ps --format {{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.project\"}}";
-
-const COMPOSE_JSON: &str = r#"[
-    {"Name":"web","ConfigFiles":"/srv/web/compose.yml,/srv/web/override.yml"},
-    {"Name":"db","ConfigFiles":"/srv/db/compose.yml"}
-]"#;
-
-const PS_OUTPUT: &str = "abc\tweb-1\tweb\ndef\tlonely\t\nghi\tlonely2\t\n";
 
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
@@ -32,28 +28,7 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
-fn compose(project: &str, files: &[&str], action: &str) -> String {
-    let mut call = format!("docker compose -p {project}");
-    for file in files {
-        call.push_str(" -f ");
-        call.push_str(file);
-    }
-    call.push(' ');
-    call.push_str(action);
-    call
-}
 
-fn web(action: &str) -> String {
-    compose(
-        "web",
-        &["/srv/web/compose.yml", "/srv/web/override.yml"],
-        action,
-    )
-}
-
-fn db(action: &str) -> String {
-    compose("db", &["/srv/db/compose.yml"], action)
-}
 
 fn install_brew(tools: &StubTools) {
     tools.set_script(
@@ -155,45 +130,33 @@ fn stops_colima_and_restores_containers_around_the_formula_upgrade() {
     let output = run(&tools, &Scenario::default());
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert_eq!(
-        tools.step_calls(),
-        [
-            "docker compose version",
-            "brew update",
-            "brew outdated --formula --quiet",
-            "colima status",
-            "docker compose ls --format json",
-            PS_CALL,
-            &web("down"),
-            &db("down"),
-            "docker stop def",
-            "docker stop ghi",
-            "colima stop",
-            "brew outdated --formula",
-            "brew outdated --formula --quiet",
-            "brew list --pinned --formula",
-            "brew services list",
-            "brew upgrade --formula",
-            "colima start",
-            "docker start def",
-            "docker start ghi",
-            &web("up -d"),
-            &db("up -d"),
-            "brew outdated --cask --greedy",
-            "brew outdated --cask --greedy --quiet",
-            "brew autoremove --dry-run",
-            "brew autoremove",
-            "brew cleanup --dry-run --prune=all",
-            "brew cleanup --prune=all",
-            "colima status",
-            "docker compose ls --format json",
-            &web("pull --quiet"),
-            &web("up -d"),
-            &db("pull --quiet"),
-            &db("up -d"),
-            "docker image prune -f",
-        ]
-    );
+    let mut expected = Vec::new();
+    expected.extend(docker_version().iter().map(|&s| s.to_string()));
+    expected.extend(brew_update().iter().map(|&s| s.to_string()));
+    expected.extend(brew_formula_query().iter().map(|&s| s.to_string()));
+    expected.push("colima status".to_string());
+    expected.push("docker compose ls --format json".to_string());
+    expected.push(PS_CALL.to_string());
+    expected.push(web("down"));
+    expected.push(db("down"));
+    expected.extend(docker_stop_containers().iter().map(|&s| s.to_string()));
+    expected.extend(colima_stop().iter().map(|&s| s.to_string()));
+    expected.extend(brew_formula_upgrade().iter().map(|&s| s.to_string()));
+    expected.extend(colima_start().iter().map(|&s| s.to_string()));
+    expected.extend(docker_start_containers().iter().map(|&s| s.to_string()));
+    expected.push(web("up -d"));
+    expected.push(db("up -d"));
+    expected.extend(brew_cask_query().iter().map(|&s| s.to_string()));
+    expected.extend(brew_autoremove().iter().map(|&s| s.to_string()));
+    expected.extend(brew_cleanup().iter().map(|&s| s.to_string()));
+    expected.push("colima status".to_string());
+    expected.push("docker compose ls --format json".to_string());
+    expected.push(web("pull --quiet"));
+    expected.push(web("up -d"));
+    expected.push(db("pull --quiet"));
+    expected.push(db("up -d"));
+    expected.extend(docker_image_prune().iter().map(|&s| s.to_string()));
+    assert_eq!(tools.step_calls(), expected);
 
     let text = stdout(&output);
     assert!(
@@ -236,25 +199,19 @@ fn up_to_date_colima_is_never_stopped() {
     );
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert_eq!(
-        tools.step_calls(),
-        [
-            "docker compose version",
-            "brew update",
-            "brew outdated --formula --quiet",
-            "brew outdated --formula",
-            "brew outdated --formula --quiet",
-            "brew outdated --cask --greedy",
-            "brew outdated --cask --greedy --quiet",
-            "brew autoremove --dry-run",
-            "brew autoremove",
-            "brew cleanup --dry-run --prune=all",
-            "brew cleanup --prune=all",
-            "colima status",
-            "docker compose ls --format json",
-            "docker image prune -f",
-        ]
-    );
+    let mut expected = Vec::new();
+    expected.extend(docker_version().iter().map(|&s| s.to_string()));
+    expected.extend(brew_update().iter().map(|&s| s.to_string()));
+    expected.extend(brew_formula_query().iter().map(|&s| s.to_string()));
+    expected.push("brew outdated --formula".to_string());
+    expected.extend(brew_formula_query().iter().map(|&s| s.to_string()));
+    expected.extend(brew_cask_query().iter().map(|&s| s.to_string()));
+    expected.extend(brew_autoremove().iter().map(|&s| s.to_string()));
+    expected.extend(brew_cleanup().iter().map(|&s| s.to_string()));
+    expected.push("colima status".to_string());
+    expected.push("docker compose ls --format json".to_string());
+    expected.extend(docker_image_prune().iter().map(|&s| s.to_string()));
+    assert_eq!(tools.step_calls(), expected);
     assert!(
         stdout(&output).contains("No running compose projects."),
         "output: {}",
@@ -283,27 +240,17 @@ fn a_stopped_colima_is_not_started_and_docker_updates_are_skipped() {
     );
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert_eq!(
-        tools.step_calls(),
-        [
-            "docker compose version",
-            "brew update",
-            "brew outdated --formula --quiet",
-            "colima status",
-            "brew outdated --formula",
-            "brew outdated --formula --quiet",
-            "brew list --pinned --formula",
-            "brew services list",
-            "brew upgrade --formula",
-            "brew outdated --cask --greedy",
-            "brew outdated --cask --greedy --quiet",
-            "brew autoremove --dry-run",
-            "brew autoremove",
-            "brew cleanup --dry-run --prune=all",
-            "brew cleanup --prune=all",
-            "colima status",
-        ]
-    );
+    let mut expected = Vec::new();
+    expected.extend(docker_version().iter().map(|&s| s.to_string()));
+    expected.extend(brew_update().iter().map(|&s| s.to_string()));
+    expected.extend(brew_formula_query().iter().map(|&s| s.to_string()));
+    expected.push("colima status".to_string());
+    expected.extend(brew_formula_upgrade().iter().map(|&s| s.to_string()));
+    expected.extend(brew_cask_query().iter().map(|&s| s.to_string()));
+    expected.extend(brew_autoremove().iter().map(|&s| s.to_string()));
+    expected.extend(brew_cleanup().iter().map(|&s| s.to_string()));
+    expected.push("colima status".to_string());
+    assert_eq!(tools.step_calls(), expected);
     assert!(
         stdout(&output).contains("warning: colima is not running, skipping Docker image updates."),
         "output: {}",
@@ -328,27 +275,17 @@ fn colima_is_stopped_without_docker_and_the_docker_step_is_skipped() {
     let output = run(&tools, &Scenario::default());
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert_eq!(
-        tools.step_calls(),
-        [
-            "brew update",
-            "brew outdated --formula --quiet",
-            "colima status",
-            "colima stop",
-            "brew outdated --formula",
-            "brew outdated --formula --quiet",
-            "brew list --pinned --formula",
-            "brew services list",
-            "brew upgrade --formula",
-            "colima start",
-            "brew outdated --cask --greedy",
-            "brew outdated --cask --greedy --quiet",
-            "brew autoremove --dry-run",
-            "brew autoremove",
-            "brew cleanup --dry-run --prune=all",
-            "brew cleanup --prune=all",
-        ]
-    );
+    let mut expected = Vec::new();
+    expected.extend(brew_update().iter().map(|&s| s.to_string()));
+    expected.extend(brew_formula_query().iter().map(|&s| s.to_string()));
+    expected.push("colima status".to_string());
+    expected.extend(colima_stop().iter().map(|&s| s.to_string()));
+    expected.extend(brew_formula_upgrade().iter().map(|&s| s.to_string()));
+    expected.extend(colima_start().iter().map(|&s| s.to_string()));
+    expected.extend(brew_cask_query().iter().map(|&s| s.to_string()));
+    expected.extend(brew_autoremove().iter().map(|&s| s.to_string()));
+    expected.extend(brew_cleanup().iter().map(|&s| s.to_string()));
+    assert_eq!(tools.step_calls(), expected);
     assert!(
         stdout(&output).contains("1 skipped"),
         "summary: {}",

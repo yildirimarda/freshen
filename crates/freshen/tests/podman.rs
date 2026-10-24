@@ -11,19 +11,11 @@ mod support;
 
 use std::process::Output;
 
-use support::StubTools;
+use support::{StubTools, PS_CALL, COMPOSE_JSON, PS_OUTPUT, compose, web, db};
 
 const ALL_STEPS: &str = "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-reopen,colima-stop,colima-start,docker";
 
-const PS_CALL: &str =
-    "docker ps --format {{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.project\"}}";
 
-const COMPOSE_JSON: &str = r#"[
-    {"Name":"web","ConfigFiles":"/srv/web/compose.yml,/srv/web/override.yml"},
-    {"Name":"db","ConfigFiles":"/srv/db/compose.yml"}
-]"#;
-
-const PS_OUTPUT: &str = "abc\tweb-1\tweb\ndef\tlonely\t\nghi\tlonely2\t\n";
 
 const MACHINE_RUNNING: &str = r#"[{"Name":"podman-machine-default","Running":true}]"#;
 const MACHINE_STOPPED: &str = r#"[{"Name":"podman-machine-default","Running":false}]"#;
@@ -36,28 +28,7 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
-fn compose(project: &str, files: &[&str], action: &str) -> String {
-    let mut call = format!("docker compose -p {project}");
-    for file in files {
-        call.push_str(" -f ");
-        call.push_str(file);
-    }
-    call.push(' ');
-    call.push_str(action);
-    call
-}
 
-fn web(action: &str) -> String {
-    compose(
-        "web",
-        &["/srv/web/compose.yml", "/srv/web/override.yml"],
-        action,
-    )
-}
-
-fn db(action: &str) -> String {
-    compose("db", &["/srv/db/compose.yml"], action)
-}
 
 fn install_brew(tools: &StubTools) {
     tools.set_script(
