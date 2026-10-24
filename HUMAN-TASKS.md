@@ -13,7 +13,7 @@ git commit -m "ci: apply <name> proposal" && git push
 
 Pending proposals:
 
-- [ ] `ci-proposals/rust.yml` — the `rust` workflow with the Windows leg blocking again. The `continue-on-error` workaround for the Windows unit tests is gone now that they pass, so the proposal drops the line. The workflow is already applied as `.github/workflows/rust.yml`, so replace it instead of moving it:
+- [x] `ci-proposals/rust.yml` — the `rust` workflow with the Windows leg blocking again. The `continue-on-error` workaround for the Windows unit tests is gone now that they pass, so the proposal drops the line. The workflow is already applied as `.github/workflows/rust.yml`, so replace it instead of moving it:
 
   ```bash
   git mv -f ci-proposals/rust.yml .github/workflows/rust.yml
