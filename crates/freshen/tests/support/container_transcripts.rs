@@ -110,5 +110,3 @@ pub fn limactl_start(name: &str) -> String {
 pub fn limactl_list_json() -> &'static [&'static str] {
     &["limactl list --json"]
 }
-
-

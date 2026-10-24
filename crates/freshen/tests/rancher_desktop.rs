@@ -11,11 +11,9 @@ mod support;
 
 use std::process::Output;
 
-use support::{StubTools, PS_CALL, COMPOSE_JSON, PS_OUTPUT, compose, web, db};
+use support::{db, web, StubTools, COMPOSE_JSON, PS_CALL, PS_OUTPUT};
 
 const ALL_STEPS: &str = "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-reopen,colima-stop,colima-start,docker";
-
-
 
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
@@ -24,8 +22,6 @@ fn stdout(output: &Output) -> String {
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
-
-
 
 fn install_brew(tools: &StubTools) {
     tools.set_script(

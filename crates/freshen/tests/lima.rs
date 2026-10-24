@@ -12,7 +12,10 @@ mod support;
 
 use std::process::Output;
 
-use support::{StubTools, brew_formula_upgrade, colima_stop, colima_start, limactl_stop, limactl_start, limactl_list_json};
+use support::{
+    brew_formula_upgrade, colima_start, colima_stop, limactl_list_json, limactl_start,
+    limactl_stop, StubTools,
+};
 
 const STEPS: &str = "brew,brew-formulae,colima-stop,colima-start";
 

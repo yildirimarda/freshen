@@ -10,15 +10,12 @@ mod support;
 
 use std::process::Output;
 
-use support::{StubTools, ALL_STEPS, PS_CALL, COMPOSE_JSON, PS_OUTPUT, web, db,
-    docker_version, brew_update, brew_formula_query, brew_formula_upgrade,
-    brew_cask_query, brew_autoremove, brew_cleanup,
-    colima_stop, colima_start,
-    docker_stop_containers, docker_start_containers,
-    docker_image_prune,
+use support::{
+    brew_autoremove, brew_cask_query, brew_cleanup, brew_formula_query, brew_formula_upgrade,
+    brew_update, colima_start, colima_stop, db, docker_image_prune, docker_start_containers,
+    docker_stop_containers, docker_version, web, StubTools, ALL_STEPS, COMPOSE_JSON, PS_CALL,
+    PS_OUTPUT,
 };
-
-
 
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
@@ -27,8 +24,6 @@ fn stdout(output: &Output) -> String {
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
-
-
 
 fn install_brew(tools: &StubTools) {
     tools.set_script(

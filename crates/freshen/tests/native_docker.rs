@@ -12,8 +12,6 @@ use std::process::Output;
 
 use support::{StubTools, ALL_STEPS};
 
-
-
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
