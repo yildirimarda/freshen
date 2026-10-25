@@ -140,6 +140,7 @@ pub struct StepResult {
     changes: Vec<VersionChange>,
     cleanups: Vec<CleanupReport>,
     skipped_items: Vec<String>,
+    restarted_services: Vec<String>,
     skip_reason: Option<SkipReason>,
     error: Option<StepError>,
 }
@@ -154,6 +155,7 @@ impl StepResult {
             changes: Vec::new(),
             cleanups: Vec::new(),
             skipped_items: Vec::new(),
+            restarted_services: Vec::new(),
             skip_reason: None,
             error: None,
         }
@@ -171,6 +173,11 @@ impl StepResult {
 
     fn with_skipped_items(mut self, skipped_items: Vec<String>) -> Self {
         self.skipped_items = skipped_items;
+        self
+    }
+
+    fn with_restarted_services(mut self, restarted_services: Vec<String>) -> Self {
+        self.restarted_services = restarted_services;
         self
     }
 
@@ -262,6 +269,12 @@ impl StepResult {
     #[must_use]
     pub fn skipped_items(&self) -> &[String] {
         &self.skipped_items
+    }
+
+    /// Homebrew services restarted by the step, in restart order.
+    #[must_use]
+    pub fn restarted_services(&self) -> &[String] {
+        &self.restarted_services
     }
 
     /// Why the step was skipped, when it was.
@@ -485,6 +498,9 @@ impl fmt::Display for RunSummary {
             writeln!(f)?;
             for change in result.changes() {
                 writeln!(f, "          - {change}")?;
+            }
+            for service in result.restarted_services() {
+                writeln!(f, "          - restarted service: {service}")?;
             }
         }
 
@@ -921,6 +937,7 @@ fn run_step(
             };
             let cleanups = recorder.finish();
             let skipped_items = crate::skipped_items::take();
+            let restarted_services = crate::restarted_services::take();
 
             let changes =
                 if result.status() == StepStatus::Interrupted || result.skip_reason().is_some() {
@@ -941,6 +958,7 @@ fn run_step(
                 .with_changes(changes)
                 .with_cleanups(cleanups)
                 .with_skipped_items(skipped_items)
+                .with_restarted_services(restarted_services)
         }
         Err(_error) if interrupt() => StepResult::interrupted(step, started.elapsed()),
         Err(error) if error.is_registry_unreachable() => {
