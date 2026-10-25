@@ -161,6 +161,7 @@ fn a_ported_step_replays_a_recorded_command_transcript() {
             StubOutput::new(),
             StubOutput::new(),
             StubOutput::stdout("firefox\n"),
+            StubOutput::new(),
             StubOutput::stdout(CASK_INFO),
             StubOutput::stderr("cask upgrade failed\n").with_status(1),
             StubOutput::stdout("==> Would autoremove 1 unneeded formula:\nold-dependency\n"),
