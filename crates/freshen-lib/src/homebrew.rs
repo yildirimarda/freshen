@@ -846,6 +846,26 @@ fn pinned_formulae(install: &BrewInstall) -> Option<Vec<String>> {
     }
 }
 
+/// Lists the casks pinned with `brew pin --cask`.
+///
+/// A failure is not fatal: Homebrew itself skips pinned casks during an
+/// upgrade, so the run can continue without the list. The warning keeps the
+/// missing information visible.
+fn pinned_casks(install: &BrewInstall) -> Option<Vec<String>> {
+    match install
+        .command()
+        .args(["list", "--pinned", "--cask"])
+        .neutral_locale()
+        .run()
+    {
+        Ok(output) => Some(lines(output.stdout())),
+        Err(error) => {
+            eprintln!("freshen: could not list pinned casks: {error}");
+            None
+        }
+    }
+}
+
 /// The last path segment of a formula name, without its tap.
 fn short_name(name: &str) -> &str {
     name.rsplit('/').next().unwrap_or(name)
@@ -1541,6 +1561,33 @@ impl CasksStep {
             return Ok(());
         }
 
+        let pinned = pinned_casks(install).unwrap_or_default();
+        let (held_back, casks): (Vec<String>, Vec<String>) =
+            casks.into_iter().partition(|cask| is_pinned(cask, &pinned));
+
+        if !held_back.is_empty() {
+            human!(
+                "{}",
+                install_message(
+                    brews,
+                    install,
+                    format!("Held back (pinned): {}", held_back.join(" "))
+                )
+            );
+        }
+
+        if casks.is_empty() {
+            human!(
+                "{}",
+                install_message(
+                    brews,
+                    install,
+                    "No casks upgraded: every outdated cask is held back (pinned)."
+                )
+            );
+            return Ok(());
+        }
+
         human!(
             "{}",
             install_message(
@@ -1595,7 +1642,7 @@ impl CasksStep {
         if needs_greedy {
             spec = spec.arg("--greedy");
         }
-        if !filter.is_empty() || selected.len() != casks.len() {
+        if !filter.is_empty() || !held_back.is_empty() || selected.len() != casks.len() {
             for cask in &selected {
                 spec = spec.arg(cask);
             }
@@ -1797,9 +1844,13 @@ impl Step for CasksStep {
         for install in brews.installs() {
             let report = outdated(CASKS, install, &["--cask", "--greedy"])?
                 .filtered(|name| options.filters().casks().includes(name));
-            let report = self.with_greedy_reasons(report, install);
-            let report = qualify_items(report, install, brews.is_multiple());
-            items.extend(report.items().iter().cloned());
+            if !report.is_up_to_date() {
+                let pinned = pinned_casks(install).unwrap_or_default();
+                let report = self.with_greedy_reasons(report, install);
+                let report = with_pinned_reasons(report, &pinned);
+                let report = qualify_items(report, install, brews.is_multiple());
+                items.extend(report.items().iter().cloned());
+            }
         }
         Ok(CheckReport::from_items(items))
     }

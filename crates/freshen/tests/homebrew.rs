@@ -60,6 +60,7 @@ fn brew_cask_query_steps() -> &'static [&'static str] {
     &[
         "brew outdated --cask --greedy",
         "brew outdated --cask --greedy --quiet",
+        "brew list --pinned --cask",
     ]
 }
 
@@ -168,6 +169,7 @@ fn command_transcript_matches_the_zsh_homebrew_block() {
             StubOutput::new(),
             StubOutput::new(),
             StubOutput::stdout("firefox\ngoogle-chrome\n"),
+            StubOutput::new(),
             StubOutput::stdout(CASK_INFO),
             StubOutput::new(),
             StubOutput::stdout("==> Would autoremove 1 unneeded formula:\nold-dependency\n"),
@@ -395,6 +397,7 @@ fn invalid_cask_metadata_does_not_stop_the_cask_upgrade() {
             StubOutput::new(),
             StubOutput::new(),
             StubOutput::stdout("firefox\n"),
+            StubOutput::new(),
             StubOutput::stdout("not json\n"),
             StubOutput::new(),
             StubOutput::stdout("==> Would autoremove 1 unneeded formula:\nold-dependency\n"),
@@ -434,6 +437,7 @@ fn a_failing_formula_upgrade_does_not_stop_the_cask_steps() {
             StubOutput::new().with_status(1),
             StubOutput::new(),
             StubOutput::stdout("firefox\n"),
+            StubOutput::new(),
             StubOutput::stdout(CASK_INFO),
             StubOutput::new(),
             StubOutput::stdout("==> Would autoremove 1 unneeded formula:\nold-dependency\n"),
@@ -475,6 +479,7 @@ fn a_cask_that_needs_an_administrator_password_is_skipped_without_a_terminal() {
             StubOutput::new(),
             StubOutput::new(),
             StubOutput::stdout("firefox\n1password\n"),
+            StubOutput::new(),
             StubOutput::stdout(CASK_INFO_WITH_ADMINISTRATOR),
             StubOutput::new(),
             StubOutput::stdout("==> Would autoremove 1 unneeded formula:\nold-dependency\n"),
@@ -524,6 +529,7 @@ fn skipped_casks_appear_in_the_json_and_markdown_reports() {
             StubOutput::new(),
             StubOutput::new(),
             StubOutput::stdout("firefox\n1password\n"),
+            StubOutput::new(),
             StubOutput::stdout(CASK_INFO_WITH_ADMINISTRATOR),
             StubOutput::new(),
             StubOutput::stdout("==> Would autoremove 1 unneeded formula:\nold-dependency\n"),
@@ -562,6 +568,7 @@ fn skipped_casks_appear_in_the_json_and_markdown_reports() {
             StubOutput::new(),
             StubOutput::new(),
             StubOutput::stdout("firefox\n1password\n"),
+            StubOutput::new(),
             StubOutput::stdout(CASK_INFO_WITH_ADMINISTRATOR),
             StubOutput::new(),
             StubOutput::stdout("==> Would autoremove 1 unneeded formula:\nold-dependency\n"),
@@ -595,6 +602,7 @@ fn no_cask_is_upgraded_when_every_cask_needs_an_administrator_password() {
             StubOutput::new(),
             StubOutput::new(),
             StubOutput::stdout("1password\n"),
+            StubOutput::new(),
             StubOutput::stdout(CASK_INFO_WITH_ADMINISTRATOR),
             StubOutput::stdout("==> Would autoremove 1 unneeded formula:\nold-dependency\n"),
             StubOutput::new(),
@@ -1627,6 +1635,123 @@ esac"#,
     );
 }
 
+#[test]
+fn pinned_casks_are_held_back_and_not_upgraded() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_script(
+        "brew",
+        r#"case "$*" in
+  "outdated --cask --greedy")
+    printf 'firefox (121.0) != 122.0\nspotify (1.0) != 1.1\n'
+    ;;
+  "outdated --cask --greedy --quiet")
+    printf 'firefox\nspotify\n'
+    ;;
+  "list --pinned --cask")
+    printf 'spotify\n'
+    ;;
+  "info --cask --json=v2 firefox")
+    printf '{"casks":[{"token":"firefox","artifacts":[{"app":["Firefox.app"]}]}]}\n'
+    ;;
+esac"#,
+    );
+
+    let output = run(&tools, &["--only", "brew-casks"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(
+        calls.contains(&"brew upgrade --cask firefox".to_owned()),
+        "calls: {calls:?}"
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.starts_with("brew upgrade") && call.contains("spotify")),
+        "the pinned cask was passed to brew upgrade: {calls:?}"
+    );
+
+    let text = stdout(&output);
+    assert!(
+        text.contains("Held back (pinned): spotify"),
+        "output: {text}"
+    );
+    assert!(text.contains("Casks to upgrade: firefox"), "output: {text}");
+}
+
+#[test]
+fn a_run_with_only_pinned_casks_skips_the_upgrade() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_script(
+        "brew",
+        r#"case "$*" in
+  "outdated --cask --greedy")
+    printf 'spotify (1.0) != 1.1\n'
+    ;;
+  "outdated --cask --greedy --quiet")
+    printf 'spotify\n'
+    ;;
+  "list --pinned --cask")
+    printf 'spotify\n'
+    ;;
+esac"#,
+    );
+
+    let output = run(&tools, &["--only", "brew-casks"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(
+        !calls.iter().any(|call| call.starts_with("brew upgrade")),
+        "the pinned cask was upgraded: {calls:?}"
+    );
+    let text = stdout(&output);
+    assert!(
+        text.contains("Held back (pinned): spotify"),
+        "output: {text}"
+    );
+    assert!(
+        text.contains("every outdated cask is held back (pinned)"),
+        "output: {text}"
+    );
+}
+
+#[test]
+fn check_reports_pinned_casks_as_held_back() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_responses(
+        "brew",
+        &[
+            StubOutput::stdout("firefox (133.0) != 134.0\nspotify (1.2.59) != 1.2.60\n"),
+            StubOutput::stdout("spotify\n"),
+            StubOutput::stdout(CASK_INFO_WITH_GREEDY),
+        ],
+    );
+
+    let output = run(&tools, &["--check", "--jobs", "1", "--only", "brew-casks"]);
+
+    assert_eq!(output.status.code(), Some(2), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        [
+            "brew outdated --cask --greedy",
+            "brew list --pinned --cask",
+            "brew info --cask --json=v2 firefox spotify",
+        ]
+    );
+
+    let text = stdout(&output);
+    assert!(text.contains("firefox 133.0 -> 134.0"), "output: {text}");
+    assert!(
+        text.contains("spotify 1.2.59 -> 1.2.60 (held back (pinned))"),
+        "output: {text}"
+    );
+    assert!(
+        !text.contains("spotify 1.2.59 -> 1.2.60 (auto_updates"),
+        "the pinned cask was reported as greedy: {text}"
+    );
+}
+
 fn run_formulae(outdated: &str, inside_zellij: bool) -> (Output, Vec<String>) {
     let tools = StubTools::new(&["brew"]);
     tools.set_responses(
@@ -1725,6 +1850,7 @@ fn check_reports_outdated_versions_and_exits_2() {
             "brew outdated --formula",
             "brew list --pinned --formula",
             "brew outdated --cask --greedy",
+            "brew list --pinned --cask",
             "brew info --cask --json=v2 firefox",
         ]
     );
@@ -1749,6 +1875,7 @@ fn check_explains_which_casks_need_greedy() {
             StubOutput::stdout(
                 "spotify (1.2.59) != 1.2.60\nnightly (1.0) != latest\nboth (1.0) != latest\nfirefox (133.0) != 134.0\n",
             ),
+            StubOutput::new(),
             StubOutput::stdout(CASK_INFO_WITH_GREEDY),
         ],
     );
@@ -1760,6 +1887,7 @@ fn check_explains_which_casks_need_greedy() {
         tools.step_calls(),
         [
             "brew outdated --cask --greedy",
+            "brew list --pinned --cask",
             "brew info --cask --json=v2 spotify nightly both firefox",
         ]
     );
@@ -1787,6 +1915,7 @@ fn check_without_cask_metadata_still_reports_the_casks() {
         "brew",
         &[
             StubOutput::stdout("nightly (1.0) != latest\n"),
+            StubOutput::new(),
             StubOutput::stdout("not json\n"),
         ],
     );
@@ -1814,6 +1943,7 @@ fn a_cask_that_needs_greedy_makes_the_upgrade_pass_greedy() {
         &homebrew_responses(&[
             StubOutput::new(),
             StubOutput::stdout("firefox\nnightly\n"),
+            StubOutput::new(),
             StubOutput::stdout(CASK_INFO_WITH_GREEDY),
             StubOutput::new(),
         ]),
@@ -1827,6 +1957,7 @@ fn a_cask_that_needs_greedy_makes_the_upgrade_pass_greedy() {
         [
             "brew outdated --cask --greedy",
             "brew outdated --cask --greedy --quiet",
+            "brew list --pinned --cask",
             "brew info --cask --json=v2 firefox nightly",
             "brew upgrade --cask --greedy",
         ]
@@ -1841,6 +1972,7 @@ fn regular_casks_are_upgraded_without_greedy() {
         &homebrew_responses(&[
             StubOutput::new(),
             StubOutput::stdout("firefox\n"),
+            StubOutput::new(),
             StubOutput::stdout(CASK_INFO),
             StubOutput::new(),
         ]),
@@ -1854,6 +1986,7 @@ fn regular_casks_are_upgraded_without_greedy() {
         [
             "brew outdated --cask --greedy",
             "brew outdated --cask --greedy --quiet",
+            "brew list --pinned --cask",
             "brew info --cask --json=v2 firefox",
             "brew upgrade --cask",
         ]

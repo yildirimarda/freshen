@@ -214,6 +214,7 @@ pub fn brew_cask_query_steps() -> &'static [&'static str] {
     &[
         "brew outdated --cask --greedy",
         "brew outdated --cask --greedy --quiet",
+        "brew list --pinned --cask",
     ]
 }
 

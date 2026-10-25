@@ -213,11 +213,14 @@ fn the_cask_exclude_list_limits_the_cask_upgrade() {
         "brew outdated --formula".to_string(),
         "brew outdated --formula --quiet".to_string(),
         "brew outdated --cask --greedy".to_string(),
+        "brew list --pinned --cask".to_string(),
         "brew info --cask --json=v2 firefox".to_string(),
         "brew outdated --cask --greedy --quiet".to_string(),
+        "brew list --pinned --cask".to_string(),
         "brew info --cask --json=v2 firefox".to_string(),
         "brew upgrade --cask firefox".to_string(),
         "brew outdated --cask --greedy".to_string(),
+        "brew list --pinned --cask".to_string(),
         "brew info --cask --json=v2 firefox".to_string(),
     ]);
     assert_eq!(tools.step_calls(), expected);
