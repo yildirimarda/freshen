@@ -28,6 +28,7 @@ pub mod preflight;
 pub mod process;
 pub mod registry;
 pub mod report;
+pub mod restarted_services;
 pub mod runner;
 pub mod signals;
 pub mod skipped_items;

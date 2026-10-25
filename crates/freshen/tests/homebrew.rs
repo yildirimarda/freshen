@@ -10,6 +10,8 @@ mod support;
 
 use std::process::Output;
 
+use serde_json::Value;
+
 use support::{StubOutput, StubTools};
 
 const CASK_INFO: &str = include_str!("../../freshen-lib/tests/fixtures/brew-info-casks.json");
@@ -292,6 +294,71 @@ esac"#,
     assert!(
         text.contains("Restarted Homebrew services: postgresql@16"),
         "output: {text}"
+    );
+}
+
+#[test]
+fn restarted_services_are_named_in_the_json_and_markdown_reports() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_script(
+        "brew",
+        r#"case "$*" in
+  "outdated --formula")
+    printf 'postgresql@16 (15.2) < 15.3\nredis (7.0) < 7.2\n'
+    ;;
+  "outdated --formula --quiet")
+    printf 'postgresql@16\nredis\n'
+    ;;
+  "services list")
+    printf 'Name              Status  User File\n'
+    printf 'postgresql@16     started user ~/Library/LaunchAgents/homebrew.mxcl.postgresql@16.plist\n'
+    printf 'redis             stopped user ~/Library/LaunchAgents/homebrew.mxcl.redis.plist\n'
+    printf 'mysql             started user ~/Library/LaunchAgents/homebrew.mxcl.mysql.plist\n'
+    ;;
+  "services restart postgresql@16")
+    ;;
+esac"#,
+    );
+
+    let output = run(
+        &tools,
+        &["--only", "brew,brew-formulae,brew-services", "--json"],
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let report: Value = serde_json::from_str(&stdout(&output))
+        .unwrap_or_else(|error| panic!("invalid JSON report: {error}"));
+
+    let services = report["steps"]
+        .as_array()
+        .and_then(|steps| steps.iter().find(|step| step["id"] == "brew-services"))
+        .unwrap_or_else(|| panic!("brew-services step missing from report: {report}"));
+
+    assert_eq!(
+        services["restarted_services"],
+        serde_json::json!(["postgresql@16"]),
+        "report: {report}"
+    );
+
+    let markdown = run(
+        &tools,
+        &["--only", "brew,brew-formulae,brew-services", "--markdown"],
+    );
+    assert!(markdown.status.success(), "stderr: {}", stderr(&markdown));
+    let text = stdout(&markdown);
+    assert!(text.contains("## Restarted services"), "report: {text}");
+    assert!(
+        text.contains("### Homebrew services (`brew-services`)"),
+        "report: {text}"
+    );
+    assert!(text.contains("- postgresql@16"), "report: {text}");
+
+    let summary = run(&tools, &["--only", "brew,brew-formulae,brew-services"]);
+    assert!(summary.status.success(), "stderr: {}", stderr(&summary));
+    let text = stdout(&summary);
+    assert!(
+        text.contains("- restarted service: postgresql@16"),
+        "summary: {text}"
     );
 }
 

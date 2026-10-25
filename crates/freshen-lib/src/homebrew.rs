@@ -1390,7 +1390,8 @@ impl ServicesStep {
             match result {
                 Ok(_) => {
                     self.services.remove(&service);
-                    restarted.push(service.name);
+                    restarted.push(service.name.clone());
+                    crate::restarted_services::record(service.name);
                 }
                 Err(error) => failures.push(error),
             }
