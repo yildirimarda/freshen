@@ -1126,15 +1126,22 @@ pub fn reopen_apps<S: AppSystem + ?Sized>(system: &S, apps: &[Reopen]) {
         }
 
         if hidden {
+            crate::reopened_hidden::record(bundle_id);
             continue;
         }
 
+        let mut window_restored = false;
         for (index, window) in session.windows().iter().enumerate() {
-            if !system.restore_window(bundle_id, index + 1, window) {
+            if system.restore_window(bundle_id, index + 1, window) {
+                window_restored = true;
+            } else {
                 warn(&format!(
                     "Could not put the window of {bundle_id} back where it was."
                 ));
             }
+        }
+        if window_restored {
+            crate::restored_windows::record(bundle_id);
         }
     }
 }
