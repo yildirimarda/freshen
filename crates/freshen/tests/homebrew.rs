@@ -1557,8 +1557,14 @@ fn reopened_hidden_apps_are_named_in_the_json_and_markdown_reports() {
         stderr(&markdown_output)
     );
     let md_text = stdout(&markdown_output);
-    assert!(md_text.contains("## Reopened hidden apps"), "markdown missing section: {md_text}");
-    assert!(md_text.contains("- com.example.firefox"), "markdown missing item: {md_text}");
+    assert!(
+        md_text.contains("## Reopened hidden apps"),
+        "markdown missing section: {md_text}"
+    );
+    assert!(
+        md_text.contains("- com.example.firefox"),
+        "markdown missing item: {md_text}"
+    );
 
     let (summary_tools, _summary_app, summary_state) = app_tools(true);
     let summary_output = {
@@ -1647,8 +1653,14 @@ fn restored_windows_are_named_in_the_json_and_markdown_reports() {
         stderr(&markdown_output)
     );
     let md_text = stdout(&markdown_output);
-    assert!(md_text.contains("## Restored windows"), "markdown: {md_text}");
-    assert!(md_text.contains("- com.example.firefox"), "markdown: {md_text}");
+    assert!(
+        md_text.contains("## Restored windows"),
+        "markdown: {md_text}"
+    );
+    assert!(
+        md_text.contains("- com.example.firefox"),
+        "markdown: {md_text}"
+    );
 
     let (summary_tools, _summary_app, summary_state) = app_tools(true);
     let summary_output = {
