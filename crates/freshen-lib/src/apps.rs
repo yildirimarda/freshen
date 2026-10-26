@@ -2750,9 +2750,9 @@ mod tests {
         assert!(electron_update_pending(bundle_id));
 
         std::env::remove_var("HOME");
-        let parent = pending_dir.parent().unwrap_or_else(|| {
-            panic!("pending dir should have a parent")
-        });
+        let parent = pending_dir
+            .parent()
+            .unwrap_or_else(|| panic!("pending dir should have a parent"));
         let _ = std::fs::remove_dir_all(parent);
     }
 
@@ -2774,9 +2774,9 @@ mod tests {
         assert_eq!(state.updater(), Some(SelfUpdater::Electron));
 
         std::env::remove_var("HOME");
-        let parent = pending_dir.parent().unwrap_or_else(|| {
-            panic!("pending dir should have a parent")
-        });
+        let parent = pending_dir
+            .parent()
+            .unwrap_or_else(|| panic!("pending dir should have a parent"));
         let _ = std::fs::remove_dir_all(parent);
     }
 
