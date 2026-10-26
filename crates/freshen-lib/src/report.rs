@@ -48,6 +48,8 @@ pub(crate) fn run_json(summary: &RunSummary) -> String {
                 "skipped_items": result.skipped_items().to_vec(),
                 "restarted_services": result.restarted_services().to_vec(),
                 "left_running_apps": result.left_running_apps().to_vec(),
+                "reopened_hidden": result.reopened_hidden().to_vec(),
+                "restored_windows": result.restored_windows().to_vec(),
                 "error": result.error().map(|error| error.to_string()),
             })
         })
@@ -240,6 +242,56 @@ pub(crate) fn run_markdown(summary: &RunSummary) -> String {
                 result.id()
             ));
             for app in result.left_running_apps() {
+                out.push_str("- ");
+                out.push_str(app);
+                out.push('\n');
+            }
+            out.push('\n');
+        }
+    }
+
+    if summary
+        .steps()
+        .iter()
+        .any(|result| !result.restored_windows().is_empty())
+    {
+        out.push_str("\n## Restored windows\n\n");
+        for result in summary
+            .steps()
+            .iter()
+            .filter(|result| !result.restored_windows().is_empty())
+        {
+            out.push_str(&format!(
+                "### {} (`{}`)\n\n",
+                escape_cell(result.name()),
+                result.id()
+            ));
+            for app in result.restored_windows() {
+                out.push_str("- ");
+                out.push_str(app);
+                out.push('\n');
+            }
+            out.push('\n');
+        }
+    }
+
+    if summary
+        .steps()
+        .iter()
+        .any(|result| !result.reopened_hidden().is_empty())
+    {
+        out.push_str("\n## Reopened hidden apps\n\n");
+        for result in summary
+            .steps()
+            .iter()
+            .filter(|result| !result.reopened_hidden().is_empty())
+        {
+            out.push_str(&format!(
+                "### {} (`{}`)\n\n",
+                escape_cell(result.name()),
+                result.id()
+            ));
+            for app in result.reopened_hidden() {
                 out.push_str("- ");
                 out.push_str(app);
                 out.push('\n');

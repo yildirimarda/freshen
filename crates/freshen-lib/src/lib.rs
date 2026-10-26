@@ -29,6 +29,8 @@ pub mod preflight;
 pub mod process;
 pub mod registry;
 pub mod report;
+pub mod reopened_hidden;
+pub mod restored_windows;
 pub mod restarted_services;
 pub mod runner;
 pub mod signals;

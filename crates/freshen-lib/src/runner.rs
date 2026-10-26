@@ -142,6 +142,8 @@ pub struct StepResult {
     skipped_items: Vec<String>,
     restarted_services: Vec<String>,
     left_running_apps: Vec<String>,
+    reopened_hidden: Vec<String>,
+    restored_windows: Vec<String>,
     skip_reason: Option<SkipReason>,
     error: Option<StepError>,
 }
@@ -158,6 +160,8 @@ impl StepResult {
             skipped_items: Vec::new(),
             restarted_services: Vec::new(),
             left_running_apps: Vec::new(),
+            reopened_hidden: Vec::new(),
+            restored_windows: Vec::new(),
             skip_reason: None,
             error: None,
         }
@@ -185,6 +189,16 @@ impl StepResult {
 
     fn with_left_running_apps(mut self, left_running_apps: Vec<String>) -> Self {
         self.left_running_apps = left_running_apps;
+        self
+    }
+
+    fn with_reopened_hidden(mut self, reopened_hidden: Vec<String>) -> Self {
+        self.reopened_hidden = reopened_hidden;
+        self
+    }
+
+    fn with_restored_windows(mut self, restored_windows: Vec<String>) -> Self {
+        self.restored_windows = restored_windows;
         self
     }
 
@@ -288,6 +302,18 @@ impl StepResult {
     #[must_use]
     pub fn left_running_apps(&self) -> &[String] {
         &self.left_running_apps
+    }
+
+    /// Apps that were reopened hidden, in order.
+    #[must_use]
+    pub fn reopened_hidden(&self) -> &[String] {
+        &self.reopened_hidden
+    }
+
+    /// Apps whose window was put back where it was, in order.
+    #[must_use]
+    pub fn restored_windows(&self) -> &[String] {
+        &self.restored_windows
     }
 
     /// Why the step was skipped, when it was.
@@ -517,6 +543,12 @@ impl fmt::Display for RunSummary {
             }
             for app in result.left_running_apps() {
                 writeln!(f, "          - left running (updating itself): {app}")?;
+            }
+            for app in result.reopened_hidden() {
+                writeln!(f, "          - reopened hidden: {app}")?;
+            }
+            for app in result.restored_windows() {
+                writeln!(f, "          - window put back: {app}")?;
             }
         }
 
@@ -955,6 +987,8 @@ fn run_step(
             let skipped_items = crate::skipped_items::take();
             let restarted_services = crate::restarted_services::take();
             let left_running_apps = crate::left_running_apps::take();
+            let reopened_hidden = crate::reopened_hidden::take();
+            let restored_windows = crate::restored_windows::take();
 
             let changes =
                 if result.status() == StepStatus::Interrupted || result.skip_reason().is_some() {
@@ -977,6 +1011,8 @@ fn run_step(
                 .with_skipped_items(skipped_items)
                 .with_restarted_services(restarted_services)
                 .with_left_running_apps(left_running_apps)
+                .with_reopened_hidden(reopened_hidden)
+                .with_restored_windows(restored_windows)
         }
         Err(_error) if interrupt() => StepResult::interrupted(step, started.elapsed()),
         Err(error) if error.is_registry_unreachable() => {

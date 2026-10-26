@@ -1499,6 +1499,185 @@ fn left_running_apps_are_named_in_the_json_and_markdown_reports() {
 
 #[cfg(unix)]
 #[test]
+fn reopened_hidden_apps_are_named_in_the_json_and_markdown_reports() {
+    // Separate instances so the stub state (e.g. emptied PS_STATE) from one
+    // binary run does not affect the other.
+    let (json_tools, _json_app, json_state) = app_tools(true);
+
+    let json_output = {
+        let mut command = json_tools.command();
+        command
+            .env("FRESHEN_BREW_INFO_JSON", CASK_INFO)
+            .env("FRESHEN_PS_STATE", &json_state)
+            .env("FRESHEN_APP_HIDDEN", "true")
+            .args(["--only", HOMEBREW_STEPS, "--yes", "--cleanup", "--json"]);
+        command
+            .output()
+            .unwrap_or_else(|e| panic!("failed to run freshen: {e}"))
+    };
+    assert!(
+        json_output.status.success(),
+        "stderr: {}",
+        stderr(&json_output)
+    );
+    let text = stdout(&json_output);
+    let report: serde_json::Value =
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("invalid JSON: {e}: {text}"));
+
+    let reopen_step = report["steps"]
+        .as_array()
+        .and_then(|steps| {
+            steps
+                .iter()
+                .find(|s| s["id"].as_str() == Some("brew-reopen"))
+        })
+        .unwrap_or_else(|| panic!("brew-reopen step missing: {report}"));
+
+    assert_eq!(
+        reopen_step["reopened_hidden"],
+        serde_json::json!(["com.example.firefox"]),
+        "JSON report: {report}\nfull JSON: {text}"
+    );
+
+    let (md_tools, _md_app, md_state) = app_tools(true);
+    let markdown_output = {
+        let mut command = md_tools.command();
+        command
+            .env("FRESHEN_BREW_INFO_JSON", CASK_INFO)
+            .env("FRESHEN_PS_STATE", &md_state)
+            .env("FRESHEN_APP_HIDDEN", "true")
+            .args(["--only", HOMEBREW_STEPS, "--yes", "--cleanup", "--markdown"]);
+        command
+            .output()
+            .unwrap_or_else(|e| panic!("failed to run freshen: {e}"))
+    };
+    assert!(
+        markdown_output.status.success(),
+        "stderr: {}",
+        stderr(&markdown_output)
+    );
+    let md_text = stdout(&markdown_output);
+    assert!(md_text.contains("## Reopened hidden apps"), "markdown missing section: {md_text}");
+    assert!(md_text.contains("- com.example.firefox"), "markdown missing item: {md_text}");
+
+    let (summary_tools, _summary_app, summary_state) = app_tools(true);
+    let summary_output = {
+        let mut command = summary_tools.command();
+        command
+            .env("FRESHEN_BREW_INFO_JSON", CASK_INFO)
+            .env("FRESHEN_PS_STATE", &summary_state)
+            .env("FRESHEN_APP_HIDDEN", "true")
+            .args(["--only", HOMEBREW_STEPS, "--yes", "--cleanup"]);
+        command
+            .output()
+            .unwrap_or_else(|e| panic!("failed to run freshen: {e}"))
+    };
+    assert!(
+        summary_output.status.success(),
+        "stderr: {}",
+        stderr(&summary_output)
+    );
+    let summary_text = stdout(&summary_output);
+    assert!(
+        summary_text.contains("reopened hidden: com.example.firefox"),
+        "summary: {summary_text}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn restored_windows_are_named_in_the_json_and_markdown_reports() {
+    // Separate instances so the stub state from one run does not affect the other.
+    let (json_tools, _json_app, json_state) = app_tools(true);
+
+    let json_output = {
+        let mut command = json_tools.command();
+        command
+            .env("FRESHEN_BREW_INFO_JSON", CASK_INFO)
+            .env("FRESHEN_PS_STATE", &json_state)
+            .env("FRESHEN_APP_HIDDEN", "false")
+            .env("FRESHEN_APP_WINDOW", "{10, 20}")
+            .env("FRESHEN_APP_WINDOW_SIZE", "{1440, 900}")
+            .args(["--only", HOMEBREW_STEPS, "--yes", "--cleanup", "--json"]);
+        command
+            .output()
+            .unwrap_or_else(|e| panic!("failed to run freshen: {e}"))
+    };
+    assert!(
+        json_output.status.success(),
+        "stderr: {}",
+        stderr(&json_output)
+    );
+    let text = stdout(&json_output);
+    let report: serde_json::Value =
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("invalid JSON: {e}: {text}"));
+
+    let reopen_step = report["steps"]
+        .as_array()
+        .and_then(|steps| {
+            steps
+                .iter()
+                .find(|s| s["id"].as_str() == Some("brew-reopen"))
+        })
+        .unwrap_or_else(|| panic!("brew-reopen step missing: {report}"));
+
+    assert_eq!(
+        reopen_step["restored_windows"],
+        serde_json::json!(["com.example.firefox"]),
+        "report: {report}"
+    );
+
+    let (md_tools, _md_app, md_state) = app_tools(true);
+    let markdown_output = {
+        let mut command = md_tools.command();
+        command
+            .env("FRESHEN_BREW_INFO_JSON", CASK_INFO)
+            .env("FRESHEN_PS_STATE", &md_state)
+            .env("FRESHEN_APP_HIDDEN", "false")
+            .env("FRESHEN_APP_WINDOW", "{10, 20}")
+            .env("FRESHEN_APP_WINDOW_SIZE", "{1440, 900}")
+            .args(["--only", HOMEBREW_STEPS, "--yes", "--cleanup", "--markdown"]);
+        command
+            .output()
+            .unwrap_or_else(|e| panic!("failed to run freshen: {e}"))
+    };
+    assert!(
+        markdown_output.status.success(),
+        "stderr: {}",
+        stderr(&markdown_output)
+    );
+    let md_text = stdout(&markdown_output);
+    assert!(md_text.contains("## Restored windows"), "markdown: {md_text}");
+    assert!(md_text.contains("- com.example.firefox"), "markdown: {md_text}");
+
+    let (summary_tools, _summary_app, summary_state) = app_tools(true);
+    let summary_output = {
+        let mut command = summary_tools.command();
+        command
+            .env("FRESHEN_BREW_INFO_JSON", CASK_INFO)
+            .env("FRESHEN_PS_STATE", &summary_state)
+            .env("FRESHEN_APP_HIDDEN", "false")
+            .env("FRESHEN_APP_WINDOW", "{10, 20}")
+            .env("FRESHEN_APP_WINDOW_SIZE", "{1440, 900}")
+            .args(["--only", HOMEBREW_STEPS, "--yes", "--cleanup"]);
+        command
+            .output()
+            .unwrap_or_else(|e| panic!("failed to run freshen: {e}"))
+    };
+    assert!(
+        summary_output.status.success(),
+        "stderr: {}",
+        stderr(&summary_output)
+    );
+    let summary_text = stdout(&summary_output);
+    assert!(
+        summary_text.contains("window put back: com.example.firefox"),
+        "summary: {summary_text}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn an_app_that_finishes_updating_is_quit_after_freshen_waited_for_it() {
     let (tools, state, updater) = updating_app_tools(3);
 
