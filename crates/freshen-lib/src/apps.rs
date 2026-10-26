@@ -648,8 +648,10 @@ pub trait AppSystem: Send + Sync {
 
     /// Returns `true` when the bundle is an agent app without a Dock icon.
     ///
-    /// A menu-bar app sets `LSUIElement` in its `Info.plist`, so macOS shows
-    /// it in the menu bar instead of in the Dock.
+    /// A menu-bar app sets `LSUIElement` in its `Info.plist`, and an app
+    /// that sets `LSBackgroundOnly` has no icon at all. Both are shown
+    /// without a Dock icon, so macOS does not address them with an Apple
+    /// event.
     fn is_menu_bar_app(&self, _app: &Path) -> bool {
         false
     }
@@ -752,9 +754,9 @@ pub fn self_updater_from_bundle(app: &Path) -> Option<SelfUpdater> {
 
 /// Returns `true` when the bundle is an agent app without a Dock icon.
 ///
-/// `LSUIElement` is the key that turns an app into a menu-bar app: macOS
-/// shows it in the menu bar instead of in the Dock. The value is the output
-/// of `defaults read <bundle>/Contents/Info LSUIElement`.
+/// `LSUIElement` turns an app into a menu-bar app, and `LSBackgroundOnly`
+/// makes it run without any Dock icon at all. Both values are read from the
+/// bundle's `Info.plist` through `defaults read`.
 #[must_use]
 pub fn is_menu_bar_app_from_info(output: &str) -> bool {
     matches!(output.trim().to_ascii_lowercase().as_str(), "1" | "true")
@@ -954,8 +956,9 @@ fn app_name(path: &Path) -> String {
 
 /// How macOS shows the app in the given bundle.
 ///
-/// An app that sets `LSUIElement` in its `Info.plist` is an agent that lives
-/// in the menu bar, so it has no icon in the Dock.
+/// An app that sets `LSUIElement` or `LSBackgroundOnly` in its `Info.plist`
+/// is an agent that lives without a Dock icon (menu bar or background), so
+/// it has no icon in the Dock.
 fn app_kind<S: AppSystem + ?Sized>(system: &S, path: &Path) -> AppKind {
     if system.is_menu_bar_app(path) {
         AppKind::MenuBar
@@ -1373,13 +1376,26 @@ fn bundle_id_command(app: &Path) -> CommandSpec {
 
 /// The command that reads whether the bundle is an agent app.
 ///
-/// `LSUIElement` is set by the apps that live in the menu bar, so macOS
-/// shows no icon for them in the Dock.
+/// `LSUIElement` is set by the apps that live in the menu bar, and
+/// `LSBackgroundOnly` by apps that run without any Dock icon at all. Both make
+/// macOS show no icon for the app in the Dock.
 fn menu_bar_command(app: &Path) -> CommandSpec {
     CommandSpec::new("defaults")
         .arg("read")
         .arg(app.join("Contents/Info"))
         .arg("LSUIElement")
+        .neutral_locale()
+}
+
+/// The command that reads `LSBackgroundOnly` from the bundle's `Info.plist`.
+///
+/// An app that sets `LSBackgroundOnly` has no icon at all, so it is treated
+/// like a menu-bar app: ended instead of quit through an Apple event.
+fn background_only_command(app: &Path) -> CommandSpec {
+    CommandSpec::new("defaults")
+        .arg("read")
+        .arg(app.join("Contents/Info"))
+        .arg("LSBackgroundOnly")
         .neutral_locale()
 }
 
@@ -1604,7 +1620,14 @@ impl AppSystem for MacAppSystem {
     }
 
     fn is_menu_bar_app(&self, app: &Path) -> bool {
-        menu_bar_command(app)
+        let ui_element = menu_bar_command(app)
+            .run()
+            .ok()
+            .is_some_and(|output| is_menu_bar_app_from_info(output.stdout()));
+        if ui_element {
+            return true;
+        }
+        background_only_command(app)
             .run()
             .ok()
             .is_some_and(|output| is_menu_bar_app_from_info(output.stdout()))
@@ -1771,16 +1794,16 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        automation_denied_message, bundle_id_command, electron_update_pending, find_running_apps,
-        find_running_cask_apps, hidden_command, hidden_from_script, is_automation_denied,
-        is_menu_bar_app_from_info, kill_command, login_item_helpers_in, menu_bar_command,
-        open_command, open_path_command, pid_list_command, pids_from_apple_script,
-        pids_from_processes, process_list_command, quit_apps, quit_choice, quit_command,
-        reopen_apps, restore_window_command, running_updater, self_updater_from_bundle,
-        terminate_command, window_positions_command, window_sizes_command,
-        window_state_from_script, AppKind, AppSystem, QuitChoice, QuitOutcome, QuitPolicy,
-        Relaunch, Reopen, SelfUpdater, SessionState, UpdateState, WindowState,
-        SESSION_STATE_TIMEOUT,
+        automation_denied_message, background_only_command, bundle_id_command,
+        electron_update_pending, find_running_apps, find_running_cask_apps, hidden_command,
+        hidden_from_script, is_automation_denied, is_menu_bar_app_from_info, kill_command,
+        login_item_helpers_in, menu_bar_command, open_command, open_path_command, pid_list_command,
+        pids_from_apple_script, pids_from_processes, process_list_command, quit_apps, quit_choice,
+        quit_command, reopen_apps, restore_window_command, running_updater,
+        self_updater_from_bundle, terminate_command, window_positions_command,
+        window_sizes_command, window_state_from_script, AppKind, AppSystem, QuitChoice,
+        QuitOutcome, QuitPolicy, Relaunch, Reopen, SelfUpdater, SessionState, UpdateState,
+        WindowState, SESSION_STATE_TIMEOUT,
     };
     use crate::policy::AppLists;
 
@@ -1845,6 +1868,12 @@ mod tests {
 
         /// The app lives in the menu bar, so it has no icon in the Dock.
         fn with_menu_bar_app(self, app: &str) -> Self {
+            lock(&self.menu_bar_apps).insert(PathBuf::from(app), ());
+            self
+        }
+
+        /// The app runs without any Dock icon (`LSBackgroundOnly`).
+        fn with_background_only_app(self, app: &str) -> Self {
             lock(&self.menu_bar_apps).insert(PathBuf::from(app), ());
             self
         }
@@ -3099,6 +3128,16 @@ mod tests {
             ]
         );
         assert_eq!(
+            transcript(&background_only_command(std::path::Path::new(
+                "/Applications/Background.app"
+            ))),
+            [
+                "read",
+                "/Applications/Background.app/Contents/Info",
+                "LSBackgroundOnly"
+            ]
+        );
+        assert_eq!(
             transcript(&terminate_command(&[10, 11])),
             ["-TERM", "10", "11"]
         );
@@ -3168,6 +3207,31 @@ mod tests {
         assert_eq!(lock(&system.terminated).as_slice(), [vec![10]]);
         assert_eq!(bundle_ids(&reopen), ["com.example.menubar"]);
         assert!(!running(&system, "/Applications/MenuBar.app"));
+    }
+
+    #[test]
+    fn a_background_only_app_is_ended_instead_of_being_quit_through_an_apple_event() {
+        let system = FakeSystem::new()
+            .with_app("/Applications/Agent.app", "com.example.agent", &[10])
+            .with_background_only_app("/Applications/Agent.app");
+        let scan = find_running_apps(
+            &system,
+            &installed(&["/Applications/Agent.app"]),
+            None,
+            &AppLists::new(),
+        );
+
+        assert_eq!(scan.running()[0].kind(), AppKind::MenuBar);
+
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(false)).0;
+
+        assert!(
+            lock(&system.quit_calls).is_empty(),
+            "the app was quit through an Apple event"
+        );
+        assert_eq!(lock(&system.terminated).as_slice(), [vec![10]]);
+        assert_eq!(bundle_ids(&reopen), ["com.example.agent"]);
+        assert!(!running(&system, "/Applications/Agent.app"));
     }
 
     #[test]
