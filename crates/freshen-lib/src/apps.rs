@@ -688,7 +688,7 @@ pub trait AppSystem: Send + Sync {
     /// the app can come back the way it was after the upgrade. An
     /// implementation that cannot read the state reports a visible app
     /// without a window.
-    fn session_state(&self, _app: Option<&Path>, _bundle_id: &str) -> SessionState {
+    fn session_state(&self, _app: Option<&Path>, _bundle_id: &str, _name: &str) -> SessionState {
         SessionState::visible()
     }
 
@@ -988,7 +988,7 @@ pub fn quit_apps<S: AppSystem + ?Sized>(
         }
         human!("Quitting: {}", app.name());
         let session = if app.kind().has_dock_icon() {
-            system.session_state(app.path(), app.bundle_id())
+            system.session_state(app.path(), app.bundle_id(), app.name())
         } else {
             // An app without a Dock icon has no window to put back, and
             // asking for its state would need a permission macOS only asks
@@ -1501,26 +1501,6 @@ impl MacAppSystem {
             .unwrap_or_default()
     }
 
-    /// Whether the app is hidden right now.
-    ///
-    /// A state that cannot be read (a denied permission, or an app that does
-    /// not answer) counts as visible, so the app is reopened as it was before
-    /// the upgrade rather than staying hidden by accident.
-    fn is_hidden(&self, bundle_id: &str) -> bool {
-        hidden_command(bundle_id)
-            .run()
-            .ok()
-            .and_then(|output| hidden_from_script(output.stdout()))
-            .unwrap_or(false)
-    }
-
-    /// Where the window of the app is right now.
-    fn window_state(&self, bundle_id: &str) -> Option<WindowState> {
-        window_state_command(bundle_id)
-            .run()
-            .ok()
-            .and_then(|output| window_state_from_script(output.stdout()))
-    }
 }
 
 impl AppSystem for MacAppSystem {
@@ -1598,14 +1578,56 @@ impl AppSystem for MacAppSystem {
         }
     }
 
-    fn session_state(&self, _app: Option<&Path>, bundle_id: &str) -> SessionState {
+    fn session_state(&self, _app: Option<&Path>, bundle_id: &str, name: &str) -> SessionState {
         let mut session = SessionState::visible();
-        if self.is_hidden(bundle_id) {
-            session = SessionState::hidden();
+        let mut denied = false;
+
+        let hidden_result = hidden_command(bundle_id).run();
+        match hidden_result {
+            Ok(output) => {
+                if let Some(hidden) = hidden_from_script(output.stdout()) {
+                    if hidden {
+                        session = SessionState::hidden();
+                    }
+                }
+            }
+            Err(error) => {
+                let text = error
+                    .output()
+                    .map(|out| format!("{}{}", out.stdout(), out.stderr()))
+                    .unwrap_or_default();
+                if is_automation_denied(&text) {
+                    denied = true;
+                }
+            }
         }
-        if let Some(window) = self.window_state(bundle_id) {
-            session = session.with_window(window);
+
+        let window_result = window_state_command(bundle_id).run();
+        match window_result {
+            Ok(output) => {
+                if let Some(window) = window_state_from_script(output.stdout()) {
+                    session = session.with_window(window);
+                }
+            }
+            Err(error) => {
+                let text = error
+                    .output()
+                    .map(|out| format!("{}{}", out.stdout(), out.stderr()))
+                    .unwrap_or_default();
+                if is_automation_denied(&text) {
+                    denied = true;
+                }
+            }
         }
+
+        if denied {
+            warn(&format!(
+                "The hidden state and the window place of {name} could not be read: \
+                 macOS denied the permission to control System Events (error -1743). \
+                 The app was reopened in the background (visible) instead of hidden."
+            ));
+        }
+
         session
     }
 
@@ -1861,7 +1883,7 @@ mod tests {
             true
         }
 
-        fn session_state(&self, _app: Option<&std::path::Path>, bundle_id: &str) -> SessionState {
+        fn session_state(&self, _app: Option<&std::path::Path>, bundle_id: &str, _name: &str) -> SessionState {
             lock(&self.sessions)
                 .get(bundle_id)
                 .copied()
