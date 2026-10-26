@@ -1794,16 +1794,16 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        automation_denied_message, bundle_id_command, electron_update_pending, find_running_apps,
-        find_running_cask_apps, hidden_command, hidden_from_script, is_automation_denied,
-        background_only_command, is_menu_bar_app_from_info, kill_command, login_item_helpers_in, menu_bar_command,
-        open_command, open_path_command, pid_list_command, pids_from_apple_script,
-        pids_from_processes, process_list_command, quit_apps, quit_choice, quit_command,
-        reopen_apps, restore_window_command, running_updater, self_updater_from_bundle,
-        terminate_command, window_positions_command, window_sizes_command,
-        window_state_from_script, AppKind, AppSystem, QuitChoice, QuitOutcome, QuitPolicy,
-        Relaunch, Reopen, SelfUpdater, SessionState, UpdateState, WindowState,
-        SESSION_STATE_TIMEOUT,
+        automation_denied_message, background_only_command, bundle_id_command,
+        electron_update_pending, find_running_apps, find_running_cask_apps, hidden_command,
+        hidden_from_script, is_automation_denied, is_menu_bar_app_from_info, kill_command,
+        login_item_helpers_in, menu_bar_command, open_command, open_path_command, pid_list_command,
+        pids_from_apple_script, pids_from_processes, process_list_command, quit_apps, quit_choice,
+        quit_command, reopen_apps, restore_window_command, running_updater,
+        self_updater_from_bundle, terminate_command, window_positions_command,
+        window_sizes_command, window_state_from_script, AppKind, AppSystem, QuitChoice,
+        QuitOutcome, QuitPolicy, Relaunch, Reopen, SelfUpdater, SessionState, UpdateState,
+        WindowState, SESSION_STATE_TIMEOUT,
     };
     use crate::policy::AppLists;
 

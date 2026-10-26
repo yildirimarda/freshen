@@ -106,6 +106,7 @@ fn full_app_transcript(app_path: &std::path::Path) -> Vec<String> {
     ));
     t.push("ps -axo command=".to_string());
     t.push(format!("defaults read {} LSUIElement", info.display()));
+    t.push(format!("defaults read {} LSBackgroundOnly", info.display()));
     t.push(
         "osascript -e tell application \"System Events\" -e set appProcess to first process whose bundle identifier is \"com.example.firefox\" -e get value of attribute \"AXHidden\" of appProcess -e end tell".to_string()
     );
@@ -133,6 +134,7 @@ fn app_pre_upgrade_steps(app_path: &std::path::Path) -> Vec<String> {
         format!("defaults read {} CFBundleIdentifier", info.display()),
         "ps -axo command=".to_string(),
         format!("defaults read {} LSUIElement", info.display()),
+        format!("defaults read {} LSBackgroundOnly", info.display()),
     ]
 }
 
