@@ -38,6 +38,25 @@ const CASK_INFO_WITHOUT_APP_ARTIFACTS: &str = r#"{
         }
     ]
 }"#;
+/// A cask that installs a LaunchAgent: a login item without an app bundle,
+/// named only by the `launchctl` label in its `uninstall` stanza.
+#[cfg(unix)]
+const CASK_INFO_WITH_LAUNCH_AGENT: &str = r#"{
+    "casks": [
+        {
+            "token": "launch-agent",
+            "artifacts": [
+                {
+                    "uninstall": [
+                        {
+                            "launchctl": "com.example.agent"
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}"#;
 const HOMEBREW_STEPS: &str =
     "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-reopen";
 
@@ -961,6 +980,111 @@ esac"#,
     assert!(
         text.contains("Opening: com.example.menubar"),
         "output: {text}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn stops_a_launch_agent_before_the_upgrade_and_starts_it_afterwards() {
+    let tools = StubTools::new(&["brew", "launchctl"]);
+    tools.set_script(
+        "brew",
+        r#"case "$*" in
+  "outdated --formula --quiet")
+    printf 'jq\n'
+    ;;
+  "outdated --cask --greedy --quiet")
+    printf 'launch-agent\n'
+    ;;
+  "info --cask --json=v2 launch-agent")
+    printf '%s\n' "$FRESHEN_BREW_INFO_JSON"
+    ;;
+esac"#,
+    );
+
+    let output = tools
+        .command()
+        .env("FRESHEN_BREW_INFO_JSON", CASK_INFO_WITH_LAUNCH_AGENT)
+        .env("FRESHEN_LAUNCHD_UID", "501")
+        .args(["--only", HOMEBREW_STEPS, "--yes", "--cleanup"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    let stop = calls
+        .iter()
+        .position(|call| call == "launchctl stop gui/501/com.example.agent")
+        .unwrap_or_else(|| panic!("the LaunchAgent was not stopped: {calls:?}"));
+    let upgrade = calls
+        .iter()
+        .position(|call| call == "brew upgrade --cask")
+        .unwrap_or_else(|| panic!("the cask was not upgraded: {calls:?}"));
+    let kickstart = calls
+        .iter()
+        .position(|call| call == "launchctl kickstart -k gui/501/com.example.agent")
+        .unwrap_or_else(|| panic!("the LaunchAgent was not started again: {calls:?}"));
+
+    assert!(
+        stop < upgrade,
+        "the LaunchAgent was not stopped before the upgrade: {calls:?}"
+    );
+    assert!(
+        upgrade < kickstart,
+        "the LaunchAgent was not started after the upgrade: {calls:?}"
+    );
+
+    let text = stdout(&output);
+    assert!(
+        text.contains("Stopping: com.example.agent (LaunchAgent)"),
+        "output: {text}"
+    );
+    assert!(
+        text.contains("Restarting LaunchAgents: com.example.agent"),
+        "output: {text}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn starts_the_launch_agent_again_when_the_cask_upgrade_fails() {
+    let tools = StubTools::new(&["brew", "launchctl"]);
+    tools.set_script(
+        "brew",
+        r#"case "$*" in
+  "outdated --formula --quiet")
+    printf 'jq\n'
+    ;;
+  "outdated --cask --greedy --quiet")
+    printf 'launch-agent\n'
+    ;;
+  "info --cask --json=v2 launch-agent")
+    printf '%s\n' "$FRESHEN_BREW_INFO_JSON"
+    ;;
+  "upgrade --cask")
+    printf 'Error: cask upgrade failed\n' >&2
+    exit 1
+    ;;
+esac"#,
+    );
+
+    let output = tools
+        .command()
+        .env("FRESHEN_BREW_INFO_JSON", CASK_INFO_WITH_LAUNCH_AGENT)
+        .env("FRESHEN_LAUNCHD_UID", "501")
+        .args(["--only", HOMEBREW_STEPS, "--yes", "--cleanup"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(!output.status.success());
+    let calls = tools.step_calls();
+    assert!(
+        calls.contains(&"launchctl stop gui/501/com.example.agent".to_owned()),
+        "the LaunchAgent was not stopped: {calls:?}"
+    );
+    assert!(
+        calls.contains(&"launchctl kickstart -k gui/501/com.example.agent".to_owned()),
+        "the LaunchAgent was not started again after the failed upgrade: {calls:?}"
     );
 }
 
