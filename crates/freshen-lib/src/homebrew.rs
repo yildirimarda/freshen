@@ -316,6 +316,59 @@ impl ServiceQueue {
     }
 }
 
+/// LaunchAgents that were stopped before their cask was upgraded and still
+/// need to be started again.
+#[derive(Clone, Default)]
+struct LaunchAgentQueue(Arc<Mutex<Vec<String>>>);
+
+impl LaunchAgentQueue {
+    fn push(&self, label: String) {
+        let mut queued = lock(&self.0);
+        if !queued.contains(&label) {
+            queued.push(label);
+        }
+    }
+
+    fn labels(&self) -> Vec<String> {
+        lock(&self.0).clone()
+    }
+
+    fn remove(&self, label: &str) {
+        lock(&self.0).retain(|queued| queued != label);
+    }
+}
+
+/// The launchd domain a LaunchAgent installed by a cask runs in.
+///
+/// A per-user LaunchAgent is loaded in the `gui/<uid>` domain. The uid is read
+/// from the effective user; `FRESHEN_LAUNCHD_UID` overrides it so a test can
+/// name the same domain on every machine.
+fn launchd_domain() -> Option<String> {
+    if let Some(uid) = env::var("FRESHEN_LAUNCHD_UID")
+        .ok()
+        .filter(|uid| !uid.is_empty())
+    {
+        return Some(format!("gui/{uid}"));
+    }
+
+    #[cfg(unix)]
+    {
+        Some(format!("gui/{}", nix::unistd::Uid::effective().as_raw()))
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
+/// The service target `launchctl` uses for a LaunchAgent label.
+fn launch_agent_target(label: &str) -> String {
+    match launchd_domain() {
+        Some(domain) => format!("{domain}/{label}"),
+        None => label.to_owned(),
+    }
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,
@@ -373,6 +426,7 @@ pub struct CaskInfo {
     token: Option<String>,
     apps: Vec<String>,
     quit_bundle_ids: Vec<String>,
+    launch_agents: Vec<String>,
     administrator: bool,
     version: Option<String>,
     auto_updates: bool,
@@ -398,6 +452,15 @@ impl CaskInfo {
     #[must_use]
     pub fn quit_bundle_ids(&self) -> &[String] {
         &self.quit_bundle_ids
+    }
+
+    /// The LaunchAgent labels the cask's `uninstall` stanza names.
+    ///
+    /// A cask that installs a LaunchAgent has no `.app` bundle to quit, so the
+    /// agent is stopped through `launchctl` instead.
+    #[must_use]
+    pub fn launch_agents(&self) -> &[String] {
+        &self.launch_agents
     }
 
     /// Returns `true` when the cask asks for an administrator password.
@@ -542,6 +605,10 @@ fn cask_info(cask: &Value) -> CaskInfo {
             cask,
             artifacts.map_or(&[], |artifacts| artifacts.as_slice()),
         ),
+        launch_agents: uninstall_launch_agents(
+            cask,
+            artifacts.map_or(&[], |artifacts| artifacts.as_slice()),
+        ),
         administrator: artifacts
             .is_some_and(|artifacts| artifacts.iter().any(artifact_needs_administrator)),
         version: cask
@@ -619,6 +686,66 @@ fn uninstall_quit_bundle_ids(cask: &Value, artifacts: &[Value]) -> Vec<String> {
     }
 
     bundle_ids
+}
+
+/// The LaunchAgent labels the cask's `uninstall` stanza names.
+///
+/// A cask that installs a LaunchAgent has no `.app` bundle, so the agent is
+/// stopped with `launchctl` before the upgrade and started again afterwards.
+fn uninstall_launch_agents(cask: &Value, artifacts: &[Value]) -> Vec<String> {
+    let mut labels = Vec::new();
+
+    for artifact in artifacts {
+        if let Some(uninstall) = artifact.get("uninstall") {
+            collect_launch_agent_labels(uninstall, &mut labels);
+        }
+    }
+    if let Some(uninstall) = cask.get("uninstall") {
+        collect_launch_agent_labels(uninstall, &mut labels);
+    }
+
+    labels
+}
+
+fn collect_launch_agent_labels(uninstall: &Value, labels: &mut Vec<String>) {
+    match uninstall {
+        Value::Array(items) => {
+            for item in items {
+                if let Some(launchctl) = item.get("launchctl") {
+                    push_launch_agent_labels(launchctl, labels);
+                }
+            }
+        }
+        Value::Object(_) => {
+            if let Some(launchctl) = uninstall.get("launchctl") {
+                push_launch_agent_labels(launchctl, labels);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn push_launch_agent_labels(value: &Value, labels: &mut Vec<String>) {
+    match value {
+        Value::String(label) => push_unique_label(label, labels),
+        Value::Array(items) => {
+            for item in items {
+                push_launch_agent_labels(item, labels);
+            }
+        }
+        Value::Object(fields) => {
+            if let Some(label) = fields.get("label").and_then(Value::as_str) {
+                push_unique_label(label, labels);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn push_unique_label(label: &str, labels: &mut Vec<String>) {
+    if !label.is_empty() && !labels.iter().any(|known| known == label) {
+        labels.push(label.to_owned());
+    }
 }
 
 fn collect_quit_bundle_ids(uninstall: &Value, bundle_ids: &mut Vec<String>) {
@@ -1468,6 +1595,7 @@ impl Step for ServicesStep {
 
 struct CasksStep {
     reopen: ReopenQueue,
+    launch_agents: LaunchAgentQueue,
     system: Arc<dyn AppSystem>,
     interactive: bool,
 }
@@ -1540,6 +1668,19 @@ fn quit_bundle_ids_of(metadata: &CaskMetadata, casks: &[String]) -> Vec<String> 
         .collect()
 }
 
+/// The LaunchAgent labels the given casks install.
+fn launch_agents_of(metadata: &CaskMetadata, casks: &[String]) -> Vec<String> {
+    metadata
+        .casks()
+        .iter()
+        .filter(|cask| {
+            cask.token()
+                .is_some_and(|token| casks.iter().any(|name| name == token))
+        })
+        .flat_map(|cask| cask.launch_agents().iter().cloned())
+        .collect()
+}
+
 /// The command that reads the metadata of the given casks.
 fn cask_info_command(install: &BrewInstall, casks: &[String]) -> CommandSpec {
     let mut info = install
@@ -1557,8 +1698,58 @@ impl CasksStep {
     fn new(reopen: ReopenQueue) -> Self {
         Self {
             reopen,
+            launch_agents: LaunchAgentQueue::default(),
             system: Arc::new(MacAppSystem),
             interactive: crate::system::terminal_is_interactive(),
+        }
+    }
+
+    /// Stops the LaunchAgents of the selected casks before their upgrade.
+    ///
+    /// An agent that was not loaded cannot be stopped, so it is not queued for
+    /// a restart either: kicking it on afterwards would start something the
+    /// user had stopped.
+    fn stop_launch_agents(&self, labels: &[String]) {
+        for label in labels {
+            let target = launch_agent_target(label);
+            match CommandSpec::new("launchctl")
+                .args(["stop", target.as_str()])
+                .run()
+            {
+                Ok(_) => {
+                    human!("Stopping: {label} (LaunchAgent)");
+                    self.launch_agents.push(label.clone());
+                }
+                Err(error) => {
+                    eprintln!("freshen: could not stop LaunchAgent {label}: {error}");
+                }
+            }
+        }
+    }
+
+    /// Starts the LaunchAgents that were stopped again.
+    fn start_launch_agents(&self, message: &str) -> Result<(), StepError> {
+        let labels = self.launch_agents.labels();
+        if labels.is_empty() {
+            return Ok(());
+        }
+
+        human!("{message}: {}", labels.join(" "));
+        let mut failures = Vec::new();
+        for label in labels {
+            let target = launch_agent_target(&label);
+            match CommandSpec::new("launchctl")
+                .args(["kickstart", "-k", target.as_str()])
+                .run()
+            {
+                Ok(_) => self.launch_agents.remove(&label),
+                Err(error) => failures.push(error),
+            }
+        }
+
+        match failures.into_iter().next() {
+            Some(error) => Err(StepError::run_from_process(CASKS, &error)),
+            None => Ok(()),
         }
     }
 
@@ -1626,6 +1817,7 @@ impl CasksStep {
         let mut selected = casks.clone();
         let mut needs_greedy = true;
         let mut skipped_update_apps = Vec::new();
+        let mut launch_agents = Vec::new();
         match cask_info_command(install, &casks).run() {
             Ok(output) => match cask_metadata(output.stdout()) {
                 Ok(metadata) => {
@@ -1678,6 +1870,8 @@ impl CasksStep {
                             }
                         }
                     }
+
+                    launch_agents = launch_agents_of(&metadata, &selected);
                 }
                 Err(error) => eprintln!("freshen: could not read cask metadata: {error}"),
             },
@@ -1699,6 +1893,8 @@ impl CasksStep {
             return Ok(());
         }
 
+        self.stop_launch_agents(&launch_agents);
+
         let mut spec = install.command().args(["upgrade", "--cask"]);
         if needs_greedy {
             spec = spec.arg("--greedy");
@@ -1709,13 +1905,23 @@ impl CasksStep {
             }
         }
 
-        run_brew(CASKS, spec).map(|_| ())
+        let upgrade = run_brew(CASKS, spec).map(|_| ());
+        if crate::signals::requested() {
+            return upgrade;
+        }
+
+        let restart = self.start_launch_agents("Restarting LaunchAgents");
+        match (upgrade, restart) {
+            (Err(error), _) | (Ok(()), Err(error)) => Err(error),
+            (Ok(()), Ok(())) => Ok(()),
+        }
     }
 
     #[cfg(test)]
     fn with_system(reopen: ReopenQueue, system: Arc<dyn AppSystem>) -> Self {
         Self {
             reopen,
+            launch_agents: LaunchAgentQueue::default(),
             system,
             interactive: false,
         }
@@ -1935,13 +2141,14 @@ impl Step for CasksStep {
     }
 
     fn restore(&self) -> Result<(), StepError> {
+        let agents = self.start_launch_agents("Restoring LaunchAgents");
         reopen_queued(
             &self.reopen,
             self.system.as_ref(),
             "Restoring apps that were quit",
             false,
         );
-        Ok(())
+        agents
     }
 
     fn prerequisites(&self) -> &'static [StepId] {
@@ -2466,11 +2673,11 @@ mod tests {
     use super::brew_installs_from;
     use super::{
         administrator_skip_message, apps_of, brewfile_in, cask_app_artifacts, cask_metadata,
-        command_line_tools_failure, install_arch, installed_app_paths, is_pinned, own_bundle_id,
-        parse_bundle_cleanup, parse_doctor_findings, parse_outdated, quit_bundle_ids_of, quit_plan,
-        register, running_services, services_for_formulae, BundleCleanupStep, BundlePackage,
-        CaskError, CasksStep, DoctorFinding, ReopenQueue, ReopenStep, CASKS, FORMULAE, REOPEN,
-        SERVICES,
+        command_line_tools_failure, install_arch, installed_app_paths, is_pinned, launch_agents_of,
+        own_bundle_id, parse_bundle_cleanup, parse_doctor_findings, parse_outdated,
+        quit_bundle_ids_of, quit_plan, register, running_services, services_for_formulae,
+        BundleCleanupStep, BundlePackage, CaskError, CasksStep, DoctorFinding, ReopenQueue,
+        ReopenStep, CASKS, FORMULAE, REOPEN, SERVICES,
     };
     use crate::apps::{AppScan, AppSystem, QuitOutcome, Reopen, RunningApp, SessionState};
     use crate::platform::Platform;
@@ -2973,6 +3180,19 @@ mod tests {
                     {"uninstall": [{"signal": ["TERM", "com.example.other"]}]},
                     {"pkg": ["Other.pkg"]}
                 ]
+            },
+            {
+                "token": "agent-only",
+                "artifacts": [
+                    {"uninstall": [{"launchctl": "com.example.agent"}]}
+                ]
+            },
+            {
+                "token": "agents",
+                "uninstall": [{"launchctl": "com.example.three"}],
+                "artifacts": [
+                    {"uninstall": [{"launchctl": ["com.example.one", "com.example.two"]}]}
+                ]
             }
         ]
     }"#;
@@ -2999,6 +3219,45 @@ mod tests {
             ["com.example.toplevel"]
         );
         assert_eq!(metadata.casks()[4].quit_bundle_ids(), ["com.example.other"]);
+    }
+
+    #[test]
+    fn reads_the_launch_agents_from_the_uninstall_stanza() {
+        let metadata = cask_metadata(CASKS_WITH_UNINSTALL_QUIT)
+            .unwrap_or_else(|error| panic!("transcript should parse: {error}"));
+
+        assert_eq!(metadata.casks()[0].launch_agents(), ["com.example.helper"]);
+        assert_eq!(metadata.casks()[5].launch_agents(), ["com.example.agent"]);
+        assert_eq!(
+            metadata.casks()[6].launch_agents(),
+            ["com.example.one", "com.example.two", "com.example.three"]
+        );
+    }
+
+    #[test]
+    fn only_the_launch_agents_of_the_selected_casks_are_collected() {
+        let metadata = cask_metadata(CASKS_WITH_UNINSTALL_QUIT)
+            .unwrap_or_else(|error| panic!("transcript should parse: {error}"));
+
+        let labels = launch_agents_of(&metadata, &["menu-bar".to_owned(), "agents".to_owned()]);
+
+        assert_eq!(
+            labels,
+            [
+                "com.example.helper",
+                "com.example.one",
+                "com.example.two",
+                "com.example.three"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_cask_without_an_uninstall_stanza_has_no_launch_agents() {
+        let metadata = cask_metadata(CASKS_WITH_ADMINISTRATOR)
+            .unwrap_or_else(|error| panic!("transcript should parse: {error}"));
+
+        assert!(metadata.casks()[1].launch_agents().is_empty());
     }
 
     #[test]
