@@ -715,6 +715,23 @@ pub trait AppSystem: Send + Sync {
     }
 }
 
+/// The cache directory of an Electron app, by its bundle id.
+fn electron_cache_dir(bundle_id: &str) -> Option<PathBuf> {
+    let home = env::var_os("HOME")?;
+    Some(PathBuf::from(home).join("Library/Caches").join(bundle_id))
+}
+
+/// Returns `true` when an Electron update was downloaded but not applied yet.
+///
+/// A downloaded update creates a `pending` directory in the app's cache,
+/// which means the app is updating itself.
+#[must_use]
+pub fn electron_update_pending(bundle_id: &str) -> bool {
+    electron_cache_dir(bundle_id)
+        .map(|cache_dir| cache_dir.join("pending"))
+        .is_some_and(|pending_dir| pending_dir.is_dir())
+}
+
 /// The updater an app uses, detected from the files in its bundle.
 ///
 /// Sparkle apps ship the framework in `Contents/Frameworks`, and an Electron
@@ -1621,6 +1638,14 @@ impl AppSystem for MacAppSystem {
             return UpdateState::none();
         }
 
+        // A downloaded Electron update that has not been applied yet.
+        if (updater == Some(SelfUpdater::Electron) || updater.is_none())
+            && !bundle_id.is_empty()
+            && electron_update_pending(bundle_id)
+        {
+            return UpdateState::updating(SelfUpdater::Electron);
+        }
+
         match running_updater(&self.process_list(), app, bundle_id) {
             Some(running) => UpdateState::updating(running),
             None => match updater {
@@ -1639,15 +1664,15 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        automation_denied_message, bundle_id_command, find_running_apps, find_running_cask_apps,
-        hidden_command, hidden_from_script, is_automation_denied, is_menu_bar_app_from_info,
-        kill_command, login_item_helpers_in, menu_bar_command, open_command, open_path_command,
-        pid_list_command, pids_from_apple_script, pids_from_processes, process_list_command,
-        quit_apps, quit_choice, quit_command, reopen_apps, restore_window_command, running_updater,
-        self_updater_from_bundle, terminate_command, window_state_command,
-        window_state_from_script, AppKind, AppSystem, QuitChoice, QuitOutcome, QuitPolicy,
-        Relaunch, Reopen, SelfUpdater, SessionState, UpdateState, WindowState,
-        SESSION_STATE_TIMEOUT,
+        automation_denied_message, bundle_id_command, electron_update_pending, find_running_apps,
+        find_running_cask_apps, hidden_command, hidden_from_script, is_automation_denied,
+        is_menu_bar_app_from_info, kill_command, login_item_helpers_in, menu_bar_command,
+        open_command, open_path_command, pid_list_command, pids_from_apple_script,
+        pids_from_processes, process_list_command, quit_apps, quit_choice, quit_command,
+        reopen_apps, restore_window_command, running_updater, self_updater_from_bundle,
+        terminate_command, window_state_command, window_state_from_script, AppKind, AppSystem,
+        QuitChoice, QuitOutcome, QuitPolicy, Relaunch, Reopen, SelfUpdater, SessionState,
+        UpdateState, WindowState, SESSION_STATE_TIMEOUT,
     };
     use crate::policy::AppLists;
 
@@ -1867,7 +1892,13 @@ mod tests {
                     updating.remove(bundle_id);
                     UpdateState::idle(SelfUpdater::Sparkle)
                 }
-                None => UpdateState::none(),
+                None => {
+                    // A downloaded Electron update that has not been applied yet.
+                    if !bundle_id.is_empty() && super::electron_update_pending(bundle_id) {
+                        return UpdateState::updating(SelfUpdater::Electron);
+                    }
+                    UpdateState::none()
+                }
             }
         }
     }
@@ -2703,6 +2734,50 @@ mod tests {
         let plain = fake_bundle("plain", &["Contents/MacOS/app"]);
         assert_eq!(self_updater_from_bundle(&plain), None);
         let _ = std::fs::remove_dir_all(&plain);
+    }
+
+    #[test]
+    fn an_electron_pending_update_is_detected() {
+        let temp_dir = std::env::temp_dir();
+        let bundle_id = "com.example.electron.pending";
+        let pending_dir = temp_dir
+            .join("Library/Caches")
+            .join(bundle_id)
+            .join("pending");
+        std::fs::create_dir_all(&pending_dir).unwrap_or_else(|error| panic!("{error}"));
+        std::env::set_var("HOME", &temp_dir);
+
+        assert!(electron_update_pending(bundle_id));
+
+        std::env::remove_var("HOME");
+        let parent = pending_dir.parent().unwrap_or_else(|| {
+            panic!("pending dir should have a parent")
+        });
+        let _ = std::fs::remove_dir_all(parent);
+    }
+
+    #[test]
+    fn an_electron_pending_update_is_treated_as_updating() {
+        let temp_dir = std::env::temp_dir();
+        let bundle_id = "com.example.electron.pending";
+        let pending_dir = temp_dir
+            .join("Library/Caches")
+            .join(bundle_id)
+            .join("pending");
+        std::fs::create_dir_all(&pending_dir).unwrap_or_else(|error| panic!("{error}"));
+        std::env::set_var("HOME", &temp_dir);
+
+        let system = FakeSystem::new();
+        let state = system.update_state(None, bundle_id);
+
+        assert!(state.in_progress());
+        assert_eq!(state.updater(), Some(SelfUpdater::Electron));
+
+        std::env::remove_var("HOME");
+        let parent = pending_dir.parent().unwrap_or_else(|| {
+            panic!("pending dir should have a parent")
+        });
+        let _ = std::fs::remove_dir_all(parent);
     }
 
     #[test]
