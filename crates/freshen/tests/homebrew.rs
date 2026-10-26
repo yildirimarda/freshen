@@ -1230,6 +1230,30 @@ fn a_denied_automation_request_still_upgrades_the_casks() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_denied_automation_request_explains_the_hidden_and_window_state() {
+    let (tools, _app, state) = app_tools(false);
+    deny_automation(&tools);
+
+    let output = run_apps(&tools, &state, &[("QUIT_TIMEOUT", "1")], &[]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("hidden state and the window place"),
+        "output should explain why the state could not be read: {text}"
+    );
+    assert!(
+        text.contains("macOS denied the permission to control System Events"),
+        "output should name the denied permission: {text}"
+    );
+    assert!(
+        text.contains("reopened visible"),
+        "output should explain the reopen: {text}"
+    );
+}
+
 /// The tools for a cask app that updates itself with Sparkle.
 ///
 /// The `ps` stub shows the Sparkle updater of the app for the first
