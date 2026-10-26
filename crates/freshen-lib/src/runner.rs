@@ -141,6 +141,7 @@ pub struct StepResult {
     cleanups: Vec<CleanupReport>,
     skipped_items: Vec<String>,
     restarted_services: Vec<String>,
+    left_running_apps: Vec<String>,
     skip_reason: Option<SkipReason>,
     error: Option<StepError>,
 }
@@ -156,6 +157,7 @@ impl StepResult {
             cleanups: Vec::new(),
             skipped_items: Vec::new(),
             restarted_services: Vec::new(),
+            left_running_apps: Vec::new(),
             skip_reason: None,
             error: None,
         }
@@ -178,6 +180,11 @@ impl StepResult {
 
     fn with_restarted_services(mut self, restarted_services: Vec<String>) -> Self {
         self.restarted_services = restarted_services;
+        self
+    }
+
+    fn with_left_running_apps(mut self, left_running_apps: Vec<String>) -> Self {
+        self.left_running_apps = left_running_apps;
         self
     }
 
@@ -275,6 +282,12 @@ impl StepResult {
     #[must_use]
     pub fn restarted_services(&self) -> &[String] {
         &self.restarted_services
+    }
+
+    /// Apps left running because they were updating themselves, in order.
+    #[must_use]
+    pub fn left_running_apps(&self) -> &[String] {
+        &self.left_running_apps
     }
 
     /// Why the step was skipped, when it was.
@@ -501,6 +514,9 @@ impl fmt::Display for RunSummary {
             }
             for service in result.restarted_services() {
                 writeln!(f, "          - restarted service: {service}")?;
+            }
+            for app in result.left_running_apps() {
+                writeln!(f, "          - left running (updating itself): {app}")?;
             }
         }
 
@@ -938,6 +954,7 @@ fn run_step(
             let cleanups = recorder.finish();
             let skipped_items = crate::skipped_items::take();
             let restarted_services = crate::restarted_services::take();
+            let left_running_apps = crate::left_running_apps::take();
 
             let changes =
                 if result.status() == StepStatus::Interrupted || result.skip_reason().is_some() {
@@ -959,6 +976,7 @@ fn run_step(
                 .with_cleanups(cleanups)
                 .with_skipped_items(skipped_items)
                 .with_restarted_services(restarted_services)
+                .with_left_running_apps(left_running_apps)
         }
         Err(_error) if interrupt() => StepResult::interrupted(step, started.elapsed()),
         Err(error) if error.is_registry_unreachable() => {

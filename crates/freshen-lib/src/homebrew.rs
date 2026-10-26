@@ -1644,6 +1644,9 @@ impl CasksStep {
                         self.quit_running_apps(&apps, &bundle_ids, options);
                     choice = choice_result;
                     skipped_update_apps = skipped_update;
+                    for app in &skipped_update_apps {
+                        crate::left_running_apps::record(app.name());
+                    }
 
                     // Skip the upgrade of casks whose app is still updating itself.
                     if !skipped_update_apps.is_empty() {
