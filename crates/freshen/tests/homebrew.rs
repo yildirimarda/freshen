@@ -1343,6 +1343,39 @@ fn an_app_that_is_updating_itself_is_not_quit() {
 
 #[cfg(unix)]
 #[test]
+fn an_app_that_is_still_updating_skips_its_cask_upgrade() {
+    let (tools, state, updater) = updating_app_tools(99);
+
+    let output = run_updating_apps(&tools, &state, &updater, &[("UPDATE_TIMEOUT", "0")]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.contains("brew upgrade --cask")),
+        "the cask upgrade was not skipped: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call.contains("to quit")),
+        "the app was quit: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call.contains("open -g -b")),
+        "the app was reopened: {calls:?}"
+    );
+
+    let text = stdout(&output);
+    assert!(
+        text.contains("Firefox.app is updating itself"),
+        "output: {text}"
+    );
+    assert!(text.contains("did not finish"), "output: {text}");
+    assert!(text.contains("skipping cask `firefox`"), "output: {text}");
+}
+
+#[cfg(unix)]
+#[test]
 fn an_app_that_finishes_updating_is_quit_after_freshen_waited_for_it() {
     let (tools, state, updater) = updating_app_tools(3);
 

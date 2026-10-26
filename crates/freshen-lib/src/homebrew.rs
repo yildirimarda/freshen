@@ -728,6 +728,16 @@ pub fn administrator_skip_message(cask: &str) -> String {
     )
 }
 
+/// The message shown when a cask is skipped because its app is still updating.
+#[must_use]
+pub fn update_skip_message(cask: &str) -> String {
+    format!(
+        "skipping cask `{cask}`: its app is still updating itself, \
+         so the upgrade would race the updater. \
+         Upgrade it yourself with `brew upgrade --cask {cask}`."
+    )
+}
+
 /// Existing `.app` bundles for `apps`, searched in `roots` in order.
 ///
 /// The first existing match per app wins, so callers can pass
@@ -1615,6 +1625,7 @@ impl CasksStep {
         let mut choice = QuitChoice::Quit;
         let mut selected = casks.clone();
         let mut needs_greedy = true;
+        let mut skipped_update_apps = Vec::new();
         match cask_info_command(install, &casks).run() {
             Ok(output) => match cask_metadata(output.stdout()) {
                 Ok(metadata) => {
@@ -1629,7 +1640,41 @@ impl CasksStep {
                     let apps = apps_of(&metadata, &selected);
                     let bundle_ids = quit_bundle_ids_of(&metadata, &selected);
                     report_cask_apps(&apps);
-                    choice = self.quit_running_apps(&apps, &bundle_ids, options);
+                    let (choice_result, skipped_update) =
+                        self.quit_running_apps(&apps, &bundle_ids, options);
+                    choice = choice_result;
+                    skipped_update_apps = skipped_update;
+
+                    // Skip the upgrade of casks whose app is still updating itself.
+                    if !skipped_update_apps.is_empty() {
+                        let before = selected.len();
+                        selected.retain(|cask_token| {
+                            let skip = skipped_update_apps.iter().any(|app| {
+                                metadata.casks().iter().any(|cask_info| {
+                                    cask_info.token() == Some(cask_token.as_str())
+                                        && (cask_info.apps().contains(&app.name().to_string())
+                                            || cask_info
+                                                .quit_bundle_ids()
+                                                .iter()
+                                                .any(|id| id == app.bundle_id()))
+                                })
+                            });
+                            if skip {
+                                human!("warning: {}", update_skip_message(cask_token));
+                                crate::skipped_items::record(cask_token.clone());
+                            }
+                            !skip
+                        });
+                        needs_greedy = selected.iter().any(|cask| metadata.needs_greedy(cask));
+                        if selected.is_empty() && before > 0 {
+                            for app in &skipped_update_apps {
+                                human!(
+                                    "{} is updating itself and did not finish, so its cask is not upgraded.",
+                                    app.name()
+                                );
+                            }
+                        }
+                    }
                 }
                 Err(error) => eprintln!("freshen: could not read cask metadata: {error}"),
             },
@@ -1642,14 +1687,12 @@ impl CasksStep {
         }
 
         if selected.is_empty() {
-            human!(
-                "{}",
-                install_message(
-                    brews,
-                    install,
-                    "No casks upgraded: every outdated cask needs an administrator password."
-                )
-            );
+            let message = if skipped_update_apps.is_empty() {
+                "No casks upgraded: every outdated cask needs an administrator password."
+            } else {
+                "No casks upgraded: the apps that are still updating themselves were skipped."
+            };
+            human!("{}", install_message(brews, install, message));
             return Ok(());
         }
 
@@ -1754,7 +1797,7 @@ impl CasksStep {
         apps: &[String],
         bundle_ids: &[String],
         options: &RunOptions,
-    ) -> QuitChoice {
+    ) -> (QuitChoice, Vec<crate::apps::RunningApp>) {
         let installed = installed_app_paths(apps, &app_roots());
         let self_bundle_id = own_bundle_id(|key| env::var(key).ok());
         let system = self.system.as_ref();
@@ -1784,7 +1827,7 @@ impl CasksStep {
         }
 
         if scan.is_empty() {
-            return QuitChoice::Quit;
+            return (QuitChoice::Quit, Vec::new());
         }
 
         human!("Running apps that will be quit and reopened:");
@@ -1801,7 +1844,7 @@ impl CasksStep {
         };
 
         if choice == QuitChoice::SkipCasks {
-            return choice;
+            return (choice, Vec::new());
         }
 
         let to_quit: Vec<RunningApp> = match choice {
@@ -1810,13 +1853,15 @@ impl CasksStep {
             QuitChoice::SkipCasks => Vec::new(),
         };
 
+        let mut skipped_update_apps = Vec::new();
         if !to_quit.is_empty() {
             let policy = QuitPolicy::from_env(options.force_kill());
-            let reopen_ids = quit_apps(system, &to_quit, &policy);
+            let (reopen_ids, skipped_update) = quit_apps(system, &to_quit, &policy);
             self.reopen.extend(reopen_ids);
+            skipped_update_apps = skipped_update;
         }
 
-        choice
+        (choice, skipped_update_apps)
     }
 }
 

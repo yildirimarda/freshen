@@ -960,11 +960,13 @@ pub fn quit_apps<S: AppSystem + ?Sized>(
     system: &S,
     apps: &[RunningApp],
     policy: &QuitPolicy,
-) -> Vec<Reopen> {
+) -> (Vec<Reopen>, Vec<RunningApp>) {
     let mut reopen = Vec::with_capacity(apps.len());
+    let mut skipped_update = Vec::new();
 
     for app in apps {
         if !wait_for_self_update(system, app, policy) {
+            skipped_update.push(app.clone());
             continue;
         }
         human!("Quitting: {}", app.name());
@@ -987,7 +989,7 @@ pub fn quit_apps<S: AppSystem + ?Sized>(
         reopen.push(reopen_entry(app, session));
     }
 
-    reopen
+    (reopen, skipped_update)
 }
 
 /// The entry that brings an app back after the upgrade.
@@ -2046,7 +2048,7 @@ mod tests {
             &AppLists::new(),
         );
 
-        let reopened = quit_apps(&system, scan.running(), &fast_policy(false));
+        let reopened = quit_apps(&system, scan.running(), &fast_policy(false)).0;
 
         assert_eq!(lock(&system.quit_calls).as_slice(), ["com.example.helper"]);
         assert_eq!(bundle_ids(&reopened), ["com.example.helper"]);
@@ -2124,7 +2126,8 @@ mod tests {
             &system,
             scan.running(),
             &QuitPolicy::new(Duration::from_secs(20), false),
-        );
+        )
+        .0;
 
         assert_eq!(bundle_ids(&reopen), ["com.firefox"]);
         assert_eq!(lock(&system.quit_calls).as_slice(), ["com.firefox"]);
@@ -2142,7 +2145,7 @@ mod tests {
             &AppLists::new(),
         );
 
-        let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(false)).0;
 
         assert_eq!(bundle_ids(&reopen), ["com.firefox"]);
         assert!(lock(&system.killed).is_empty());
@@ -2160,7 +2163,7 @@ mod tests {
             &AppLists::new(),
         );
 
-        let reopen = quit_apps(&system, scan.running(), &fast_policy(true));
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(true)).0;
 
         assert_eq!(bundle_ids(&reopen), ["com.firefox"]);
         assert_eq!(lock(&system.killed).as_slice(), [vec![10, 11]]);
@@ -2178,7 +2181,7 @@ mod tests {
             &AppLists::new(),
         );
 
-        let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(false)).0;
 
         assert_eq!(bundle_ids(&reopen), ["com.firefox"]);
         assert_eq!(lock(&system.quit_calls).as_slice(), ["com.firefox"]);
@@ -2204,7 +2207,8 @@ mod tests {
             &system,
             scan.running(),
             &QuitPolicy::new(Duration::from_secs(20), false),
-        );
+        )
+        .0;
 
         assert_eq!(bundle_ids(&reopen), ["com.firefox"]);
 
@@ -2227,7 +2231,7 @@ mod tests {
             &AppLists::new(),
         );
 
-        let reopen = quit_apps(&system, scan.running(), &fast_policy(true));
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(true)).0;
 
         assert_eq!(bundle_ids(&reopen), ["com.firefox"]);
         assert_eq!(lock(&system.killed).as_slice(), [vec![10]]);
@@ -2279,7 +2283,7 @@ mod tests {
             &AppLists::new(),
         );
 
-        let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(false)).0;
 
         assert_eq!(bundle_ids(&reopen), ["com.firefox"]);
         assert!(lock(&system.killed).is_empty());
@@ -2302,7 +2306,7 @@ mod tests {
             &AppLists::new(),
         );
 
-        let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(false)).0;
         reopen_apps(&system, &reopen);
 
         assert_eq!(bundle_ids(&reopen), ["com.firefox"]);
@@ -2429,7 +2433,7 @@ mod tests {
             &AppLists::new(),
         );
 
-        let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(false)).0;
 
         assert_eq!(reopen.len(), 1);
         assert!(!reopen[0].session().is_hidden());
@@ -2452,7 +2456,7 @@ mod tests {
             &AppLists::new(),
         );
 
-        let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(false)).0;
         reopen_apps(&system, &reopen);
 
         assert_eq!(opened(&system), [("com.firefox".to_owned(), false)]);
@@ -2471,7 +2475,7 @@ mod tests {
             &AppLists::new(),
         );
 
-        let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(false)).0;
         reopen_apps(&system, &reopen);
 
         assert!(
@@ -2539,7 +2543,8 @@ mod tests {
             &system,
             scan.running(),
             &fast_policy(false).with_update_timeout(Duration::from_secs(5)),
-        );
+        )
+        .0;
 
         assert_eq!(bundle_ids(&reopen), ["com.firefox"]);
         assert_eq!(lock(&system.quit_calls).as_slice(), ["com.firefox"]);
@@ -2561,7 +2566,8 @@ mod tests {
             &system,
             scan.running(),
             &fast_policy(false).with_update_timeout(Duration::ZERO),
-        );
+        )
+        .0;
 
         assert!(reopen.is_empty(), "the app was reopened: {reopen:?}");
         assert!(lock(&system.quit_calls).is_empty(), "the app was quit");
@@ -2583,7 +2589,7 @@ mod tests {
 
         assert!(scan.updating().is_empty());
 
-        let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(false)).0;
 
         assert_eq!(bundle_ids(&reopen), ["com.firefox"]);
         assert_eq!(lock(&system.quit_calls).as_slice(), ["com.firefox"]);
@@ -2917,7 +2923,7 @@ mod tests {
             &AppLists::new(),
         );
 
-        let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(false)).0;
 
         assert!(
             lock(&system.quit_calls).is_empty(),
@@ -2940,7 +2946,7 @@ mod tests {
             &AppLists::new(),
         );
 
-        let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(false)).0;
         reopen_apps(&system, &reopen);
 
         assert_eq!(reopen[0].relaunch(), &Relaunch::Background);
@@ -2964,7 +2970,7 @@ mod tests {
             &AppLists::new(),
         );
 
-        let _ = quit_apps(&system, scan.running(), &fast_policy(false));
+        let _ = quit_apps(&system, scan.running(), &fast_policy(false)).0;
 
         assert_eq!(
             lock(&system.quit_calls).as_slice(),
@@ -2986,7 +2992,7 @@ mod tests {
             &AppLists::new(),
         );
 
-        let _ = quit_apps(&system, scan.running(), &fast_policy(true));
+        let _ = quit_apps(&system, scan.running(), &fast_policy(true)).0;
 
         assert_eq!(lock(&system.killed).as_slice(), [vec![10]]);
     }
@@ -3042,7 +3048,7 @@ mod tests {
             &AppLists::new(),
         );
 
-        let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(false)).0;
         reopen_apps(&system, &reopen);
 
         let login_item = reopen
@@ -3076,7 +3082,7 @@ mod tests {
             &AppLists::new(),
         );
 
-        let reopen = quit_apps(&system, scan.running(), &fast_policy(false));
+        let reopen = quit_apps(&system, scan.running(), &fast_policy(false)).0;
         // The app the login item belongs to starts it again by itself.
         lock(&system.running).insert(PathBuf::from(HELPER), vec![11]);
         reopen_apps(&system, &reopen);
