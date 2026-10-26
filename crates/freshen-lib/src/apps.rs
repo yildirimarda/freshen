@@ -908,14 +908,28 @@ pub fn find_running_cask_apps<S: AppSystem + ?Sized>(
             scan.protected.push(bundle_id.clone());
             continue;
         }
-        if !system.is_bundle_running(bundle_id) {
+        let path = bundle_path_for_bundle_id(system, bundle_id);
+        let running = if let Some(path) = &path {
+            system.is_running(path)
+        } else {
+            system.is_bundle_running(bundle_id)
+        };
+        if !running {
             continue;
         }
         if app_lists.is_never_quit(bundle_id, bundle_id) {
             scan.never_quit.push(bundle_id.clone());
             continue;
         }
-        let app = RunningApp::from_bundle_id(bundle_id.clone());
+        let app = if let Some(path) = &path {
+            RunningApp::with_kind(
+                path.clone(),
+                bundle_id.clone(),
+                app_kind(system, path.as_path()),
+            )
+        } else {
+            RunningApp::from_bundle_id(bundle_id.clone())
+        };
         if app.update_state(system).in_progress() {
             scan.updating.push(app.clone());
         }
@@ -923,6 +937,47 @@ pub fn find_running_cask_apps<S: AppSystem + ?Sized>(
     }
 
     scan
+}
+
+/// Searches the installed application directories for a `.app` bundle whose
+/// `CFBundleIdentifier` matches the given bundle id.
+#[must_use]
+fn bundle_path_for_bundle_id<S: AppSystem + ?Sized>(
+    system: &S,
+    bundle_id: &str,
+) -> Option<PathBuf> {
+    let roots: Vec<PathBuf> = if let Some(roots) = env::var_os("FRESHEN_APP_ROOTS") {
+        env::split_paths(&roots).collect()
+    } else {
+        let mut roots = vec![PathBuf::from("/Applications")];
+        if let Some(home) = env::var_os("HOME") {
+            roots.push(PathBuf::from(home).join("Applications"));
+        }
+        roots
+    };
+    for root in roots {
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if !name.ends_with(".app") {
+                continue;
+            }
+            if let Some(found) = system.bundle_id(&path) {
+                if found == bundle_id {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Adds a running app to the scan.
@@ -3419,5 +3474,42 @@ mod tests {
 
         assert!(login_item_helpers_in(&app).is_empty());
         let _ = std::fs::remove_dir_all(&app);
+    }
+
+    /// A bundle id from a cask `uninstall` stanza that has a matching `.app`
+    /// bundle is found by its path, so it is detected and ended like any
+    /// other app.
+    #[test]
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
+    fn a_bundle_id_only_app_is_found_by_its_bundle_path() {
+        let _guard = ENV_LOCK.lock().expect("test lock");
+
+        let temp_dir =
+            std::env::temp_dir().join(format!("freshen-bundle-id-search-{}", std::process::id()));
+        let app_path = temp_dir.join("HiddenApp.app");
+        std::fs::create_dir_all(app_path.join("Contents/MacOS")).unwrap();
+
+        std::env::set_var("FRESHEN_APP_ROOTS", &temp_dir);
+
+        let system = FakeSystem::new()
+            .with_app(app_path.to_str().unwrap(), "com.example.hidden", &[42])
+            .with_menu_bar_app(app_path.to_str().unwrap());
+
+        let scan = find_running_cask_apps(
+            &system,
+            &[],
+            &["com.example.hidden".to_owned()],
+            None,
+            &AppLists::new(),
+        );
+
+        assert_eq!(scan.running().len(), 1);
+        let app = &scan.running()[0];
+        assert_eq!(app.bundle_id(), "com.example.hidden");
+        assert!(app.path().is_some());
+        assert_eq!(app.kind(), AppKind::MenuBar);
+
+        std::env::remove_var("FRESHEN_APP_ROOTS");
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
