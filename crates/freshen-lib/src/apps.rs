@@ -212,10 +212,10 @@ impl WindowState {
 /// comes back visible, and a window that was on a second display comes back
 /// on the main one. freshen reads the state of an app before it quits it and
 /// restores it when the app is reopened.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SessionState {
     hidden: bool,
-    window: Option<WindowState>,
+    windows: Vec<WindowState>,
 }
 
 impl SessionState {
@@ -230,14 +230,14 @@ impl SessionState {
     pub fn hidden() -> Self {
         Self {
             hidden: true,
-            window: None,
+            windows: Vec::new(),
         }
     }
 
-    /// Records the place of the app's window.
+    /// Records the places of the app's windows.
     #[must_use]
-    pub fn with_window(mut self, window: WindowState) -> Self {
-        self.window = Some(window);
+    pub fn with_windows(mut self, windows: Vec<WindowState>) -> Self {
+        self.windows = windows;
         self
     }
 
@@ -247,10 +247,10 @@ impl SessionState {
         self.hidden
     }
 
-    /// The place of the app's window, when it had one.
+    /// The places of the app's windows.
     #[must_use]
-    pub fn window(&self) -> Option<WindowState> {
-        self.window
+    pub fn windows(&self) -> &[WindowState] {
+        &self.windows
     }
 }
 
@@ -323,7 +323,7 @@ impl Reopen {
     /// How the app looked before it was quit.
     #[must_use]
     pub fn session(&self) -> SessionState {
-        self.session
+        self.session.clone()
     }
 
     /// How the app is started again.
@@ -699,10 +699,11 @@ pub trait AppSystem: Send + Sync {
     /// item by its path (`open -g -j -a`), the way macOS starts it.
     fn open(&self, app: &Reopen) -> bool;
 
-    /// Puts the window of the app back where it was.
+    /// Puts a window of the app back where it was.
     ///
+    /// The index is 1-based, matching AppleScript's `window 1`, `window 2`, etc.
     /// Returns `true` when the window was moved.
-    fn restore_window(&self, _bundle_id: &str, _window: &WindowState) -> bool {
+    fn restore_window(&self, _bundle_id: &str, _index: usize, _window: &WindowState) -> bool {
         false
     }
 
@@ -1128,8 +1129,8 @@ pub fn reopen_apps<S: AppSystem + ?Sized>(system: &S, apps: &[Reopen]) {
             continue;
         }
 
-        if let Some(window) = session.window() {
-            if !system.restore_window(bundle_id, &window) {
+        for (index, window) in session.windows().iter().enumerate() {
+            if !system.restore_window(bundle_id, index + 1, window) {
                 warn(&format!(
                     "Could not put the window of {bundle_id} back where it was."
                 ));
@@ -1310,6 +1311,42 @@ pub fn window_state_from_script(output: &str) -> Option<WindowState> {
     }
 }
 
+/// The positions of windows in the output of the System Events query.
+///
+/// The output looks like `{{0, 0}, {-1920, 100}}`: a list of positions.
+#[must_use]
+pub fn window_positions_from_script(output: &str) -> Vec<(i32, i32)> {
+    let numbers = script_numbers(output);
+    numbers
+        .chunks(2)
+        .filter_map(|chunk| {
+            if chunk.len() == 2 {
+                Some((i32::try_from(chunk[0]).ok()?, i32::try_from(chunk[1]).ok()?))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// The sizes of windows in the output of the System Events query.
+///
+/// The output looks like `{{1440, 900}, {1280, 800}}`: a list of sizes.
+#[must_use]
+pub fn window_sizes_from_script(output: &str) -> Vec<(u32, u32)> {
+    let numbers = script_numbers(output);
+    numbers
+        .chunks(2)
+        .filter_map(|chunk| {
+            if chunk.len() == 2 {
+                Some((u32::try_from(chunk[0]).ok()?, u32::try_from(chunk[1]).ok()?))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 /// The numbers in the output of an AppleScript command.
 fn script_numbers(output: &str) -> Vec<i64> {
     output
@@ -1388,11 +1425,8 @@ fn hidden_command(bundle_id: &str) -> CommandSpec {
         .timeout(SESSION_STATE_TIMEOUT)
 }
 
-/// The AppleScript that reads the place of the window of the app.
-///
-/// The first window of the app is used, because an app that is reopened comes
-/// back with a window in the middle of the main display.
-fn window_state_command(bundle_id: &str) -> CommandSpec {
+/// The AppleScript that reads the positions of every window of the app.
+fn window_positions_command(bundle_id: &str) -> CommandSpec {
     CommandSpec::new("osascript")
         .arg("-e")
         .arg("tell application \"System Events\"")
@@ -1403,7 +1437,7 @@ fn window_state_command(bundle_id: &str) -> CommandSpec {
         .arg("-e")
         .arg("tell appProcess")
         .arg("-e")
-        .arg("get {position of window 1, size of window 1}")
+        .arg("get position of every window")
         .arg("-e")
         .arg("end tell")
         .arg("-e")
@@ -1412,8 +1446,29 @@ fn window_state_command(bundle_id: &str) -> CommandSpec {
         .timeout(SESSION_STATE_TIMEOUT)
 }
 
-/// The AppleScript that puts the window of the app back where it was.
-fn restore_window_command(bundle_id: &str, window: &WindowState) -> CommandSpec {
+/// The AppleScript that reads the sizes of every window of the app.
+fn window_sizes_command(bundle_id: &str) -> CommandSpec {
+    CommandSpec::new("osascript")
+        .arg("-e")
+        .arg("tell application \"System Events\"")
+        .arg("-e")
+        .arg(format!(
+            "set appProcess to first process whose bundle identifier is \"{bundle_id}\""
+        ))
+        .arg("-e")
+        .arg("tell appProcess")
+        .arg("-e")
+        .arg("get size of every window")
+        .arg("-e")
+        .arg("end tell")
+        .arg("-e")
+        .arg("end tell")
+        .neutral_locale()
+        .timeout(SESSION_STATE_TIMEOUT)
+}
+
+/// The AppleScript that puts a window of the app back where it was.
+fn restore_window_command(bundle_id: &str, index: usize, window: &WindowState) -> CommandSpec {
     let (x, y) = window.position();
     let (width, height) = window.size();
     CommandSpec::new("osascript")
@@ -1426,9 +1481,11 @@ fn restore_window_command(bundle_id: &str, window: &WindowState) -> CommandSpec 
         .arg("-e")
         .arg("tell appProcess")
         .arg("-e")
-        .arg(format!("set position of window 1 to {{{x}, {y}}}"))
+        .arg(format!("set position of window {index} to {{{x}, {y}}}"))
         .arg("-e")
-        .arg(format!("set size of window 1 to {{{width}, {height}}}"))
+        .arg(format!(
+            "set size of window {index} to {{{width}, {height}}}"
+        ))
         .arg("-e")
         .arg("end tell")
         .arg("-e")
@@ -1601,13 +1658,9 @@ impl AppSystem for MacAppSystem {
             }
         }
 
-        let window_result = window_state_command(bundle_id).run();
-        match window_result {
-            Ok(output) => {
-                if let Some(window) = window_state_from_script(output.stdout()) {
-                    session = session.with_window(window);
-                }
-            }
+        let positions_result = window_positions_command(bundle_id).run();
+        let positions = match positions_result {
+            Ok(output) => window_positions_from_script(output.stdout()),
             Err(error) => {
                 let text = error
                     .output()
@@ -1616,8 +1669,31 @@ impl AppSystem for MacAppSystem {
                 if is_automation_denied(&text) {
                     denied = true;
                 }
+                Vec::new()
             }
-        }
+        };
+
+        let sizes_result = window_sizes_command(bundle_id).run();
+        let sizes = match sizes_result {
+            Ok(output) => window_sizes_from_script(output.stdout()),
+            Err(error) => {
+                let text = error
+                    .output()
+                    .map(|out| format!("{}{}", out.stdout(), out.stderr()))
+                    .unwrap_or_default();
+                if is_automation_denied(&text) {
+                    denied = true;
+                }
+                Vec::new()
+            }
+        };
+
+        let windows: Vec<WindowState> = positions
+            .iter()
+            .zip(sizes.iter())
+            .map(|(&(x, y), &(w, h))| WindowState::new((x, y), (w, h)))
+            .collect();
+        session = session.with_windows(windows);
 
         if denied {
             warn(&format!(
@@ -1640,9 +1716,12 @@ impl AppSystem for MacAppSystem {
         }
     }
 
-    fn restore_window(&self, bundle_id: &str, window: &WindowState) -> bool {
+    fn restore_window(&self, bundle_id: &str, index: usize, window: &WindowState) -> bool {
         for attempt in 0..RESTORE_ATTEMPTS {
-            if restore_window_command(bundle_id, window).run().is_ok() {
+            if restore_window_command(bundle_id, index, window)
+                .run()
+                .is_ok()
+            {
                 return true;
             }
             if attempt + 1 < RESTORE_ATTEMPTS {
@@ -1691,9 +1770,10 @@ mod tests {
         open_command, open_path_command, pid_list_command, pids_from_apple_script,
         pids_from_processes, process_list_command, quit_apps, quit_choice, quit_command,
         reopen_apps, restore_window_command, running_updater, self_updater_from_bundle,
-        terminate_command, window_state_command, window_state_from_script, AppKind, AppSystem,
-        QuitChoice, QuitOutcome, QuitPolicy, Relaunch, Reopen, SelfUpdater, SessionState,
-        UpdateState, WindowState, SESSION_STATE_TIMEOUT,
+        terminate_command, window_positions_command, window_sizes_command,
+        window_state_from_script, AppKind, AppSystem, QuitChoice, QuitOutcome, QuitPolicy,
+        Relaunch, Reopen, SelfUpdater, SessionState, UpdateState, WindowState,
+        SESSION_STATE_TIMEOUT,
     };
     use crate::policy::AppLists;
 
@@ -1716,7 +1796,7 @@ mod tests {
         killed: Mutex<Vec<Vec<u32>>>,
         opened: Mutex<Vec<(String, bool)>>,
         opened_paths: Mutex<Vec<PathBuf>>,
-        restored: Mutex<Vec<(String, WindowState)>>,
+        restored: Mutex<Vec<(String, usize, WindowState)>>,
         running_checks: Mutex<usize>,
         updating: Mutex<HashMap<String, usize>>,
         sessions: Mutex<HashMap<String, SessionState>>,
@@ -1892,7 +1972,7 @@ mod tests {
         ) -> SessionState {
             lock(&self.sessions)
                 .get(bundle_id)
-                .copied()
+                .cloned()
                 .unwrap_or_else(SessionState::visible)
         }
 
@@ -1904,8 +1984,8 @@ mod tests {
             self.open_succeeds
         }
 
-        fn restore_window(&self, bundle_id: &str, window: &WindowState) -> bool {
-            lock(&self.restored).push((bundle_id.to_owned(), *window));
+        fn restore_window(&self, bundle_id: &str, index: usize, window: &WindowState) -> bool {
+            lock(&self.restored).push((bundle_id.to_owned(), index, *window));
             true
         }
 
@@ -2426,13 +2506,13 @@ mod tests {
             &system,
             &[Reopen::new(
                 "com.firefox",
-                SessionState::visible().with_window(window),
+                SessionState::visible().with_windows(vec![window]),
             )],
         );
 
         assert_eq!(
             lock(&system.restored).as_slice(),
-            [("com.firefox".to_owned(), window)]
+            [("com.firefox".to_owned(), 1, window)]
         );
     }
 
@@ -2445,7 +2525,7 @@ mod tests {
             &system,
             &[Reopen::new(
                 "com.firefox",
-                SessionState::hidden().with_window(window),
+                SessionState::hidden().with_windows(vec![window]),
             )],
         );
 
@@ -2464,7 +2544,7 @@ mod tests {
             &system,
             &[Reopen::new(
                 "com.firefox",
-                SessionState::visible().with_window(window),
+                SessionState::visible().with_windows(vec![window]),
             )],
         );
 
@@ -2482,7 +2562,8 @@ mod tests {
                 .with_app("/Applications/Firefox.app", "com.firefox", &[10])
                 .with_session(
                     "com.firefox",
-                    SessionState::visible().with_window(WindowState::new((10, 20), (1440, 900))),
+                    SessionState::visible()
+                        .with_windows(vec![WindowState::new((10, 20), (1440, 900))]),
                 )
         };
         let scan = find_running_apps(
@@ -2497,8 +2578,31 @@ mod tests {
         assert_eq!(reopen.len(), 1);
         assert!(!reopen[0].session().is_hidden());
         assert_eq!(
-            reopen[0].session().window().map(|window| window.position()),
+            reopen[0].session().windows().first().map(|w| w.position()),
             Some((10, 20))
+        );
+    }
+
+    #[test]
+    fn every_window_of_a_reopened_app_is_put_back_where_it_was() {
+        let system = FakeSystem::new();
+        let first = WindowState::new((10, 20), (1440, 900));
+        let second = WindowState::new((-1920, 100), (1280, 800));
+
+        reopen_apps(
+            &system,
+            &[Reopen::new(
+                "com.firefox",
+                SessionState::visible().with_windows(vec![first, second]),
+            )],
+        );
+
+        assert_eq!(
+            lock(&system.restored).as_slice(),
+            [
+                ("com.firefox".to_owned(), 1, first),
+                ("com.firefox".to_owned(), 2, second),
+            ]
         );
     }
 
@@ -2921,7 +3025,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            transcript(&window_state_command("com.example.firefox")),
+            transcript(&window_positions_command("com.example.firefox")),
             [
                 "-e",
                 "tell application \"System Events\"",
@@ -2930,7 +3034,24 @@ mod tests {
                 "-e",
                 "tell appProcess",
                 "-e",
-                "get {position of window 1, size of window 1}",
+                "get position of every window",
+                "-e",
+                "end tell",
+                "-e",
+                "end tell",
+            ]
+        );
+        assert_eq!(
+            transcript(&window_sizes_command("com.example.firefox")),
+            [
+                "-e",
+                "tell application \"System Events\"",
+                "-e",
+                "set appProcess to first process whose bundle identifier is \"com.example.firefox\"",
+                "-e",
+                "tell appProcess",
+                "-e",
+                "get size of every window",
                 "-e",
                 "end tell",
                 "-e",
@@ -2940,6 +3061,7 @@ mod tests {
         assert_eq!(
             transcript(&restore_window_command(
                 "com.example.firefox",
+                1,
                 &WindowState::new((10, 20), (1440, 900))
             )),
             [
