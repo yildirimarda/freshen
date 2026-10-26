@@ -110,6 +110,7 @@ exclude list always wins over the include list.
 | `packages` | list of names | Packages: Homebrew formulae and uv tools. |
 | `containers` | list of names | Standalone containers, by container name or container id. |
 | `projects` | list of names | Compose projects, by project name. |
+| `apps` | list of App Store ids | Mac App Store apps, matched by their App Store id (`mas upgrade <id>`). |
 
 An empty include list means "everything of this kind", so a file with only an
 exclude list keeps every other item in scope.
@@ -132,7 +133,9 @@ The lists are applied to the items a run upgrades, not to the whole tool:
 * a compose project that is not in scope is not pulled, not brought up and not
   stopped when the container runtime is upgraded,
 * a container that is not in scope is not stopped when the container runtime is
-  upgraded, and it is therefore not started again afterwards.
+  upgraded, and it is therefore not started again afterwards,
+* a Mac App Store app that is not in scope is not upgraded, and it is not
+  reported as outdated by `--check`.
 
 Names are matched exactly, the way the package managers spell them.
 

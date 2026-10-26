@@ -124,7 +124,9 @@ pub trait MasClient: Send + Sync {
     fn outdated(&self) -> MasOutput;
 
     /// The output of `mas upgrade`, which installs the pending updates.
-    fn upgrade(&self) -> MasOutput;
+    ///
+    /// `ids` are the App Store ids to upgrade; when empty nothing is upgraded.
+    fn upgrade(&self, ids: &[&str]) -> MasOutput;
 }
 
 /// The real `mas` command line.
@@ -143,8 +145,11 @@ impl MasClient for MasCommandClient {
         run_mas(&["outdated"])
     }
 
-    fn upgrade(&self) -> MasOutput {
-        run_mas(&["upgrade"])
+    fn upgrade(&self, ids: &[&str]) -> MasOutput {
+        let mut arguments = Vec::with_capacity(1 + ids.len());
+        arguments.push("upgrade");
+        arguments.extend(ids);
+        run_mas(&arguments)
     }
 }
 
@@ -261,21 +266,55 @@ impl Step for MacAppStoreStep {
         self.check_with_options(&RunOptions::new())
     }
 
-    fn check_with_options(&self, _options: &RunOptions) -> Result<CheckReport, StepError> {
+    fn check_with_options(&self, options: &RunOptions) -> Result<CheckReport, StepError> {
         let output = self.client.outdated();
         if !output.is_success() {
             return Err(self.failure(Operation::Check, &output));
         }
-        Ok(CheckReport::from_items(parse_mas_outdated(output.text())))
+        let filter = options.filters().apps();
+        let items: Vec<OutdatedItem> = parse_mas_outdated(output.text())
+            .into_iter()
+            .filter(|item| match item.id() {
+                // An app we cannot identify by id stays in scope only when no
+                // filter restricts the run.
+                None => filter.is_empty(),
+                Some(id) => filter.includes(id),
+            })
+            .collect();
+        Ok(CheckReport::from_items(items))
     }
 
     fn run(&self) -> Result<(), StepError> {
         self.run_with_options(&RunOptions::new())
     }
 
-    fn run_with_options(&self, _options: &RunOptions) -> Result<(), StepError> {
+    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
+        let output = self.client.outdated();
+        if !output.is_success() {
+            return Err(self.failure(Operation::Run, &output));
+        }
+        let filter = options.filters().apps();
+        let selected: Vec<String> = parse_mas_outdated(output.text())
+            .into_iter()
+            .filter_map(|item| {
+                let id = item.id()?;
+                if filter.includes(id) {
+                    Some(id.to_owned())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if selected.is_empty() {
+            human!("mas: no App Store apps to upgrade after applying the include/exclude lists.");
+            return Ok(());
+        }
+
+        let ids: Vec<&str> = selected.iter().map(String::as_str).collect();
+
         human!("mas: upgrade (Mac App Store apps)");
-        let output = self.client.upgrade();
+        let output = self.client.upgrade(&ids);
         if !output.is_success() {
             return Err(self.failure(Operation::Run, &output));
         }
@@ -333,16 +372,17 @@ fn parse_mas_outdated_text(line: &str) -> Option<OutdatedItem> {
 
     let (current, latest) = line[open + 1..close].split_once("->")?;
 
-    // The head is the app id and the app name; the name is padded to the
-    // width of the longest name, so it is trimmed on both ends.
+    // The head is the app id, padded whitespace, then the app name; the name
+    // is padded to the width of the longest name, so it is trimmed on both
+    // ends.
     let head = line[..open].trim_end();
-    let (_id, name) = head.split_once(char::is_whitespace)?;
+    let (id, name) = head.split_once(char::is_whitespace)?;
     let name = name.trim();
     if name.is_empty() {
         return None;
     }
 
-    Some(item(name, current.trim(), latest.trim()))
+    Some(item(Some(id.trim()), name, current.trim(), latest.trim()))
 }
 
 /// Parses one JSON object of the `mas` 7 output.
@@ -364,13 +404,16 @@ fn parse_mas_outdated_json(line: &str) -> Option<OutdatedItem> {
         .map(str::trim)
         .unwrap_or_default();
 
-    Some(item(name, current, latest))
+    Some(item(None, name, current, latest))
 }
 
 /// Builds the outdated item of an app, leaving out the versions that are
-/// unknown.
-fn item(name: &str, current: &str, latest: &str) -> OutdatedItem {
+/// unknown. `id` is the App Store id, when the `mas` output provides one.
+fn item(id: Option<&str>, name: &str, current: &str, latest: &str) -> OutdatedItem {
     let mut item = OutdatedItem::new(name);
+    if let Some(id) = id {
+        item = item.with_id(id);
+    }
     if !current.is_empty() {
         item = item.with_current(current);
     }
@@ -444,8 +487,12 @@ mod tests {
             self.outdated.clone()
         }
 
-        fn upgrade(&self) -> MasOutput {
-            self.record("upgrade");
+        fn upgrade(&self, ids: &[&str]) -> MasOutput {
+            if ids.is_empty() {
+                self.record("upgrade");
+            } else {
+                self.record(&format!("upgrade {}", ids.join(" ")));
+            }
             self.upgrade.clone()
         }
     }
@@ -539,11 +586,119 @@ mod tests {
 
     #[test]
     fn the_step_upgrades_the_apps() {
-        let client = Arc::new(FakeMas::new());
+        let client = Arc::new(FakeMas {
+            outdated: MasOutput::success("409203825  Numbers  (4.2 -> 4.3.1)\n"),
+            ..FakeMas::new()
+        });
         let step = step_with(&client);
 
         assert!(step.run().is_ok());
-        assert_eq!(client.calls(), ["upgrade"]);
+        assert_eq!(client.calls(), ["outdated", "upgrade 409203825"]);
+    }
+
+    #[test]
+    fn check_reports_only_the_apps_kept_by_the_include_list() {
+        let client = Arc::new(FakeMas {
+            outdated: MasOutput::success(
+                "409203825  Numbers  (4.2 -> 4.3.1)\n\
+                 409183694  Keynote  (7.2 -> 7.3.1)\n",
+            ),
+            ..FakeMas::new()
+        });
+        let step = step_with(&client);
+        let options = crate::options::RunOptions::new().with_filters(
+            crate::policy::ItemFilters::new()
+                .with_apps(crate::policy::NameFilter::new().with_include(["409203825"])),
+        );
+
+        let report = step
+            .check_with_options(&options)
+            .unwrap_or_else(|error| panic!("check failed: {error}"));
+
+        assert_eq!(report.pending(), 1);
+        assert_eq!(report.items()[0].name(), "Numbers");
+        assert_eq!(report.items()[0].id(), Some("409203825"));
+    }
+
+    #[test]
+    fn check_hides_the_apps_kept_out_by_the_exclude_list() {
+        let client = Arc::new(FakeMas {
+            outdated: MasOutput::success(
+                "409203825  Numbers  (4.2 -> 4.3.1)\n\
+                 409183694  Keynote  (7.2 -> 7.3.1)\n",
+            ),
+            ..FakeMas::new()
+        });
+        let step = step_with(&client);
+        let options = crate::options::RunOptions::new().with_filters(
+            crate::policy::ItemFilters::new()
+                .with_apps(crate::policy::NameFilter::new().with_exclude(["409183694"])),
+        );
+
+        let report = step
+            .check_with_options(&options)
+            .unwrap_or_else(|error| panic!("check failed: {error}"));
+
+        assert_eq!(report.pending(), 1);
+        assert_eq!(report.items()[0].name(), "Numbers");
+        assert_eq!(report.items()[0].id(), Some("409203825"));
+    }
+
+    #[test]
+    fn the_exclude_list_wins_over_the_include_list_for_apps() {
+        let client = Arc::new(FakeMas {
+            outdated: MasOutput::success("409203825  Numbers  (4.2 -> 4.3.1)\n"),
+            ..FakeMas::new()
+        });
+        let step = step_with(&client);
+        let options = crate::options::RunOptions::new().with_filters(
+            crate::policy::ItemFilters::new().with_apps(
+                crate::policy::NameFilter::new()
+                    .with_include(["409203825"])
+                    .with_exclude(["409203825"]),
+            ),
+        );
+
+        let report = step
+            .check_with_options(&options)
+            .unwrap_or_else(|error| panic!("check failed: {error}"));
+
+        assert_eq!(report.pending(), 0);
+    }
+
+    #[test]
+    fn run_upgrades_only_the_selected_apps_by_id() {
+        let client = Arc::new(FakeMas {
+            outdated: MasOutput::success(
+                "409203825  Numbers  (4.2 -> 4.3.1)\n\
+                 409183694  Keynote  (7.2 -> 7.3.1)\n",
+            ),
+            ..FakeMas::new()
+        });
+        let step = step_with(&client);
+        let options = crate::options::RunOptions::new().with_filters(
+            crate::policy::ItemFilters::new()
+                .with_apps(crate::policy::NameFilter::new().with_include(["409203825"])),
+        );
+
+        assert!(step.run_with_options(&options).is_ok());
+        assert_eq!(client.calls(), ["outdated", "upgrade 409203825"]);
+    }
+
+    #[test]
+    fn run_upgrades_nothing_when_all_apps_are_excluded() {
+        let client = Arc::new(FakeMas {
+            outdated: MasOutput::success("409203825  Numbers  (4.2 -> 4.3.1)\n"),
+            ..FakeMas::new()
+        });
+        let step = step_with(&client);
+        let options = crate::options::RunOptions::new().with_filters(
+            crate::policy::ItemFilters::new()
+                .with_apps(crate::policy::NameFilter::new().with_exclude(["409203825"])),
+        );
+
+        assert!(step.run_with_options(&options).is_ok());
+        assert_eq!(client.calls(), ["outdated"]);
     }
 
     #[test]
@@ -588,6 +743,7 @@ mod tests {
     #[test]
     fn a_failed_upgrade_names_the_missing_account() {
         let client = Arc::new(FakeMas {
+            outdated: MasOutput::success("409203825  Numbers  (4.2 -> 4.3.1)\n"),
             upgrade: MasOutput::failure("Error: Not signed in\n"),
             ..FakeMas::new()
         });
@@ -631,6 +787,7 @@ mod tests {
     #[test]
     fn an_upgrade_that_wanted_a_password_names_the_administrator_rights() {
         let client = Arc::new(FakeMas {
+            outdated: MasOutput::success("409203825  Numbers  (4.2 -> 4.3.1)\n"),
             upgrade: MasOutput::failure("sudo: a terminal is required to read the password\n"),
             ..FakeMas::new()
         });

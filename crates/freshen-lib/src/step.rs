@@ -110,6 +110,10 @@ impl fmt::Display for SkipReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutdatedItem {
     name: String,
+    /// The identifier a step uses to target the item, for example a Homebrew
+    /// formula name, a uv tool name or a Mac App Store id. `None` when the
+    /// step cannot identify the item precisely.
+    id: Option<String>,
     current: Option<String>,
     latest: Option<String>,
     reason: Option<String>,
@@ -121,10 +125,25 @@ impl OutdatedItem {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            id: None,
             current: None,
             latest: None,
             reason: None,
         }
+    }
+
+    /// Sets the identifier used to target the item, for example a Mac App
+    /// Store id.
+    #[must_use]
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    /// The identifier used to target the item, when known.
+    #[must_use]
+    pub fn id(&self) -> Option<&str> {
+        self.id.as_deref()
     }
 
     /// Sets the currently installed version.

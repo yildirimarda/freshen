@@ -192,6 +192,9 @@ pub struct FilterSection {
 
     /// Compose projects.
     pub projects: Option<Vec<String>>,
+
+    /// Mac App Store apps, matched by their App Store id.
+    pub apps: Option<Vec<String>>,
 }
 
 /// The `[apps]` section: the applications that are quit around a cask upgrade.
@@ -264,6 +267,7 @@ impl Config {
             .with_packages(filter(&self.include.packages, &self.exclude.packages))
             .with_containers(filter(&self.include.containers, &self.exclude.containers))
             .with_projects(filter(&self.include.projects, &self.exclude.projects))
+            .with_apps(filter(&self.include.apps, &self.exclude.apps))
     }
 
     /// The app lists of the file.
@@ -489,12 +493,14 @@ casks = ["firefox"]
 packages = ["node"]
 containers = ["web"]
 projects = ["stack"]
+apps = ["409203825"]
 
 [exclude]
 casks = ["dropbox"]
 packages = ["python"]
 containers = ["old"]
 projects = ["legacy"]
+apps = ["409183694"]
 "#,
         );
 
@@ -508,6 +514,8 @@ projects = ["legacy"]
         assert_eq!(filters.containers().exclude(), ["old"]);
         assert_eq!(filters.projects().include(), ["stack"]);
         assert_eq!(filters.projects().exclude(), ["legacy"]);
+        assert_eq!(filters.apps().include(), ["409203825"]);
+        assert_eq!(filters.apps().exclude(), ["409183694"]);
     }
 
     #[test]

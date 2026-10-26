@@ -105,6 +105,8 @@ pub struct ItemFilters {
     packages: NameFilter,
     containers: NameFilter,
     projects: NameFilter,
+    /// Mac App Store apps, matched by their App Store id.
+    apps: NameFilter,
 }
 
 impl ItemFilters {
@@ -166,6 +168,19 @@ impl ItemFilters {
         &self.projects
     }
 
+    /// The filter for Mac App Store apps, matched by their App Store id.
+    #[must_use]
+    pub fn apps(&self) -> &NameFilter {
+        &self.apps
+    }
+
+    /// Replaces the filter for Mac App Store apps.
+    #[must_use]
+    pub fn with_apps(mut self, filter: NameFilter) -> Self {
+        self.apps = filter;
+        self
+    }
+
     /// Returns `true` when no list names anything.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -173,6 +188,7 @@ impl ItemFilters {
             && self.packages.is_empty()
             && self.containers.is_empty()
             && self.projects.is_empty()
+            && self.apps.is_empty()
     }
 }
 
@@ -391,6 +407,20 @@ mod tests {
         assert!(filters.packages().includes("node"));
         assert!(filters.containers().includes("web"));
         assert!(filters.projects().includes("stack"));
+        assert!(filters.apps().includes("409203825"));
+    }
+
+    #[test]
+    fn the_apps_filter_matches_mac_app_store_ids_exactly() {
+        let filters = ItemFilters::new().with_apps(NameFilter::new().with_include(["409203825"]));
+
+        assert!(!filters.is_empty());
+        assert!(filters.apps().includes("409203825"));
+        assert!(!filters.apps().includes("409183694"));
+
+        let filters = ItemFilters::new().with_apps(NameFilter::new().with_exclude(["409183694"]));
+        assert!(filters.apps().includes("409203825"));
+        assert!(!filters.apps().includes("409183694"));
     }
 
     #[test]
