@@ -80,9 +80,13 @@ pub fn mas_outdated() -> &'static [&'static str] {
     &["mas outdated"]
 }
 
-/// Named insertion: Mac App Store upgrade.
+/// Named insertion: Mac App Store upgrade of a single app by id.
+///
+/// freshen upgrades selected App Store apps with `mas upgrade <id>` (see the
+/// plan item "apply the include and exclude lists to Mac App Store apps"),
+/// so the recorded call carries the app's id.
 pub fn mas_upgrade() -> &'static [&'static str] {
-    &["mas upgrade"]
+    &["mas upgrade 409203825"]
 }
 
 /// Named insertion: full Mac App Store upgrade transcript.
