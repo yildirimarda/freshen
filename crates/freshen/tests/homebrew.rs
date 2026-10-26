@@ -110,7 +110,10 @@ fn full_app_transcript(app_path: &std::path::Path) -> Vec<String> {
         "osascript -e tell application \"System Events\" -e set appProcess to first process whose bundle identifier is \"com.example.firefox\" -e get value of attribute \"AXHidden\" of appProcess -e end tell".to_string()
     );
     t.push(
-        "osascript -e tell application \"System Events\" -e set appProcess to first process whose bundle identifier is \"com.example.firefox\" -e tell appProcess -e get {position of window 1, size of window 1} -e end tell -e end tell".to_string()
+        "osascript -e tell application \"System Events\" -e set appProcess to first process whose bundle identifier is \"com.example.firefox\" -e tell appProcess -e get position of every window -e end tell -e end tell".to_string()
+    );
+    t.push(
+        "osascript -e tell application \"System Events\" -e set appProcess to first process whose bundle identifier is \"com.example.firefox\" -e tell appProcess -e get size of every window -e end tell -e end tell".to_string()
     );
     t.push(
         "osascript -e with timeout of 3 seconds -e tell application id \"com.example.firefox\" to quit -e end timeout".to_string()
@@ -808,8 +811,11 @@ fn osascript_script(quit_body: &str) -> String {
   *"AXHidden"*)
     printf '%s\n' "${FRESHEN_APP_HIDDEN:-false}"
     ;;
-  *"position of window 1"*)
-    if [ -n "${FRESHEN_APP_WINDOW:-}" ]; then printf '%s\n' "$FRESHEN_APP_WINDOW"; fi
+  *"position of every window"*)
+    printf '%s\n' "${FRESHEN_APP_WINDOW:-}"
+    ;;
+  *"size of every window"*)
+    printf '%s\n' "${FRESHEN_APP_WINDOW_SIZE:-}"
     ;;
   *"to quit"*)
     QUIT_BODY
@@ -1015,7 +1021,10 @@ fn the_window_of_an_app_is_put_back_where_it_was() {
     let output = run_apps(
         &tools,
         &state,
-        &[("FRESHEN_APP_WINDOW", "{{10, 20}, {1440, 900}}")],
+        &[
+            ("FRESHEN_APP_WINDOW", "{10, 20}"),
+            ("FRESHEN_APP_WINDOW_SIZE", "{1440, 900}"),
+        ],
         &[],
     );
 
