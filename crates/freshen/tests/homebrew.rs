@@ -1376,6 +1376,96 @@ fn an_app_that_is_still_updating_skips_its_cask_upgrade() {
 
 #[cfg(unix)]
 #[test]
+fn left_running_apps_are_named_in_the_json_and_markdown_reports() {
+    let json_output = {
+        let (tools, state, updater) = updating_app_tools(99);
+        let mut command = tools.command();
+        command
+            .env("FRESHEN_BREW_INFO_JSON", CASK_INFO)
+            .env("FRESHEN_PS_STATE", &state)
+            .env("FRESHEN_PS_UPDATER", &updater)
+            .env("UPDATE_TIMEOUT", "0")
+            .args(["--only", HOMEBREW_STEPS, "--yes", "--cleanup", "--json"]);
+        command
+            .output()
+            .unwrap_or_else(|e| panic!("failed to run freshen: {e}"))
+    };
+    assert!(
+        json_output.status.success(),
+        "stderr: {}",
+        stderr(&json_output)
+    );
+    let text = stdout(&json_output);
+    let report: serde_json::Value =
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("invalid JSON: {e}: {text}"));
+
+    let cask_step = report["steps"]
+        .as_array()
+        .and_then(|steps| {
+            steps
+                .iter()
+                .find(|s| s["id"].as_str() == Some("brew-casks"))
+        })
+        .unwrap_or_else(|| panic!("brew-casks step missing: {report}"));
+
+    assert_eq!(
+        cask_step["left_running_apps"],
+        serde_json::json!(["Firefox.app"]),
+        "report: {report}"
+    );
+
+    let markdown_output = {
+        let (tools, state, updater) = updating_app_tools(99);
+        let mut command = tools.command();
+        command
+            .env("FRESHEN_BREW_INFO_JSON", CASK_INFO)
+            .env("FRESHEN_PS_STATE", &state)
+            .env("FRESHEN_PS_UPDATER", &updater)
+            .env("UPDATE_TIMEOUT", "0")
+            .args(["--only", HOMEBREW_STEPS, "--yes", "--cleanup", "--markdown"]);
+        command
+            .output()
+            .unwrap_or_else(|e| panic!("failed to run freshen: {e}"))
+    };
+    assert!(
+        markdown_output.status.success(),
+        "stderr: {}",
+        stderr(&markdown_output)
+    );
+    let md_text = stdout(&markdown_output);
+    assert!(
+        md_text.contains("## Left running apps"),
+        "markdown: {md_text}"
+    );
+    assert!(md_text.contains("- Firefox.app"), "markdown: {md_text}");
+
+    let summary_output = {
+        let (tools, state, updater) = updating_app_tools(99);
+        let mut command = tools.command();
+        command
+            .env("FRESHEN_BREW_INFO_JSON", CASK_INFO)
+            .env("FRESHEN_PS_STATE", &state)
+            .env("FRESHEN_PS_UPDATER", &updater)
+            .env("UPDATE_TIMEOUT", "0")
+            .args(["--only", HOMEBREW_STEPS, "--yes", "--cleanup"]);
+        command
+            .output()
+            .unwrap_or_else(|e| panic!("failed to run freshen: {e}"))
+    };
+    assert!(
+        summary_output.status.success(),
+        "stderr: {}",
+        stderr(&summary_output)
+    );
+    let summary_text = stdout(&summary_output);
+    assert!(
+        summary_text.contains("left running (updating itself): Firefox.app"),
+        "summary: {summary_text}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn an_app_that_finishes_updating_is_quit_after_freshen_waited_for_it() {
     let (tools, state, updater) = updating_app_tools(3);
 

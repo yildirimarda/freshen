@@ -47,6 +47,7 @@ pub(crate) fn run_json(summary: &RunSummary) -> String {
                 "skip_reason": result.skip_reason().map(|reason| reason.to_string()),
                 "skipped_items": result.skipped_items().to_vec(),
                 "restarted_services": result.restarted_services().to_vec(),
+                "left_running_apps": result.left_running_apps().to_vec(),
                 "error": result.error().map(|error| error.to_string()),
             })
         })
@@ -216,6 +217,31 @@ pub(crate) fn run_markdown(summary: &RunSummary) -> String {
             for service in result.restarted_services() {
                 out.push_str("- ");
                 out.push_str(service);
+                out.push('\n');
+            }
+            out.push('\n');
+        }
+    }
+
+    if summary
+        .steps()
+        .iter()
+        .any(|result| !result.left_running_apps().is_empty())
+    {
+        out.push_str("\n## Left running apps\n\n");
+        for result in summary
+            .steps()
+            .iter()
+            .filter(|result| !result.left_running_apps().is_empty())
+        {
+            out.push_str(&format!(
+                "### {} (`{}`)\n\n",
+                escape_cell(result.name()),
+                result.id()
+            ));
+            for app in result.left_running_apps() {
+                out.push_str("- ");
+                out.push_str(app);
                 out.push('\n');
             }
             out.push('\n');

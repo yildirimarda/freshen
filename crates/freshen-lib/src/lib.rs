@@ -14,6 +14,7 @@ pub(crate) mod deadline;
 mod executable;
 pub mod exit;
 pub mod homebrew;
+pub mod left_running_apps;
 pub mod listing;
 pub mod locale;
 pub mod lock;
