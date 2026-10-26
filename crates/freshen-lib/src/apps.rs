@@ -1500,7 +1500,6 @@ impl MacAppSystem {
             .map(|output| output.stdout().to_owned())
             .unwrap_or_default()
     }
-
 }
 
 impl AppSystem for MacAppSystem {
@@ -1624,7 +1623,7 @@ impl AppSystem for MacAppSystem {
             warn(&format!(
                 "The hidden state and the window place of {name} could not be read: \
                  macOS denied the permission to control System Events (error -1743). \
-                 The app was reopened in the background (visible) instead of hidden."
+                 The app was reopened visible instead of hidden."
             ));
         }
 
@@ -1697,6 +1696,8 @@ mod tests {
         UpdateState, WindowState, SESSION_STATE_TIMEOUT,
     };
     use crate::policy::AppLists;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[derive(Default)]
     struct FakeSystem {
@@ -1883,7 +1884,12 @@ mod tests {
             true
         }
 
-        fn session_state(&self, _app: Option<&std::path::Path>, bundle_id: &str, _name: &str) -> SessionState {
+        fn session_state(
+            &self,
+            _app: Option<&std::path::Path>,
+            bundle_id: &str,
+            _name: &str,
+        ) -> SessionState {
             lock(&self.sessions)
                 .get(bundle_id)
                 .copied()
@@ -2766,6 +2772,8 @@ mod tests {
             .join("Library/Caches")
             .join(bundle_id)
             .join("pending");
+        #[allow(clippy::unwrap_used, clippy::expect_used)]
+        let _guard = ENV_LOCK.lock().expect("test lock");
         std::fs::create_dir_all(&pending_dir).unwrap_or_else(|error| panic!("{error}"));
         std::env::set_var("HOME", &temp_dir);
 
@@ -2786,6 +2794,8 @@ mod tests {
             .join("Library/Caches")
             .join(bundle_id)
             .join("pending");
+        #[allow(clippy::unwrap_used, clippy::expect_used)]
+        let _guard = ENV_LOCK.lock().expect("test lock");
         std::fs::create_dir_all(&pending_dir).unwrap_or_else(|error| panic!("{error}"));
         std::env::set_var("HOME", &temp_dir);
 

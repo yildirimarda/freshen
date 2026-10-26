@@ -1249,7 +1249,7 @@ fn a_denied_automation_request_explains_the_hidden_and_window_state() {
         "output should name the denied permission: {text}"
     );
     assert!(
-        text.contains("reopened in the background"),
+        text.contains("reopened visible"),
         "output should explain the reopen: {text}"
     );
 }
