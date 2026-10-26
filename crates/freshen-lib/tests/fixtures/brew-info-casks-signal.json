@@ -1,0 +1,13 @@
+{
+  "casks": [
+    {
+      "token": "zoom",
+      "artifacts": [
+        {"pkg": ["Zoom.pkg"]}
+      ],
+      "uninstall": [
+        {"signal": ["KILL", "us.zoom.xos"]}
+      ]
+    }
+  ]
+}

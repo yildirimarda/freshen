@@ -628,11 +628,17 @@ fn collect_quit_bundle_ids(uninstall: &Value, bundle_ids: &mut Vec<String>) {
                 if let Some(quit) = item.get("quit") {
                     push_quit_bundle_ids(quit, bundle_ids);
                 }
+                if let Some(signal) = item.get("signal") {
+                    push_signal_bundle_ids(signal, bundle_ids);
+                }
             }
         }
         Value::Object(_) => {
             if let Some(quit) = uninstall.get("quit") {
                 push_quit_bundle_ids(quit, bundle_ids);
+            }
+            if let Some(signal) = uninstall.get("signal") {
+                push_signal_bundle_ids(signal, bundle_ids);
             }
         }
         _ => {}
@@ -653,6 +659,14 @@ fn push_quit_bundle_ids(value: &Value, bundle_ids: &mut Vec<String>) {
             }
         }
         _ => {}
+    }
+}
+
+fn push_signal_bundle_ids(value: &Value, bundle_ids: &mut Vec<String>) {
+    if let Value::Array(items) = value {
+        if let Some(bundle_id) = items.get(1).and_then(Value::as_str) {
+            push_unique_bundle_id(bundle_id, bundle_ids);
+        }
     }
 }
 
@@ -2936,7 +2950,7 @@ mod tests {
             metadata.casks()[3].quit_bundle_ids(),
             ["com.example.toplevel"]
         );
-        assert!(metadata.casks()[4].quit_bundle_ids().is_empty());
+        assert_eq!(metadata.casks()[4].quit_bundle_ids(), ["com.example.other"]);
     }
 
     #[test]
@@ -2955,7 +2969,12 @@ mod tests {
 
         assert_eq!(
             bundle_ids,
-            ["com.example.menubar", "com.example.one", "com.example.two"]
+            [
+                "com.example.menubar",
+                "com.example.one",
+                "com.example.two",
+                "com.example.other"
+            ]
         );
     }
 
@@ -2965,6 +2984,16 @@ mod tests {
             .unwrap_or_else(|error| panic!("transcript should parse: {error}"));
 
         assert!(metadata.casks()[1].quit_bundle_ids().is_empty());
+    }
+
+    #[test]
+    fn a_cask_with_only_signal_entries_has_its_bundle_id_collected() {
+        let metadata = cask_metadata(include_str!(
+            "../tests/fixtures/brew-info-casks-signal.json"
+        ))
+        .unwrap_or_else(|error| panic!("fixture should parse: {error}"));
+
+        assert_eq!(metadata.casks()[0].quit_bundle_ids(), ["us.zoom.xos"]);
     }
 
     #[test]
