@@ -144,6 +144,45 @@ fn the_outdated_apps_are_reported_in_check_mode() {
     );
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn the_filter_keeps_only_the_selected_app_by_name() {
+    let tools = StubTools::new(&["mas"]);
+    // Write a config file that includes only "Numbers" in packages.
+    let config_text = "[include]\npackages = [\"Numbers\"]\n";
+    std::fs::create_dir_all(tools.config_path().parent().unwrap()).unwrap();
+    std::fs::write(tools.config_path(), config_text).unwrap();
+
+    tools.set_responses(
+        "mas",
+        &[
+            StubOutput::stdout("someone@example.com\n"),
+            StubOutput::stdout("409203825  Numbers  (4.2 -> 4.3.1)\n409183694  Keynote  (7.2 -> 7.3.1)\n"),
+            StubOutput::stdout(""),
+            StubOutput::stdout(""),
+        ],
+    );
+
+    let output = tools
+        .command()
+        .args(["--only", "mas", "--yes"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("Numbers"),
+        "the selected app should be upgraded: {}",
+        stdout(&output)
+    );
+    // Only Numbers is upgraded (by its id 409203825).
+    assert!(
+        stdout(&output).contains("mas: upgrade 409203825"),
+        "the upgrade should use the app store id: {}",
+        stdout(&output)
+    );
+}
+
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn the_step_is_not_available_on_this_platform() {
