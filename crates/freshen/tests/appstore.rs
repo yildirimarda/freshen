@@ -150,8 +150,8 @@ fn the_filter_keeps_only_the_selected_app_by_name() {
     let tools = StubTools::new(&["mas"]);
     // Write a config file that includes only "Numbers" in packages.
     let config_text = "[include]\npackages = [\"Numbers\"]\n";
-    std::fs::create_dir_all(tools.config_path().parent().unwrap()).unwrap();
-    std::fs::write(tools.config_path(), config_text).unwrap();
+    std::fs::create_dir_all(tools.config_path().parent().expect("test setup")).expect("test setup");
+    std::fs::write(tools.config_path(), config_text).expect("test setup");
 
     tools.set_responses(
         "mas",
