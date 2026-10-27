@@ -157,7 +157,9 @@ fn the_filter_keeps_only_the_selected_app_by_name() {
         "mas",
         &[
             StubOutput::stdout("someone@example.com\n"),
-            StubOutput::stdout("409203825  Numbers  (4.2 -> 4.3.1)\n409183694  Keynote  (7.2 -> 7.3.1)\n"),
+            StubOutput::stdout(
+                "409203825  Numbers  (4.2 -> 4.3.1)\n409183694  Keynote  (7.2 -> 7.3.1)\n",
+            ),
             StubOutput::stdout(""),
             StubOutput::stdout(""),
         ],

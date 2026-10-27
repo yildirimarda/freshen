@@ -722,9 +722,9 @@ mod tests {
             crate::policy::ItemFilters::new()
                 .with_packages(crate::policy::NameFilter::new().with_include(["Numbers"])),
         );
-        let report = step.check_with_options(&options).unwrap_or_else(|error| {
-            panic!("check failed: {error}")
-        });
+        let report = step
+            .check_with_options(&options)
+            .unwrap_or_else(|error| panic!("check failed: {error}"));
         assert_eq!(report.pending(), 1);
         assert_eq!(report.items()[0].name(), "Numbers");
     }
@@ -757,9 +757,9 @@ mod tests {
             crate::policy::ItemFilters::new()
                 .with_packages(crate::policy::NameFilter::new().with_exclude(["Numbers"])),
         );
-        let report = step.check_with_options(&options).unwrap_or_else(|error| {
-            panic!("check failed: {error}")
-        });
+        let report = step
+            .check_with_options(&options)
+            .unwrap_or_else(|error| panic!("check failed: {error}"));
         assert!(report.is_up_to_date());
         assert!(step.run_with_options(&options).is_ok());
         assert_eq!(client.calls(), ["outdated", "outdated"]);
