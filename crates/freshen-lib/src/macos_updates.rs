@@ -359,7 +359,15 @@ impl Step for MacosUpdatesStep {
 
     fn check_with_options(&self, _options: &RunOptions) -> Result<CheckReport, StepError> {
         let text = self.list(Operation::Check)?;
-        Ok(CheckReport::from_items(parse_software_update_list(&text)))
+        let items = parse_software_update_list(&text);
+        if pending_reboot(&text) && items.is_empty() {
+            Ok(CheckReport::from_items([OutdatedItem::new(
+                "macOS system update",
+            )
+            .with_reason(RESTART_REASON)]))
+        } else {
+            Ok(CheckReport::from_items(items))
+        }
     }
 
     fn run(&self) -> Result<(), StepError> {
@@ -1012,6 +1020,30 @@ mod tests {
                 .collect();
             assert!(!ids.contains(&MACOS_UPDATES), "{platform}");
         }
+    }
+
+    /// The output of `softwareupdate --list` on a machine with a staged
+    /// update: a previous update was installed but the machine still has to
+    /// restart to finish it.
+    const STAGED_UPDATE_LIST: &str =
+        "Software Update Tool\n\nFinding available software\nSoftware Update found the following new or updated software:\n\nNo new software available.\n\nRestart computer to finish installing this update\n";
+
+    #[test]
+    fn a_staged_update_is_detected_in_check_mode() {
+        let client = Arc::new(FakeSoftwareUpdate {
+            list: SoftwareUpdateOutput::success(STAGED_UPDATE_LIST),
+            ..FakeSoftwareUpdate::new()
+        });
+        let step = step_with(&client);
+
+        let report = step
+            .check()
+            .unwrap_or_else(|error| panic!("check failed: {error}"));
+
+        assert_eq!(report.pending(), 1);
+        assert_eq!(report.items()[0].name(), "macOS system update");
+        assert_eq!(report.items()[0].reason(), Some("needs a restart"));
+        assert_eq!(client.calls(), ["list"]);
     }
 
     #[test]

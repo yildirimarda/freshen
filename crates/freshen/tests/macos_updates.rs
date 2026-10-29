@@ -278,6 +278,36 @@ fn a_command_line_tools_installation_that_needs_administrator_rights_is_only_a_w
     assert!(text.contains("0 failed"), "the step must not fail: {text}");
 }
 
+/// The output of `softwareupdate --list` on a machine with a staged
+/// update: no new updates, but a restart is still pending.
+#[cfg(target_os = "macos")]
+const STAGED_UPDATE_LIST: &str =
+    "Software Update Tool\n\nFinding available software\nSoftware Update found the following new or updated software:\n\nNo new software available.\n\nRestart computer to finish installing this update\n";
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_staged_update_is_detected_in_check_mode() {
+    let tools = StubTools::new(&["softwareupdate"]);
+    tools.set_responses("softwareupdate", &[StubOutput::stdout(STAGED_UPDATE_LIST)]);
+
+    let output = tools
+        .command()
+        .args(["--only", "macos-updates", "--check"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert_eq!(output.status.code(), Some(2), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("macOS system update"),
+        "the pending restart is not in the report: {text}"
+    );
+    assert!(
+        text.contains("needs a restart"),
+        "the report does not name the restart reason: {text}"
+    );
+}
+
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn the_step_is_not_available_on_this_platform() {
