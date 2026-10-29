@@ -2069,26 +2069,41 @@ mod tests {
 
     #[test]
     fn registry_stops_colima_before_formulae_and_starts_it_afterwards() {
-        for platform in [Platform::Macos, Platform::Linux] {
-            assert_eq!(
-                ordered_ids(platform),
-                [
-                    "brew",
-                    "colima-stop",
-                    "brew-formulae",
-                    "colima-start",
-                    "brew-services",
-                    "brew-casks",
-                    "brew-autoremove",
-                    "brew-cleanup",
-                    "brew-doctor",
-                    "brew-bundle-cleanup",
-                    "brew-reopen",
-                    "docker",
-                ],
-                "{platform}"
-            );
-        }
+        assert_eq!(
+            ordered_ids(Platform::Macos),
+            [
+                "macos-updates",
+                "brew",
+                "colima-stop",
+                "brew-formulae",
+                "colima-start",
+                "brew-services",
+                "brew-casks",
+                "brew-autoremove",
+                "brew-cleanup",
+                "brew-doctor",
+                "brew-bundle-cleanup",
+                "brew-reopen",
+                "docker",
+            ]
+        );
+        assert_eq!(
+            ordered_ids(Platform::Linux),
+            [
+                "brew",
+                "colima-stop",
+                "brew-formulae",
+                "colima-start",
+                "brew-services",
+                "brew-casks",
+                "brew-autoremove",
+                "brew-cleanup",
+                "brew-doctor",
+                "brew-bundle-cleanup",
+                "brew-reopen",
+                "docker",
+            ]
+        );
     }
 
     #[test]
@@ -2343,6 +2358,7 @@ mod tests {
         assert_eq!(
             ordered,
             [
+                "macos-updates",
                 "brew",
                 "brew-formulae",
                 "colima-stop",
@@ -2390,6 +2406,7 @@ mod tests {
         assert_eq!(
             ordered,
             [
+                "macos-updates",
                 "brew",
                 "brew-formulae",
                 "colima-stop",
@@ -2437,6 +2454,7 @@ mod tests {
         assert_eq!(
             ordered,
             [
+                "macos-updates",
                 "brew",
                 "brew-formulae",
                 "colima-stop",
@@ -2484,6 +2502,7 @@ mod tests {
         assert_eq!(
             ordered,
             [
+                "macos-updates",
                 "brew",
                 "colima-stop",
                 "brew-formulae",

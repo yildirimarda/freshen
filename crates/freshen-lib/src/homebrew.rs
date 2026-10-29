@@ -34,6 +34,7 @@ use crate::apps::{
     QuitChoice, QuitPolicy, Reopen, RunningApp,
 };
 use crate::cleanup;
+use crate::macos_updates;
 use crate::options::RunOptions;
 use crate::output::{flush, human, human_print};
 use crate::platform::Platform;
@@ -400,16 +401,18 @@ fn reopen_queued(queue: &ReopenQueue, system: &dyn AppSystem, message: &str, int
 pub fn register(registry: Registry) -> Registry {
     let reopen = ReopenQueue::default();
     let services = ServiceQueue::default();
-    registry
-        .with(UpdateStep)
-        .with(FormulaeStep::new(services.clone()))
-        .with(ServicesStep::new(services))
-        .with(CasksStep::new(reopen.clone()))
-        .with(AutoremoveStep)
-        .with(CleanupStep)
-        .with(DoctorStep::new())
-        .with(BundleCleanupStep::new())
-        .with(ReopenStep::new(reopen))
+    macos_updates::register(
+        registry
+            .with(UpdateStep)
+            .with(FormulaeStep::new(services.clone()))
+            .with(ServicesStep::new(services))
+            .with(CasksStep::new(reopen.clone()))
+            .with(AutoremoveStep)
+            .with(CleanupStep)
+            .with(DoctorStep::new())
+            .with(BundleCleanupStep::new())
+            .with(ReopenStep::new(reopen)),
+    )
 }
 
 /// A failure while reading Homebrew cask metadata.
@@ -1340,6 +1343,10 @@ impl Step for UpdateStep {
 
     fn snapshot(&self) -> Option<SnapshotSection> {
         Some(snapshot::homebrew_section())
+    }
+
+    fn prerequisites(&self) -> &'static [StepId] {
+        &[macos_updates::MACOS_UPDATES]
     }
 
     fn platforms(&self) -> &'static [Platform] {
@@ -2677,9 +2684,10 @@ mod tests {
         own_bundle_id, parse_bundle_cleanup, parse_doctor_findings, parse_outdated,
         quit_bundle_ids_of, quit_plan, register, running_services, services_for_formulae,
         BundleCleanupStep, BundlePackage, CaskError, CasksStep, DoctorFinding, ReopenQueue,
-        ReopenStep, CASKS, FORMULAE, REOPEN, SERVICES,
+        ReopenStep, BREW, CASKS, FORMULAE, REOPEN, SERVICES,
     };
     use crate::apps::{AppScan, AppSystem, QuitOutcome, Reopen, RunningApp, SessionState};
+    use crate::macos_updates;
     use crate::platform::Platform;
     use crate::policy::AppLists;
     use crate::registry::Registry;
@@ -2818,6 +2826,7 @@ mod tests {
         assert_eq!(
             ordered_ids(Platform::Macos),
             [
+                "macos-updates",
                 "brew",
                 "brew-formulae",
                 "brew-services",
@@ -2870,6 +2879,17 @@ mod tests {
             services_for_formulae(output, &formulae),
             ["user/tap/tool", "other"]
         );
+    }
+
+    #[test]
+    fn brew_declares_macos_updates_as_a_prerequisite() {
+        let registry = register(Registry::new());
+        let brew = registry
+            .steps()
+            .find(|step| step.id() == BREW)
+            .unwrap_or_else(|| panic!("brew step is not registered"));
+
+        assert_eq!(brew.prerequisites(), [macos_updates::MACOS_UPDATES]);
     }
 
     #[test]
