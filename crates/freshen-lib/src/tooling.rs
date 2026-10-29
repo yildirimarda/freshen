@@ -440,28 +440,45 @@ mod tests {
 
     #[test]
     fn registry_runs_uv_and_mise_last() {
-        for platform in [Platform::Macos, Platform::Linux] {
-            assert_eq!(
-                ordered_ids(platform),
-                [
-                    "brew",
-                    "colima-stop",
-                    "brew-formulae",
-                    "colima-start",
-                    "brew-services",
-                    "brew-casks",
-                    "brew-autoremove",
-                    "brew-cleanup",
-                    "brew-doctor",
-                    "brew-bundle-cleanup",
-                    "brew-reopen",
-                    "docker",
-                    "uv",
-                    "mise",
-                ],
-                "{platform}"
-            );
-        }
+        assert_eq!(
+            ordered_ids(Platform::Macos),
+            [
+                "macos-updates",
+                "brew",
+                "colima-stop",
+                "brew-formulae",
+                "colima-start",
+                "brew-services",
+                "brew-casks",
+                "brew-autoremove",
+                "brew-cleanup",
+                "brew-doctor",
+                "brew-bundle-cleanup",
+                "brew-reopen",
+                "docker",
+                "uv",
+                "mise",
+            ]
+        );
+        assert_eq!(
+            ordered_ids(Platform::Linux),
+            [
+                "brew",
+                "colima-stop",
+                "brew-formulae",
+                "colima-start",
+                "brew-services",
+                "brew-casks",
+                "brew-autoremove",
+                "brew-cleanup",
+                "brew-doctor",
+                "brew-bundle-cleanup",
+                "brew-reopen",
+                "docker",
+                "uv",
+                "mise",
+            ]
+        );
         assert_eq!(
             ordered_ids(Platform::Windows),
             ["uv", "mise"],
