@@ -72,7 +72,7 @@ const BREW_PREFIXES_ENV: &str = "FRESHEN_BREW_PREFIXES";
 
 /// One Homebrew installation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct BrewInstall {
+pub(crate) struct BrewInstall {
     /// The `bin/brew` executable.
     program: PathBuf,
     /// The installation prefix, for example `/opt/homebrew`.
@@ -90,7 +90,7 @@ impl BrewInstall {
     /// transcript does not change for a normal single-install machine. The
     /// other installation is named by its absolute path, which is also what
     /// makes the two architectures unambiguous in the log.
-    fn command(&self) -> CommandSpec {
+    pub(crate) fn command(&self) -> CommandSpec {
         if self.from_path {
             CommandSpec::new("brew")
         } else {
@@ -161,7 +161,7 @@ fn install_message(brews: &BrewSet, install: &BrewInstall, message: impl Into<St
 }
 
 /// Discovers the `brew` on `PATH` and the standard prefixes.
-fn brew_installs() -> Vec<BrewInstall> {
+pub(crate) fn brew_installs() -> Vec<BrewInstall> {
     let path = crate::executable::resolve("brew");
     brew_installs_from(path, &brew_prefixes(), &Arch::current())
 }
@@ -2681,12 +2681,12 @@ mod tests {
     #[cfg(unix)]
     use super::brew_installs_from;
     use super::{
-        administrator_skip_message, apps_of, brewfile_in, cask_app_artifacts, cask_metadata,
-        command_line_tools_failure, install_arch, installed_app_paths, is_pinned, launch_agents_of,
-        own_bundle_id, parse_bundle_cleanup, parse_doctor_findings, parse_outdated,
-        quit_bundle_ids_of, quit_plan, register, running_services, services_for_formulae,
-        BundleCleanupStep, BundlePackage, CaskError, CasksStep, DoctorFinding, ReopenQueue,
-        ReopenStep, BREW, CASKS, FORMULAE, REOPEN, SERVICES,
+        administrator_skip_message, apps_of, brew_installs, brewfile_in, cask_app_artifacts,
+        cask_metadata, command_line_tools_failure, install_arch, installed_app_paths, is_pinned,
+        launch_agents_of, own_bundle_id, parse_bundle_cleanup, parse_doctor_findings,
+        parse_outdated, quit_bundle_ids_of, quit_plan, register, running_services,
+        services_for_formulae, BundleCleanupStep, BundlePackage, CaskError, CasksStep,
+        DoctorFinding, ReopenQueue, ReopenStep, BREW, CASKS, FORMULAE, REOPEN, SERVICES,
     };
     use crate::apps::{AppScan, AppSystem, QuitOutcome, Reopen, RunningApp, SessionState};
     use crate::macos_updates;
@@ -3751,6 +3751,50 @@ mod tests {
         assert_eq!(installs.len(), 1, "installs: {installs:?}");
         assert_eq!(installs[0].program, program);
         assert!(installs[0].from_path);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
+    fn a_path_installation_and_a_prefix_installation_are_both_returned_and_deduplicated() {
+        let _guard = ENV_LOCK.lock().expect("test lock");
+
+        let root = discovery_root("path-and-prefix");
+        let path_prefix = root.join("path-prefix");
+        let prefix_prefix = root.join("prefix-prefix");
+        let path_program = executable_brew(&path_prefix);
+        let prefix_program = executable_brew(&prefix_prefix);
+
+        let path_bin = path_prefix.join("bin");
+        let original_path = std::env::var_os("PATH").unwrap_or_default();
+        std::env::set_var(
+            "PATH",
+            format!(
+                "{}:{}{}",
+                path_bin.display(),
+                ':',
+                original_path.to_string_lossy()
+            ),
+        );
+        std::env::set_var("FRESHEN_BREW_PREFIXES", prefix_prefix.display().to_string());
+
+        let installs = brew_installs();
+        assert_eq!(installs.len(), 2, "installs: {installs:?}");
+        assert!(installs.iter().any(|i| i.program == path_program));
+        assert!(installs.iter().any(|i| i.program == prefix_program));
+
+        // The same executable on PATH and as a prefix is deduplicated.
+        std::env::set_var("FRESHEN_BREW_PREFIXES", path_prefix.display().to_string());
+        let deduped = brew_installs();
+        assert_eq!(deduped.len(), 1, "deduped installs: {deduped:?}");
+        assert_eq!(deduped[0].program, path_program);
+        assert!(deduped[0].from_path);
+
+        std::env::remove_var("FRESHEN_BREW_PREFIXES");
+        std::env::set_var("PATH", original_path);
         let _ = std::fs::remove_dir_all(&root);
     }
 
