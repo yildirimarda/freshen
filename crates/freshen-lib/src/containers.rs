@@ -21,7 +21,7 @@ use serde_json::Value;
 
 use crate::apps::quit_command;
 use crate::cleanup;
-use crate::homebrew::{BREW, CASKS, FORMULAE, REOPEN};
+use crate::homebrew::{brew_installs, BrewInstall, BREW, CASKS, FORMULAE, REOPEN};
 use crate::options::RunOptions;
 use crate::output::human;
 use crate::platform::Platform;
@@ -1501,11 +1501,16 @@ impl ContainerStopStep {
 
     fn upgrade_triggers_restart(&self) -> Result<bool, StepError> {
         let mut outdated = Vec::new();
-        if !self.runtime.restart_formulae().is_empty() {
-            outdated.extend(self.outdated(&["outdated", "--formula", "--quiet"])?);
-        }
-        if !self.runtime.restart_casks().is_empty() {
-            outdated.extend(self.outdated(&["outdated", "--cask", "--greedy", "--quiet"])?);
+        let installs = brew_installs();
+        for install in &installs {
+            if !self.runtime.restart_formulae().is_empty() {
+                outdated.extend(self.outdated_for(install, &["outdated", "--formula", "--quiet"])?);
+            }
+            if !self.runtime.restart_casks().is_empty() {
+                outdated.extend(
+                    self.outdated_for(install, &["outdated", "--cask", "--greedy", "--quiet"])?,
+                );
+            }
         }
 
         Ok(outdated
@@ -1513,8 +1518,13 @@ impl ContainerStopStep {
             .any(|name| self.runtime.triggers_restart(name)))
     }
 
-    fn outdated(&self, arguments: &[&str]) -> Result<Vec<String>, StepError> {
-        let output = CommandSpec::new("brew")
+    fn outdated_for(
+        &self,
+        install: &BrewInstall,
+        arguments: &[&str],
+    ) -> Result<Vec<String>, StepError> {
+        let output = install
+            .command()
             .args(arguments)
             .neutral_locale()
             .retry_transient_network(NETWORK_RETRIES)
@@ -1944,7 +1954,8 @@ fn docker_command(arguments: &[&str], id: &str) -> CommandSpec {
 }
 
 fn detect_with_brew(runtime: &dyn ContainerRuntime) -> Detection {
-    if command_exists("brew") && runtime.detect().is_installed() {
+    let installs = brew_installs();
+    if !installs.is_empty() && runtime.detect().is_installed() {
         Detection::Installed
     } else {
         Detection::NotInstalled
@@ -3042,5 +3053,100 @@ mod tests {
         );
 
         assert_eq!(runtime.to_string(), "Docker Desktop (docker context)");
+    }
+
+    #[test]
+    fn container_steps_discover_both_homebrew_installations() {
+        use crate::homebrew::{brew_installs, BREW_PREFIXES_ENV};
+        use std::env;
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let tmp =
+            std::env::temp_dir().join(format!("freshen-test-{}-{}", std::process::id(), unique));
+        let prefix1 = tmp.join("prefix1");
+        let prefix2 = tmp.join("prefix2");
+        fs::create_dir_all(prefix1.join("bin"))
+            .unwrap_or_else(|e| panic!("create_dir_all failed: {e}"));
+        fs::create_dir_all(prefix2.join("bin"))
+            .unwrap_or_else(|e| panic!("create_dir_all failed: {e}"));
+
+        let brew_script = "#!/bin/sh\nexit 0\n";
+        fs::write(prefix1.join("bin/brew"), brew_script)
+            .unwrap_or_else(|e| panic!("write failed: {e}"));
+        fs::write(prefix2.join("bin/brew"), brew_script)
+            .unwrap_or_else(|e| panic!("write failed: {e}"));
+        fs::set_permissions(prefix1.join("bin/brew"), fs::Permissions::from_mode(0o755))
+            .unwrap_or_else(|e| panic!("set_permissions failed: {e}"));
+        fs::set_permissions(prefix2.join("bin/brew"), fs::Permissions::from_mode(0o755))
+            .unwrap_or_else(|e| panic!("set_permissions failed: {e}"));
+
+        env::set_var(
+            BREW_PREFIXES_ENV,
+            format!("{}:{}", prefix1.display(), prefix2.display()),
+        );
+
+        let installs = brew_installs();
+        let prefixes: Vec<String> = installs
+            .iter()
+            .map(|i| i.prefix.display().to_string())
+            .collect();
+        assert!(
+            prefixes.contains(&prefix1.display().to_string()),
+            "prefixes: {prefixes:?}"
+        );
+        assert!(
+            prefixes.contains(&prefix2.display().to_string()),
+            "prefixes: {prefixes:?}"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn container_stop_checks_both_installations_for_outdated_formulae() {
+        use crate::homebrew::BREW_PREFIXES_ENV;
+        use std::env;
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let tmp =
+            std::env::temp_dir().join(format!("freshen-test-{}-{}", std::process::id(), unique));
+        let prefix = tmp.join("prefix");
+        fs::create_dir_all(prefix.join("bin"))
+            .unwrap_or_else(|e| panic!("create_dir_all failed: {e}"));
+
+        let brew_script = r#"#!/bin/sh
+printf 'colima\n'
+exit 0
+"#;
+        fs::write(prefix.join("bin/brew"), brew_script)
+            .unwrap_or_else(|e| panic!("write failed: {e}"));
+        fs::set_permissions(prefix.join("bin/brew"), fs::Permissions::from_mode(0o755))
+            .unwrap_or_else(|e| panic!("set_permissions failed: {e}"));
+
+        env::set_var(BREW_PREFIXES_ENV, prefix.display().to_string());
+
+        let runtime = ColimaRuntime::new();
+        let step = super::ContainerStopStep::new(
+            Arc::new(runtime),
+            super::ContainerSnapshot::default(),
+            Some(super::ComposeCommand::DockerCompose),
+        );
+        let result = step.upgrade_triggers_restart();
+        assert!(
+            result.unwrap_or_else(|e| panic!("upgrade_triggers_restart failed: {e}")),
+            "expected outdated colima to trigger restart"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
     }
 }
