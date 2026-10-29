@@ -28,6 +28,7 @@ use crate::registry::Registry;
 use crate::step::{
     CheckReport, Detection, Operation, OutdatedItem, SkipReason, Step, StepError, StepId,
 };
+use crate::system::terminal_is_interactive;
 
 /// The Mac App Store step.
 pub const MAS: StepId = "mas";
@@ -317,6 +318,14 @@ impl Step for MacAppStoreStep {
             human!("mas: upgrade (Mac App Store apps)");
             let output = self.client.upgrade();
             if !output.is_success() {
+                if needs_administrator(output.text()) && !terminal_is_interactive() {
+                    human!(
+                        "mas: upgrade skipped: needs administrator rights, \
+                         but this run has no terminal to type the password into. \
+                         Run `sudo mas upgrade` by hand."
+                    );
+                    return Ok(());
+                }
                 return Err(self.failure(Operation::Run, &output));
             }
             return Ok(());
@@ -353,6 +362,14 @@ impl Step for MacAppStoreStep {
             human!("mas: upgrade {} (Mac App Store app)", id);
             let output = self.client.upgrade_ids(&[id]);
             if !output.is_success() {
+                if needs_administrator(output.text()) && !terminal_is_interactive() {
+                    human!(
+                        "mas: upgrade skipped: needs administrator rights, \
+                         but this run has no terminal to type the password into. \
+                         Run `sudo mas upgrade` by hand."
+                    );
+                    return Ok(());
+                }
                 return Err(self.failure(Operation::Run, &output));
             }
         }
@@ -729,22 +746,16 @@ mod tests {
     }
 
     #[test]
-    fn an_upgrade_that_wanted_a_password_names_the_administrator_rights() {
+    fn an_upgrade_that_wanted_a_password_is_skipped_in_a_non_interactive_run() {
         let client = Arc::new(FakeMas {
             upgrade: MasOutput::failure("sudo: a terminal is required to read the password\n"),
             ..FakeMas::new()
         });
         let step = step_with(&client);
 
-        let error = step
-            .run()
-            .err()
-            .unwrap_or_else(|| panic!("the upgrade should fail"));
-
         assert!(
-            error.message().contains("needs administrator rights"),
-            "message: {}",
-            error.message()
+            step.run().is_ok(),
+            "the upgrade should be skipped in a non-interactive run"
         );
     }
 
