@@ -45,6 +45,13 @@ const NOT_SIGNED_IN_PHRASES: [&str; 4] = [
     "must be signed in",
 ];
 
+/// The phrases that show the `mas account` command does not exist.
+///
+/// `mas` 5 and newer dropped the `account` command. When it is missing the
+/// sign-in state is unknown; freshen skips the step instead of attempting an
+/// upgrade that would fail.
+const UNKNOWN_SUBCOMMAND_PHRASES: [&str; 2] = ["unknown subcommand", "unknown command"];
+
 /// The phrases that show the upgrade wanted a password it could not get.
 ///
 /// `mas` 5 and newer install App Store apps with administrator rights and
@@ -226,7 +233,11 @@ impl MacAppStoreStep {
         if output.is_success() {
             return SignInState::SignedIn;
         }
-        if reports_not_signed_in(output.text()) {
+        let text = output.text();
+        if reports_not_signed_in(text) {
+            return SignInState::NotSignedIn;
+        }
+        if contains_any(text, &UNKNOWN_SUBCOMMAND_PHRASES) {
             return SignInState::NotSignedIn;
         }
         SignInState::Unknown
@@ -645,7 +656,7 @@ mod tests {
     }
 
     #[test]
-    fn a_machine_whose_mas_cannot_answer_the_sign_in_question_is_detected() {
+    fn a_machine_whose_mas_cannot_answer_the_sign_in_question_is_skipped() {
         let client = Arc::new(FakeMas {
             account: MasOutput::failure("Error: Unknown subcommand 'account'\n"),
             ..FakeMas::new()
@@ -656,7 +667,22 @@ mod tests {
             .detect()
             .unwrap_or_else(|error| panic!("detection failed: {error}"));
 
-        assert_eq!(detection, Detection::Installed);
+        assert_eq!(detection, Detection::Unavailable(SkipReason::NotSignedIn));
+    }
+
+    #[test]
+    fn a_machine_with_mas_five_is_skipped() {
+        let client = Arc::new(FakeMas {
+            account: MasOutput::failure("Error: unknown subcommand 'account'\n"),
+            ..FakeMas::new()
+        });
+        let step = step_with(&client);
+
+        let detection = step
+            .detect()
+            .unwrap_or_else(|error| panic!("detection failed: {error}"));
+
+        assert_eq!(detection, Detection::Unavailable(SkipReason::NotSignedIn));
     }
 
     #[test]

@@ -112,6 +112,46 @@ fn a_machine_without_a_signed_in_account_skips_the_step() {
 
 #[cfg(target_os = "macos")]
 #[test]
+fn a_machine_with_mas_five_skips_the_step() {
+    let tools = StubTools::new(&["mas"]);
+    tools.set_responses(
+        "mas",
+        &[StubOutput::stderr("Error: Unknown subcommand 'account'\n").with_status(1)],
+    );
+
+    let output = tools
+        .command()
+        .args(["--only", "mas", "--yes"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        mas_account()
+            .to_vec()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
+    );
+
+    let text = stdout(&output);
+    assert!(
+        text.contains("Mac App Store"),
+        "the step is not in the summary: {text}"
+    );
+    assert!(
+        text.contains("not signed in"),
+        "the summary does not name the reason: {text}"
+    );
+    assert!(
+        text.contains("0 ok, 0 planned, 1 skipped, 0 failed"),
+        "summary: {text}"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn the_outdated_apps_are_reported_in_check_mode() {
     let tools = StubTools::new(&["mas"]);
     tools.set_responses(
