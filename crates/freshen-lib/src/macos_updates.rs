@@ -361,8 +361,10 @@ impl Step for MacosUpdatesStep {
         let text = self.list(Operation::Check)?;
         let items = parse_software_update_list(&text);
         if pending_reboot(&text) && items.is_empty() {
-            Ok(CheckReport::from_items([OutdatedItem::new("macOS system update")
-                .with_reason(RESTART_REASON)]))
+            Ok(CheckReport::from_items([OutdatedItem::new(
+                "macOS system update",
+            )
+            .with_reason(RESTART_REASON)]))
         } else {
             Ok(CheckReport::from_items(items))
         }
