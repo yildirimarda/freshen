@@ -192,6 +192,9 @@ pub struct FilterSection {
 
     /// Compose projects.
     pub projects: Option<Vec<String>>,
+
+    /// Mac App Store apps, by App Store id.
+    pub appstore: Option<Vec<String>>,
 }
 
 /// The `[apps]` section: the applications that are quit around a cask upgrade.
@@ -264,6 +267,7 @@ impl Config {
             .with_packages(filter(&self.include.packages, &self.exclude.packages))
             .with_containers(filter(&self.include.containers, &self.exclude.containers))
             .with_projects(filter(&self.include.projects, &self.exclude.projects))
+            .with_appstore(filter(&self.include.appstore, &self.exclude.appstore))
     }
 
     /// The app lists of the file.

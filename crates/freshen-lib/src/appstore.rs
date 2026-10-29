@@ -125,6 +125,9 @@ pub trait MasClient: Send + Sync {
 
     /// The output of `mas upgrade`, which installs the pending updates.
     fn upgrade(&self) -> MasOutput;
+
+    /// The output of `mas upgrade <id>`, which installs the selected updates.
+    fn upgrade_ids(&self, ids: &[&str]) -> MasOutput;
 }
 
 /// The real `mas` command line.
@@ -145,6 +148,12 @@ impl MasClient for MasCommandClient {
 
     fn upgrade(&self) -> MasOutput {
         run_mas(&["upgrade"])
+    }
+
+    fn upgrade_ids(&self, ids: &[&str]) -> MasOutput {
+        let mut args = vec!["upgrade"];
+        args.extend(ids);
+        run_mas(&args)
     }
 }
 
@@ -261,24 +270,82 @@ impl Step for MacAppStoreStep {
         self.check_with_options(&RunOptions::new())
     }
 
-    fn check_with_options(&self, _options: &RunOptions) -> Result<CheckReport, StepError> {
+    fn check_with_options(&self, options: &RunOptions) -> Result<CheckReport, StepError> {
         let output = self.client.outdated();
         if !output.is_success() {
             return Err(self.failure(Operation::Check, &output));
         }
-        Ok(CheckReport::from_items(parse_mas_outdated(output.text())))
+        let filter = options.filters().appstore();
+        let text = output.text();
+        let filtered_text = if filter.is_empty() {
+            text.to_owned()
+        } else {
+            text.lines()
+                .filter(|line| {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() || trimmed.starts_with('{') {
+                        return true;
+                    }
+                    let id = trimmed.split_whitespace().next().unwrap_or("");
+                    filter.includes(id)
+                })
+                .map(|line| line.to_owned())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        Ok(CheckReport::from_items(parse_mas_outdated(&filtered_text)))
     }
 
     fn run(&self) -> Result<(), StepError> {
         self.run_with_options(&RunOptions::new())
     }
 
-    fn run_with_options(&self, _options: &RunOptions) -> Result<(), StepError> {
-        human!("mas: upgrade (Mac App Store apps)");
-        let output = self.client.upgrade();
-        if !output.is_success() {
-            return Err(self.failure(Operation::Run, &output));
+    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
+        let filter = options.filters().appstore();
+        if filter.is_empty() {
+            human!("mas: upgrade (Mac App Store apps)");
+            let output = self.client.upgrade();
+            if !output.is_success() {
+                return Err(self.failure(Operation::Run, &output));
+            }
+            return Ok(());
         }
+
+        let outdated_output = self.client.outdated();
+        if !outdated_output.is_success() {
+            return Err(self.failure(Operation::Run, &outdated_output));
+        }
+
+        let ids: Vec<&str> = outdated_output
+            .text()
+            .lines()
+            .filter_map(|line| {
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed.starts_with('{') {
+                    return None;
+                }
+                let id = trimmed.split_whitespace().next()?;
+                if filter.includes(id) {
+                    Some(id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if ids.is_empty() {
+            human!("mas: no selected apps to upgrade (Mac App Store apps)");
+            return Ok(());
+        }
+
+        for id in ids {
+            human!("mas: upgrade {} (Mac App Store app)", id);
+            let output = self.client.upgrade_ids(&[id]);
+            if !output.is_success() {
+                return Err(self.failure(Operation::Run, &output));
+            }
+        }
+
         Ok(())
     }
 
@@ -385,7 +452,9 @@ mod tests {
     use super::{
         parse_mas_outdated, reports_not_signed_in, MacAppStoreStep, MasClient, MasOutput, MAS,
     };
+    use crate::options::RunOptions;
     use crate::platform::Platform;
+    use crate::policy::{ItemFilters, NameFilter};
     use crate::registry::Registry;
     use crate::step::{Detection, SkipReason, Step};
     use std::sync::{Arc, Mutex};
@@ -446,6 +515,11 @@ mod tests {
 
         fn upgrade(&self) -> MasOutput {
             self.record("upgrade");
+            self.upgrade.clone()
+        }
+
+        fn upgrade_ids(&self, ids: &[&str]) -> MasOutput {
+            self.record(&format!("upgrade {}", ids.join(" ")));
             self.upgrade.clone()
         }
     }
@@ -673,5 +747,81 @@ mod tests {
                 .collect();
             assert!(!ids.contains(&MAS), "{platform}");
         }
+    }
+
+    #[test]
+    fn the_check_applies_the_include_list_to_the_app_store_apps() {
+        let client = Arc::new(FakeMas {
+            outdated: MasOutput::success(
+                "409203825  Numbers  (4.2 -> 4.3.1)\n409183694  Keynote  (7.2 -> 7.3.1)\n",
+            ),
+            ..FakeMas::new()
+        });
+        let step = step_with(&client);
+
+        let report = step
+            .check_with_options(&RunOptions::new().with_filters(
+                ItemFilters::new().with_appstore(NameFilter::new().with_include(["409203825"])),
+            ))
+            .unwrap_or_else(|error| panic!("check failed: {error}"));
+
+        assert_eq!(report.pending(), 1);
+        assert_eq!(report.items()[0].name(), "Numbers");
+    }
+
+    #[test]
+    fn the_check_applies_the_exclude_list_to_the_app_store_apps() {
+        let client = Arc::new(FakeMas {
+            outdated: MasOutput::success(
+                "409203825  Numbers  (4.2 -> 4.3.1)\n409183694  Keynote  (7.2 -> 7.3.1)\n",
+            ),
+            ..FakeMas::new()
+        });
+        let step = step_with(&client);
+
+        let report = step
+            .check_with_options(&RunOptions::new().with_filters(
+                ItemFilters::new().with_appstore(NameFilter::new().with_exclude(["409203825"])),
+            ))
+            .unwrap_or_else(|error| panic!("check failed: {error}"));
+
+        assert_eq!(report.pending(), 1);
+        assert_eq!(report.items()[0].name(), "Keynote");
+    }
+
+    #[test]
+    fn the_run_upgrades_only_the_selected_apps_by_their_app_store_id() {
+        let client = Arc::new(FakeMas {
+            outdated: MasOutput::success("409203825  Numbers  (4.2 -> 4.3.1)\n"),
+            upgrade: MasOutput::success(""),
+            ..FakeMas::new()
+        });
+        let step = step_with(&client);
+
+        assert!(step
+            .run_with_options(&RunOptions::new().with_filters(
+                ItemFilters::new().with_appstore(NameFilter::new().with_include(["409203825"])),
+            ))
+            .is_ok());
+
+        assert_eq!(client.calls(), ["outdated", "upgrade 409203825"]);
+    }
+
+    #[test]
+    fn the_run_skips_the_upgrade_when_no_app_matches_the_filter() {
+        let client = Arc::new(FakeMas {
+            outdated: MasOutput::success("409203825  Numbers  (4.2 -> 4.3.1)\n"),
+            upgrade: MasOutput::success(""),
+            ..FakeMas::new()
+        });
+        let step = step_with(&client);
+
+        assert!(step
+            .run_with_options(&RunOptions::new().with_filters(
+                ItemFilters::new().with_appstore(NameFilter::new().with_exclude(["409203825"])),
+            ))
+            .is_ok());
+
+        assert_eq!(client.calls(), ["outdated"]);
     }
 }
