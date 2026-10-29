@@ -6,11 +6,13 @@
 
 pub mod apps;
 pub mod appstore;
+pub mod bundle_cleanup_packages;
 pub mod check;
 pub mod cleanup;
 pub mod config;
 pub mod containers;
 pub(crate) mod deadline;
+pub mod doctor_warnings;
 mod executable;
 pub mod exit;
 pub mod homebrew;

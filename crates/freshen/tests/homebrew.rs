@@ -2665,7 +2665,9 @@ const DOCTOR_WARNING: &str = "Please note that these warnings are just used to h
                               with debugging if you file an issue. If everything you use Homebrew for\n\
                               is working fine: please don't worry or file an issue; just ignore this. Thanks!\n\
                               \n\
-                              Warning: Your Homebrew is outdated. Run `brew update` to update it.\n";
+                              Warning: Your Homebrew is outdated. Run `brew update` to update it.\n\
+                              You can solve this by running:\n\
+                              brew update\n";
 
 /// The output of a `brew bundle cleanup` that found a package to remove.
 const BUNDLE_CLEANUP_LISTING: &str = "Would uninstall formulae:\n\
@@ -2843,6 +2845,95 @@ fn a_missing_brew_skips_the_doctor_and_the_bundle_cleanup() {
         "summary: {}",
         stdout(&output)
     );
+}
+
+#[test]
+fn doctor_warnings_and_bundle_cleanup_packages_are_named_in_the_json_and_markdown_reports() {
+    let tools = StubTools::new(&["brew"]);
+    let project = project_with_brewfile(&tools);
+    tools.set_responses(
+        "brew",
+        &[
+            StubOutput::stderr(DOCTOR_WARNING).with_status(1),
+            StubOutput::stdout(BUNDLE_CLEANUP_LISTING).with_status(1),
+        ],
+    );
+
+    let output = {
+        let mut command = tools.command();
+        command
+            .env_remove("HOMEBREW_BUNDLE_FILE")
+            .current_dir(&project)
+            .args(["--only", "brew-doctor,brew-bundle-cleanup", "--json"]);
+        command
+            .output()
+            .unwrap_or_else(|e| panic!("failed to run freshen: {e}"))
+    };
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    let report: serde_json::Value =
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("invalid JSON: {e}: {text}"));
+
+    let doctor = report["steps"]
+        .as_array()
+        .and_then(|steps| {
+            steps
+                .iter()
+                .find(|s| s["id"].as_str() == Some("brew-doctor"))
+        })
+        .unwrap_or_else(|| panic!("brew-doctor step missing: {report}"));
+    assert_eq!(
+        doctor["doctor_warnings"][0]["message"],
+        "Your Homebrew is outdated. Run `brew update` to update it."
+    );
+    assert_eq!(
+        doctor["doctor_warnings"][0]["remedy"],
+        "You can solve this by running: brew update"
+    );
+
+    let bundle = report["steps"]
+        .as_array()
+        .and_then(|steps| {
+            steps
+                .iter()
+                .find(|s| s["id"].as_str() == Some("brew-bundle-cleanup"))
+        })
+        .unwrap_or_else(|| panic!("brew-bundle-cleanup step missing: {report}"));
+    assert_eq!(bundle["bundle_cleanup_packages"][0]["name"], "wget");
+    assert_eq!(bundle["bundle_cleanup_packages"][0]["kind"], "formula");
+
+    // Reset the stub response count so the markdown run starts fresh.
+    let _ = std::fs::remove_file(tools.home().join("brew.count"));
+
+    let markdown_output = {
+        let mut command = tools.command();
+        command
+            .env_remove("HOMEBREW_BUNDLE_FILE")
+            .current_dir(&project)
+            .args(["--only", "brew-doctor,brew-bundle-cleanup", "--markdown"]);
+        command
+            .output()
+            .unwrap_or_else(|e| panic!("failed to run freshen: {e}"))
+    };
+    assert!(
+        markdown_output.status.success(),
+        "stderr: {}",
+        stderr(&markdown_output)
+    );
+    let md_text = stdout(&markdown_output);
+    assert!(
+        md_text.contains("## Doctor warnings"),
+        "markdown: {md_text}"
+    );
+    assert!(
+        md_text.contains("Your Homebrew is outdated"),
+        "markdown: {md_text}"
+    );
+    assert!(
+        md_text.contains("## Bundle cleanup packages"),
+        "markdown: {md_text}"
+    );
+    assert!(md_text.contains("- wget (formula)"), "markdown: {md_text}");
 }
 
 #[cfg(unix)]
