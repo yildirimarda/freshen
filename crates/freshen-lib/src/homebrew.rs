@@ -72,7 +72,7 @@ const BREW_PREFIXES_ENV: &str = "FRESHEN_BREW_PREFIXES";
 
 /// One Homebrew installation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct BrewInstall {
+pub(crate) struct BrewInstall {
     /// The `bin/brew` executable.
     program: PathBuf,
     /// The installation prefix, for example `/opt/homebrew`.
@@ -90,7 +90,7 @@ impl BrewInstall {
     /// transcript does not change for a normal single-install machine. The
     /// other installation is named by its absolute path, which is also what
     /// makes the two architectures unambiguous in the log.
-    fn command(&self) -> CommandSpec {
+    pub(crate) fn command(&self) -> CommandSpec {
         if self.from_path {
             CommandSpec::new("brew")
         } else {
@@ -115,27 +115,27 @@ impl BrewInstall {
 
 /// The Homebrew installations found on this machine.
 #[derive(Debug, Clone, Default)]
-struct BrewSet {
+pub(crate) struct BrewSet {
     installs: Vec<BrewInstall>,
 }
 
 impl BrewSet {
     /// Discovers every Homebrew installation.
-    fn detect() -> Self {
+    pub(crate) fn detect() -> Self {
         Self {
             installs: brew_installs(),
         }
     }
 
-    fn installs(&self) -> &[BrewInstall] {
+    pub(crate) fn installs(&self) -> &[BrewInstall] {
         &self.installs
     }
 
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.installs.is_empty()
     }
 
-    fn is_multiple(&self) -> bool {
+    pub(crate) fn is_multiple(&self) -> bool {
         self.installs.len() > 1
     }
 
@@ -161,13 +161,13 @@ fn install_message(brews: &BrewSet, install: &BrewInstall, message: impl Into<St
 }
 
 /// Discovers the `brew` on `PATH` and the standard prefixes.
-fn brew_installs() -> Vec<BrewInstall> {
+pub(crate) fn brew_installs() -> Vec<BrewInstall> {
     let path = crate::executable::resolve("brew");
     brew_installs_from(path, &brew_prefixes(), &Arch::current())
 }
 
 /// The prefixes searched for a Homebrew installation.
-fn brew_prefixes() -> Vec<PathBuf> {
+pub(crate) fn brew_prefixes() -> Vec<PathBuf> {
     if let Some(value) = env::var_os(BREW_PREFIXES_ENV) {
         return env::split_paths(&value).collect();
     }
@@ -183,7 +183,7 @@ fn brew_prefixes() -> Vec<PathBuf> {
 /// The result is deduplicated by executable and ordered with the installation
 /// that matches the running architecture first, so a Rosetta run updates its
 /// own architecture before the other one.
-fn brew_installs_from(
+pub(crate) fn brew_installs_from(
     path: Option<PathBuf>,
     prefixes: &[PathBuf],
     current_arch: &Arch,

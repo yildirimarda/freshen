@@ -1501,11 +1501,21 @@ impl ContainerStopStep {
 
     fn upgrade_triggers_restart(&self) -> Result<bool, StepError> {
         let mut outdated = Vec::new();
+        let brews = crate::homebrew::BrewSet::detect();
         if !self.runtime.restart_formulae().is_empty() {
-            outdated.extend(self.outdated(&["outdated", "--formula", "--quiet"])?);
+            for install in brews.installs() {
+                outdated.extend(
+                    self.outdated_for_install(install, &["outdated", "--formula", "--quiet"])?,
+                );
+            }
         }
         if !self.runtime.restart_casks().is_empty() {
-            outdated.extend(self.outdated(&["outdated", "--cask", "--greedy", "--quiet"])?);
+            for install in brews.installs() {
+                outdated.extend(self.outdated_for_install(
+                    install,
+                    &["outdated", "--cask", "--greedy", "--quiet"],
+                )?);
+            }
         }
 
         Ok(outdated
@@ -1513,8 +1523,13 @@ impl ContainerStopStep {
             .any(|name| self.runtime.triggers_restart(name)))
     }
 
-    fn outdated(&self, arguments: &[&str]) -> Result<Vec<String>, StepError> {
-        let output = CommandSpec::new("brew")
+    fn outdated_for_install(
+        &self,
+        install: &crate::homebrew::BrewInstall,
+        arguments: &[&str],
+    ) -> Result<Vec<String>, StepError> {
+        let output = install
+            .command()
             .args(arguments)
             .neutral_locale()
             .retry_transient_network(NETWORK_RETRIES)
@@ -1944,7 +1959,7 @@ fn docker_command(arguments: &[&str], id: &str) -> CommandSpec {
 }
 
 fn detect_with_brew(runtime: &dyn ContainerRuntime) -> Detection {
-    if command_exists("brew") && runtime.detect().is_installed() {
+    if !crate::homebrew::BrewSet::detect().is_empty() && runtime.detect().is_installed() {
         Detection::Installed
     } else {
         Detection::NotInstalled
@@ -3042,5 +3057,90 @@ mod tests {
         );
 
         assert_eq!(runtime.to_string(), "Docker Desktop (docker context)");
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
+    fn colima_stop_discovers_both_homebrew_installations() {
+        use std::env;
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = std::env::temp_dir().join(format!("freshen-brew-test-{}", std::process::id()));
+        let usr_local = tmp.join("usr/local");
+        let opt_homebrew = tmp.join("opt/homebrew");
+        fs::create_dir_all(usr_local.join("bin")).unwrap();
+        fs::create_dir_all(opt_homebrew.join("bin")).unwrap();
+
+        fs::write(
+            opt_homebrew.join("bin/brew"),
+            "#!/bin/sh\ncase \"$*\" in \"outdated --formula --quiet\") echo \"colima\" ;; esac\n",
+        )
+        .unwrap();
+        fs::set_permissions(
+            opt_homebrew.join("bin/brew"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+
+        fs::write(
+            usr_local.join("bin/brew"),
+            "#!/bin/sh\ncase \"$*\" in \"outdated --formula --quiet\") echo \"lima\" ;; esac\n",
+        )
+        .unwrap();
+        fs::set_permissions(
+            usr_local.join("bin/brew"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+
+        let original_path = env::var_os("PATH");
+        env::set_var("PATH", "");
+        let original_brew_prefixes = env::var_os("FRESHEN_BREW_PREFIXES");
+        env::set_var(
+            "FRESHEN_BREW_PREFIXES",
+            format!("{}:{}", usr_local.display(), opt_homebrew.display()),
+        );
+
+        struct EnvGuard {
+            path: Option<std::ffi::OsString>,
+            prefixes: Option<std::ffi::OsString>,
+        }
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                match &self.path {
+                    Some(value) => env::set_var("PATH", value),
+                    None => env::remove_var("PATH"),
+                }
+                match &self.prefixes {
+                    Some(value) => env::set_var("FRESHEN_BREW_PREFIXES", value),
+                    None => env::remove_var("FRESHEN_BREW_PREFIXES"),
+                }
+            }
+        }
+        let _guard = EnvGuard {
+            path: original_path,
+            prefixes: original_brew_prefixes,
+        };
+
+        let _clean_guard = CleanGuard(tmp.clone());
+
+        let runtime = ColimaRuntime::new();
+        let step = super::ContainerStopStep::new(
+            Arc::new(runtime),
+            super::ContainerSnapshot::default(),
+            None,
+        );
+        assert!(
+            step.upgrade_triggers_restart().unwrap(),
+            "both prefixes should trigger restart"
+        );
+    }
+
+    struct CleanGuard(std::path::PathBuf);
+    impl Drop for CleanGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 }
