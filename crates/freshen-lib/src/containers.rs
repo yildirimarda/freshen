@@ -3063,28 +3063,22 @@ mod tests {
         use std::io::Write;
         #[cfg(unix)]
         use std::os::unix::fs::PermissionsExt;
-        let parent = path.parent().unwrap_or_else(|| {
-            panic!("path {} should have a parent", path.display())
-        });
+        let parent = path
+            .parent()
+            .unwrap_or_else(|| panic!("path {} should have a parent", path.display()));
         std::fs::create_dir_all(parent)
             .unwrap_or_else(|e| panic!("failed to create {}: {e}", parent.display()));
         let mut file = std::fs::File::create(path)
             .unwrap_or_else(|e| panic!("failed to create {}: {e}", path.display()));
         file.write_all(b"#!/bin/sh\n")
             .unwrap_or_else(|e| panic!("failed to write binary: {e}"));
-        std::fs::set_permissions(
-            path,
-            std::fs::Permissions::from_mode(0o755),
-        )
-        .unwrap_or_else(|e| panic!("failed to set permissions on {}: {e}", path.display()));
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+            .unwrap_or_else(|e| panic!("failed to set permissions on {}: {e}", path.display()));
     }
 
     #[test]
     fn detect_with_brew_uses_discovered_homebrew_installations() {
-        let temp = std::env::temp_dir().join(format!(
-            "freshen-brew-test-{}",
-            std::process::id()
-        ));
+        let temp = std::env::temp_dir().join(format!("freshen-brew-test-{}", std::process::id()));
         let prefix = temp.join("opt/homebrew");
         make_binary(&prefix.join("bin/brew"));
         make_binary(&prefix.join("bin/colima"));
@@ -3104,10 +3098,8 @@ mod tests {
 
     #[test]
     fn detect_with_brew_finds_colima_in_usr_local_prefix() {
-        let temp = std::env::temp_dir().join(format!(
-            "freshen-brew-test-usr-{}",
-            std::process::id()
-        ));
+        let temp =
+            std::env::temp_dir().join(format!("freshen-brew-test-usr-{}", std::process::id()));
         let prefix = temp.join("usr/local");
         make_binary(&prefix.join("bin/brew"));
         make_binary(&prefix.join("bin/colima"));
@@ -3125,10 +3117,8 @@ mod tests {
 
     #[test]
     fn detect_with_brew_does_not_detect_when_brew_is_missing() {
-        let temp = std::env::temp_dir().join(format!(
-            "freshen-brew-test-empty-{}",
-            std::process::id()
-        ));
+        let temp =
+            std::env::temp_dir().join(format!("freshen-brew-test-empty-{}", std::process::id()));
         std::env::set_var("FRESHEN_BREW_PREFIXES", temp.display().to_string());
 
         let brews = crate::homebrew::brew_installs();
