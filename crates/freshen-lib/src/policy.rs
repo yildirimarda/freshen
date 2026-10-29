@@ -105,6 +105,7 @@ pub struct ItemFilters {
     packages: NameFilter,
     containers: NameFilter,
     projects: NameFilter,
+    appstore: NameFilter,
 }
 
 impl ItemFilters {
@@ -142,6 +143,13 @@ impl ItemFilters {
         self
     }
 
+    /// Replaces the filter for Mac App Store apps.
+    #[must_use]
+    pub fn with_appstore(mut self, filter: NameFilter) -> Self {
+        self.appstore = filter;
+        self
+    }
+
     /// The filter for casks.
     #[must_use]
     pub fn casks(&self) -> &NameFilter {
@@ -166,6 +174,12 @@ impl ItemFilters {
         &self.projects
     }
 
+    /// The filter for Mac App Store apps.
+    #[must_use]
+    pub fn appstore(&self) -> &NameFilter {
+        &self.appstore
+    }
+
     /// Returns `true` when no list names anything.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -173,6 +187,7 @@ impl ItemFilters {
             && self.packages.is_empty()
             && self.containers.is_empty()
             && self.projects.is_empty()
+            && self.appstore.is_empty()
     }
 }
 
