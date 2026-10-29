@@ -3055,6 +3055,7 @@ mod tests {
         assert_eq!(runtime.to_string(), "Docker Desktop (docker context)");
     }
 
+    #[cfg(unix)]
     #[test]
     fn container_steps_discover_both_homebrew_installations() {
         use crate::homebrew::{brew_installs, BREW_PREFIXES_ENV};
@@ -3107,6 +3108,7 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
     }
 
+    #[cfg(unix)]
     #[test]
     fn container_stop_checks_both_installations_for_outdated_formulae() {
         use crate::homebrew::BREW_PREFIXES_ENV;
