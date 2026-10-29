@@ -1944,11 +1944,26 @@ fn docker_command(arguments: &[&str], id: &str) -> CommandSpec {
 }
 
 fn detect_with_brew(runtime: &dyn ContainerRuntime) -> Detection {
-    if command_exists("brew") && runtime.detect().is_installed() {
+    let brews = crate::homebrew::brew_installs();
+    let brew_found = !brews.is_empty() || command_exists("brew");
+    let runtime_on_path = runtime.detect().is_installed();
+    let runtime_in_brew = brews.iter().any(|install| {
+        binary_in_brew_install(install, runtime.command())
+            || (runtime.name() == "colima/lima" && binary_in_brew_install(install, "limactl"))
+    });
+    if brew_found && (runtime_on_path || runtime_in_brew) {
         Detection::Installed
     } else {
         Detection::NotInstalled
     }
+}
+
+fn binary_in_brew_install(install: &crate::homebrew::BrewInstall, binary: &str) -> bool {
+    if binary.is_empty() {
+        return false;
+    }
+    let binary_name = binary.split_whitespace().next().unwrap_or(binary);
+    crate::executable::resolve(install.prefix.join("bin").join(binary_name)).is_some()
 }
 
 fn command_exists(program: &str) -> bool {
@@ -3042,5 +3057,87 @@ mod tests {
         );
 
         assert_eq!(runtime.to_string(), "Docker Desktop (docker context)");
+    }
+
+    fn make_binary(path: &std::path::Path) {
+        use std::io::Write;
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+        let parent = path.parent().unwrap_or_else(|| {
+            panic!("path {} should have a parent", path.display())
+        });
+        std::fs::create_dir_all(parent)
+            .unwrap_or_else(|e| panic!("failed to create {}: {e}", parent.display()));
+        let mut file = std::fs::File::create(path)
+            .unwrap_or_else(|e| panic!("failed to create {}: {e}", path.display()));
+        file.write_all(b"#!/bin/sh\n")
+            .unwrap_or_else(|e| panic!("failed to write binary: {e}"));
+        std::fs::set_permissions(
+            path,
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap_or_else(|e| panic!("failed to set permissions on {}: {e}", path.display()));
+    }
+
+    #[test]
+    fn detect_with_brew_uses_discovered_homebrew_installations() {
+        let temp = std::env::temp_dir().join(format!(
+            "freshen-brew-test-{}",
+            std::process::id()
+        ));
+        let prefix = temp.join("opt/homebrew");
+        make_binary(&prefix.join("bin/brew"));
+        make_binary(&prefix.join("bin/colima"));
+        make_binary(&prefix.join("bin/limactl"));
+
+        std::env::set_var("FRESHEN_BREW_PREFIXES", prefix.display().to_string());
+        std::env::remove_var("PATH"); // ensure brew is not found through PATH
+
+        assert!(
+            super::detect_with_brew(&ColimaRuntime::new()) == Detection::Installed,
+            "colima should be detected through the non-PATH brew prefix"
+        );
+
+        std::env::remove_var("FRESHEN_BREW_PREFIXES");
+        std::fs::remove_dir_all(&temp).ok();
+    }
+
+    #[test]
+    fn detect_with_brew_finds_colima_in_usr_local_prefix() {
+        let temp = std::env::temp_dir().join(format!(
+            "freshen-brew-test-usr-{}",
+            std::process::id()
+        ));
+        let prefix = temp.join("usr/local");
+        make_binary(&prefix.join("bin/brew"));
+        make_binary(&prefix.join("bin/colima"));
+
+        std::env::set_var("FRESHEN_BREW_PREFIXES", prefix.display().to_string());
+
+        assert!(
+            super::detect_with_brew(&ColimaRuntime::new()) == Detection::Installed,
+            "colima should be detected through /usr/local brew prefix"
+        );
+
+        std::env::remove_var("FRESHEN_BREW_PREFIXES");
+        std::fs::remove_dir_all(&temp).ok();
+    }
+
+    #[test]
+    fn detect_with_brew_does_not_detect_when_brew_is_missing() {
+        let temp = std::env::temp_dir().join(format!(
+            "freshen-brew-test-empty-{}",
+            std::process::id()
+        ));
+        std::env::set_var("FRESHEN_BREW_PREFIXES", temp.display().to_string());
+
+        let brews = crate::homebrew::brew_installs();
+        assert!(
+            !brews.iter().any(|i| i.prefix == temp),
+            "no installations should point to the empty prefix"
+        );
+
+        std::env::remove_var("FRESHEN_BREW_PREFIXES");
+        std::fs::remove_dir_all(&temp).ok();
     }
 }
