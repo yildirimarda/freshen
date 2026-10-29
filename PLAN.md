@@ -6,6 +6,10 @@
     · todo:      - [ ] text
     · done:      - [x] text
   One pull request per item, independently testable, ordered by dependency.
+
+  Keep items small enough for one cheap-model session: one step or one
+  behaviour, at most one external tool, and its tests. If an item names two
+  tools/two commands or several behaviours, split it into separate items.
 -->
 
 ## Milestone 0: Foundation
@@ -179,95 +183,148 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Update the Xcode Command Line Tools before the Homebrew steps run, so that a run which installs them also upgrades the packages in the same run instead of failing on the outdated tools, covered by tests
 - [x] Report the `brew doctor` warnings and the `brew bundle cleanup` packages in the run summary and in the `--json`/`--markdown` reports, so a structured report names them instead of only printing a human-readable line
 - [ ] Make the Colima/lima and container steps discover both Homebrew installations (`/opt/homebrew` and `/usr/local`) instead of only the `brew` on `PATH`, so an outdated `colima`/`lima` formula in either architecture stops the containers before the upgrade, covered by tests with injected prefixes
-- [ ] Complete the Docker Desktop AppleScript fallback: wait for the app to exit after the quit and start it again by its app bundle when `docker desktop start` is unavailable, so older versions finish the stop/start cycle around their cask upgrade, covered by stub-based tests
+- [ ] Complete the Docker Desktop AppleScript fallback by waiting for the app to exit after the quit, with a timeout and a clear failure message, so an older Docker Desktop without `docker desktop stop` is known to have stopped, covered by stub-based tests
+- [ ] Start Docker Desktop again by its app bundle (`open -a` with the bundle id) when `docker desktop start` is unavailable, so older versions finish the stop/start cycle around their cask upgrade, covered by stub-based tests
 - [ ] Stop standalone Lima instances only when the `lima` formula itself is being upgraded, not on a Colima-only upgrade, so an unrelated VM keeps running, covered by stub-based tests
 - [ ] Prefer `podman compose` when the active runtime is Podman even if a Docker compose implementation is also installed, so a forced `--container-runtime podman` run does not fall back to the Docker CLI, covered by tests with injected command lookups
-- [ ] Use the active runtime's container CLI (`podman ps`, `podman image prune`) for standalone container listing and image cleanup when Podman is active, so a Podman-only host without the Docker CLI still restores containers, covered by stub-based tests
+- [ ] List and restore standalone containers through the active runtime's CLI (`podman ps`) when Podman is active, so a Podman-only host without the Docker CLI still restores containers, covered by stub-based tests
+- [ ] Prune images through the active runtime's CLI (`podman image prune`) when Podman is active, so image cleanup does not fail on a Podman-only host, covered by stub-based tests
 
 ## Milestone 5: Linux
 
-- [ ] Add apt support (update, upgrade, autoremove, autoclean) with dpkg lock handling and `needrestart`/`/var/run/reboot-required` detection
-- [ ] Add dnf/yum support with `needs-restarting` reboot detection
-- [ ] Add pacman support (with optional AUR helpers `yay`/`paru`) including `pacnew` file reporting
-- [ ] Add zypper support (`zypper refresh`, `zypper update`, and `zypper ps -s` to list services that need a restart) as an opt-in step, covered by recorded transcripts
-- [ ] Add apk support (`apk update`, `apk upgrade`) for Alpine as an opt-in step, covered by recorded transcripts
+- [ ] Add apt detection and the `apt-get update` + `apt-get upgrade -y` step, skipped when apt is absent, covered by recorded transcripts
+- [ ] Detect whether a restart is needed after the apt step (`needrestart` or `/var/run/reboot-required`) and report it in the summary, covered by tests with injected files
+- [ ] Wait for or abort on the dpkg/apt lock with a clear message naming the holder, instead of running while another apt process is active, covered by tests with injected lock facts
+- [ ] Add `apt-get autoremove -y` and `apt-get autoclean` to the apt step, running only with `--cleanup`, covered by recorded transcripts
+- [ ] Add dnf detection and the `dnf upgrade -y` step, skipped when dnf is absent, covered by recorded transcripts
+- [ ] Detect a required restart after the dnf step with `needs-restarting -r` and report it in the summary, covered by recorded transcripts
+- [ ] Add `dnf autoremove -y` to the dnf step, running only with `--cleanup`, covered by recorded transcripts
+- [ ] Add yum as a fallback when dnf is absent, reusing the same step and the same output parser, covered by recorded transcripts
+- [ ] Add pacman detection and the `pacman -Syu --noconfirm` step, skipped when pacman is absent, covered by recorded transcripts
+- [ ] Report `.pacnew` and `.pacsave` files after a pacman upgrade, so the user knows which configuration files need merging, covered by tests with injected directory listings
+- [ ] Add package-cache cleaning and orphan removal to the pacman step, running only with `--cleanup`, covered by recorded transcripts
+- [ ] Add optional AUR helpers (`yay`/`paru`) as a separate opt-in step that runs only when the helper is installed, covered by recorded transcripts
+- [ ] Add zypper detection and the `zypper refresh` + `zypper update -y` step, skipped when zypper is absent, covered by recorded transcripts
+- [ ] Report the services that need a restart after a zypper upgrade (`zypper ps -s`), covered by recorded transcripts
+- [ ] Add apk support (`apk update`, `apk upgrade`) for Alpine as an opt-in step, skipped when apk is absent, covered by recorded transcripts
 - [ ] Add emerge support (`emerge --sync`, `emerge -uDN @world`) for Gentoo as an opt-in, report-first step, covered by recorded transcripts
-- [ ] Add Flatpak (`flatpak update -y`, and `flatpak uninstall --unused` only with `--cleanup`), skipped when the tool is absent, covered by recorded transcripts
-- [ ] Add Snap (`snap refresh`, mentioning a held refresh window when snapd reports one), skipped when the tool is absent, covered by recorded transcripts
-- [ ] Add Nix upgrades (`nix-channel --update`, `nix profile upgrade`), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add Flatpak (`flatpak update -y`), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add `flatpak uninstall --unused` as a cleanup step that runs only with `--cleanup`, covered by recorded transcripts
+- [ ] Add Snap (`snap refresh`), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Report a held snap refresh window when snapd announces one, instead of showing the pending refresh as a failure, covered by recorded transcripts
+- [ ] Add Nix channel updates (`nix-channel --update`), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add Nix profile upgrades (`nix profile upgrade --all`), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add `home-manager switch` as an opt-in step that runs only when a home-manager configuration is detected, covered by tests with injected paths
 - [ ] Add `nix-collect-garbage` as a cleanup step that runs only with `--cleanup` and reports the reclaimed space, covered by recorded transcripts
-- [ ] Add firmware updates through `fwupdmgr` (report-only by default)
-- [ ] Privilege handling: use `sudo` only for steps that need it, validate credentials once up front, never run user-level tools as root
-- [ ] Detect services that need a restart after upgrades (`systemctl`, `needrestart`) and offer to restart them
-- [ ] Quit/restart desktop applications on Linux via `.desktop` entries and `gtk-launch`/`kill -TERM`, with the same graceful-then-force policy
-- [ ] Add a Linux container integration test matrix (Ubuntu, Fedora, Arch) in CI
-- [ ] Make the Homebrew steps work with Homebrew on Linux (`/home/linuxbrew/.linuxbrew`, no casks), covered by tests with injected paths
-- [ ] Add image-based distributions: `rpm-ostree upgrade` (Fedora Silverblue/Kinoite) and `bootc upgrade` as staged upgrades that announce the pending reboot, covered by recorded transcripts
+- [ ] Add firmware updates through `fwupdmgr`, report-only by default and installable with an explicit flag, covered by recorded transcripts
+- [ ] Validate `sudo` credentials once up front for the steps that need root, and skip those steps with a "needs sudo" reason when the credentials cannot be obtained, covered by tests with an injected privilege state
+- [ ] Never run a user-level step (uv, mise, npm, gem, pipx) as root: check the effective user in the runner and refuse with a clear message, covered by tests
+- [ ] Detect services that need a restart after Linux upgrades (`systemctl`, `needrestart`) and list them in the run summary and in the `--json`/`--markdown` reports, covered by recorded transcripts
+- [ ] Add an opt-in flag that restarts the detected services, restoring the previous enabled/running state even on error or interrupt, covered by stub-based tests
+- [ ] Detect a running desktop application from its `.desktop` entry and stop it with `kill -TERM` (then force kill after a timeout) before its package is upgraded, covered by tests
+- [ ] Restart the applications that were stopped with `gtk-launch` after the upgrade, reusing the recorded snapshot of what was stopped, covered by stub-based tests
+- [ ] Add a Linux container integration test matrix (Ubuntu, Fedora, Arch) in CI, proposed under `ci-proposals/` and documented in HUMAN-TASKS.md
+- [ ] Detect Homebrew on Linux (`/home/linuxbrew/.linuxbrew`) in addition to the macOS prefixes and show the detection in `--list-steps`, covered by tests with injected paths
+- [ ] Skip cask handling on Linux, where Homebrew has no casks, instead of reporting missing cask support, covered by tests
+- [ ] Add `rpm-ostree upgrade` (Fedora Silverblue/Kinoite) as a staged upgrade that announces the pending reboot, covered by recorded transcripts
+- [ ] Add `bootc upgrade` as a staged upgrade that announces the pending reboot, covered by recorded transcripts
 - [ ] (Optional, low priority) Detect Termux on Android (`TERMUX_VERSION`, `PREFIX` under `/data/data/com.termux`) and treat it as a Linux variant that upgrades with `pkg update` and `pkg upgrade` without root, covered by tests with injected environment
-- [ ] Trigger the native Docker Engine stop/restart cycle when apt, dnf, pacman or zypper upgrades the Docker package (`docker.io`/`docker-ce`), not only when the Homebrew `docker` formula is outdated, covered by stub-based tests
+- [ ] Trigger the native Docker Engine stop/restart cycle when apt or dnf upgrades the Docker package (`docker.io`/`docker-ce`), covered by stub-based tests
+- [ ] Trigger the same cycle when pacman or zypper upgrades the Docker package, covered by stub-based tests
 
 ## Milestone 6: Windows
 
-- [ ] Add winget support (`winget upgrade --all`, source update, pinned packages) with exit-code mapping
-- [ ] Add Scoop steps (`scoop update`, `scoop update *`, `scoop cleanup *`, `scoop cache rm *`), skipped when scoop is absent, covered by recorded transcripts
-- [ ] Add Windows Update reporting via the PSWindowsUpdate module or `usoclient`, report-only by default, with pending-reboot detection
-- [ ] Add Microsoft Store app updates where an API or CLI is available
-- [ ] Add WSL support: update `wsl --update`, and run the Linux steps inside each selected distro
-- [ ] Quit/restart Windows applications gracefully (`CloseMainWindow`) with timeout and optional `taskkill /F`, never closing the host terminal
-- [ ] Handle elevation: detect admin rights, request elevation only for steps that need it, and support running un-elevated with those steps skipped
-- [ ] Support PowerShell 7 and Windows PowerShell 5.1 as launching shells, and `cmd.exe` shims
-- [ ] Add a Windows CI job running the unit tests and a smoke test against stub package managers
 - [ ] Resolve Windows executable names through `PATHEXT` during step detection so `uv` and `mise` are found as `uv.exe`/`mise.exe`, covered by tests with an injected lookup
-- [ ] Add Chocolatey detection (`choco.exe` through `PATHEXT`, `choco --version`) and mark the step as requiring administrator rights, so an un-elevated run skips it with the reason "needs administrator" instead of failing, covered by tests with an injected elevation state
+- [ ] Add PowerShell support: choose PowerShell 7 when it exists and fall back to Windows PowerShell 5.1 otherwise, covered by tests
+- [ ] Support `cmd.exe` shims as launching shells, with `cmd`-compatible quoting, covered by tests
+- [ ] Add winget detection (`winget --version`) and a read-only `check()` that parses `winget upgrade` output, so `--check` reports pending Windows updates, covered by recorded transcripts
+- [ ] Add `winget source update` before the upgrade, so the package index is current, covered by recorded transcripts
+- [ ] Add the `winget upgrade --all --silent --accept-*` step and map its exit codes (`0`, update-not-applicable, other non-zero) to ok/skipped/failed, covered by recorded transcripts
+- [ ] Honour winget pinned packages and the package exclusion list, showing held-back packages in `--list-steps` and the run summary, covered by tests
+- [ ] Add Scoop detection and the `scoop update` + `scoop update *` step, skipped when scoop is absent, covered by recorded transcripts
+- [ ] Add `scoop cleanup *` as a cleanup step that runs only with `--cleanup`, covered by recorded transcripts
+- [ ] Add `scoop cache rm *` as a cleanup step that runs only with `--cleanup`, covered by recorded transcripts
+- [ ] Add Microsoft Store app updates through the Store command line or API where one is available, covered by recorded transcripts
+- [ ] Add Windows Update reporting through the PSWindowsUpdate module when it is installed, covered by recorded transcripts
+- [ ] Fall back to `usoclient` for Windows Update detection when PSWindowsUpdate is missing, covered by recorded transcripts
+- [ ] Detect a pending Windows reboot from Windows Update and report it in the summary and the reports, covered by tests
+- [ ] Add `wsl --update` as an opt-in step, covered by recorded transcripts
+- [ ] Run the Linux steps inside a selected WSL distribution, covered by stub-based tests
+- [ ] Quit Windows applications gracefully before their package is upgraded by sending `CloseMainWindow` and waiting with a timeout, covered by tests
+- [ ] Force-close with `taskkill /F` when the graceful close times out, restart the applications afterwards, and never close the host terminal, covered by tests
+- [ ] Detect administrator rights and mark the steps that need elevation, so an un-elevated run skips them with a "needs administrator" reason instead of failing, covered by tests
+- [ ] Request elevation for a single step through one UAC prompt only when that step is selected, covered by tests with an injected elevation helper
+- [ ] Add Chocolatey detection (`choco.exe` through `PATHEXT`, `choco --version`) and mark the step as requiring administrator rights, covered by tests with an injected elevation state
 - [ ] Implement read-only `check()` for Chocolatey with `choco outdated --limit-output` (parse `name|current|available|pinned`), reporting pinned packages as held back, covered by recorded transcripts
-- [ ] Add the Chocolatey upgrade step: first `choco upgrade chocolatey -y --no-progress`, then `choco upgrade all -y --no-progress`, streaming output and recording per-package failures in the summary, covered by stub-based tests
+- [ ] Add the Chocolatey upgrade step: first upgrade Chocolatey itself, then upgrade all packages, streaming output and recording per-package failures in the summary, covered by stub-based tests
 - [ ] Map Chocolatey exit codes: 0 is success, 1641 and 3010 are success with a "reboot pending" flag in the summary, any other non-zero code is a failure, covered by tests
-- [ ] Honour `choco pin` and add an exclusion list for Chocolatey packages that is passed as `--except`, with the excluded packages shown in `--list-steps` and the run summary, covered by tests
-- [ ] Record `choco list --local-only -r` in the pre-upgrade snapshot and print rollback hints (`choco upgrade <name> --version <old>`) for upgraded packages, covered by tests
+- [ ] Honour `choco pin` and report pinned packages as held back, covered by tests
+- [ ] Add a Chocolatey exclusion list passed as `--except`, with the excluded packages shown in `--list-steps` and the run summary, covered by tests
+- [ ] Record `choco list --local-only -r` in the pre-upgrade snapshot, covered by tests
+- [ ] Print rollback hints (`choco upgrade <name> --version <old>`) for upgraded Chocolatey packages, covered by tests
 - [ ] Report packages that are installed by more than one Windows package manager (winget, Chocolatey, Scoop) so the same application is not upgraded twice unnoticed, as a report-only check covered by tests with injected package lists
 - [ ] Add a stub `choco` executable to the stub harness (canned `outdated` output, exit codes 0, 1641, 3010 and 1) and cover the Chocolatey step end to end on every platform
-- [ ] Warn before `wsl --update` because it shuts down every running WSL distribution and anything running inside it (including containers): list the running distributions and require confirmation or `--yes`, covered by tests with injected `wsl --list --running` output
+- [ ] Warn before `wsl --update` because it shuts down every running WSL distribution and anything running inside it: list the running distributions and require confirmation or `--yes`, covered by tests with injected `wsl --list --running` output
 - [ ] Detect running processes whose executables live under the install location of an outdated winget, Chocolatey or Scoop package and apply the quit/force-kill policy before upgrading it, covered by tests with injected process and package facts
 - [ ] Run PowerShell-based steps with a process-scoped execution policy (`-NoProfile -ExecutionPolicy Bypass` only for freshen's own invocation) and never change the machine policy, covered by tests of the generated command line
-- [ ] Add Docker Desktop on Windows (WSL2 backend) and Podman Desktop to the container runtime abstraction, including the interaction with `wsl --update`, covered by stub-based tests
+- [ ] Add Docker Desktop on Windows (WSL2 backend) to the container runtime abstraction, covered by stub-based tests
+- [ ] Add Podman Desktop on Windows, including the interaction with `wsl --update`, covered by stub-based tests
+- [ ] Add a Windows CI job running the unit tests and a smoke test against stub package managers, proposed under `ci-proposals/`
 
 ## Milestone 7: Language and Developer Tooling
 
-- [ ] mise: report when a newer Node LTS major exists than the active one (`mise ls-remote node@lts`) without switching automatically
-- [ ] mise: add opt-in `--bump` flag with a warning that it replaces `lts`/`latest` with a fixed version
-- [ ] mise: reinstall global npm packages listed in `~/.default-npm-packages` after the Node version changed, and the same for Python/Ruby default packages
-- [ ] uv: run `uv self update` when uv is not installed via a system package manager, and `uv python upgrade` for managed interpreters
+- [ ] mise: report when a newer Node LTS major exists than the active one (`mise ls-remote node@lts`) without switching automatically, covered by recorded transcripts
+- [ ] mise: add opt-in `--bump` flag with a warning that it replaces `lts`/`latest` with a fixed version, covered by tests
+- [ ] mise: reinstall global npm packages listed in `~/.default-npm-packages` after the Node version changed, covered by recorded transcripts
+- [ ] mise: reinstall the Python default packages after the Python version changed, covered by recorded transcripts
+- [ ] mise: reinstall the Ruby default packages after the Ruby version changed, covered by recorded transcripts
+- [ ] uv: run `uv self update` when uv is not installed via a system package manager, covered by recorded transcripts
+- [ ] uv: run `uv python upgrade` for managed interpreters, covered by recorded transcripts
 - [ ] Add pipx (`pipx upgrade-all`), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add a report-only `pip list --user --outdated` check that never upgrades anything, covered by recorded transcripts
 - [ ] Add rustup (`rustup update`), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add `cargo install-update -a` when cargo-update is installed, skipped when the tool is absent, covered by recorded transcripts
-- [ ] Add Go: report outdated binaries installed with `go install` and a safe update path
+- [ ] Add Go: report outdated binaries installed with `go install` by comparing their module versions (`go list -m -u`), covered by recorded transcripts
+- [ ] Add an opt-in Go update path that reinstalls those binaries without changing the pinned Go toolchain, covered by tests
 - [ ] Add global npm packages (`npm outdated -g --json`, `npm update -g`), skipped when npm is absent or managed by mise, covered by recorded transcripts
 - [ ] Add global pnpm packages (`pnpm update -g`), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add global yarn packages (`yarn global upgrade`, classic yarn only), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add global bun packages (`bun update -g`), skipped when the tool is absent, covered by recorded transcripts
-- [ ] Add asdf (`asdf plugin update --all` and a report of tools with newer versions) without changing the versions pinned in `.tool-versions`, skipped when the tool is absent, covered by recorded transcripts
-- [ ] Add nvm, fnm and volta: report when a newer Node LTS exists than the one in use and update the manager itself only when it is not managed by brew or mise, covered by recorded transcripts
-- [ ] Add pyenv and rbenv: update the managers and their plugins (`pyenv update`, `git pull` of rbenv and ruby-build) and report newer Python and Ruby versions without installing them, covered by recorded transcripts
+- [ ] Add asdf plugin updates (`asdf plugin update --all`), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add a report of asdf tools with newer versions without changing the versions pinned in `.tool-versions`, covered by recorded transcripts
+- [ ] Add nvm: report when a newer Node LTS exists than the one in use, and update nvm itself only when it is not managed by brew or mise, covered by recorded transcripts
+- [ ] Add fnm: report when a newer Node LTS exists than the one in use, and update fnm itself only when it is not managed by brew or mise, covered by recorded transcripts
+- [ ] Add volta: report when a newer Node LTS exists than the one in use, and update volta itself only when it is not managed by brew or mise, covered by recorded transcripts
+- [ ] Add pyenv: update pyenv and its plugins and report newer Python versions without installing them, covered by recorded transcripts
+- [ ] Add rbenv: update rbenv and ruby-build and report newer Ruby versions without installing them, covered by recorded transcripts
 - [ ] Add SDKMAN (`sdk selfupdate`, `sdk upgrade`) run in a non-interactive shell, skipped when the tool is absent, covered by recorded transcripts
-- [ ] Add jenv and tfenv as report-only steps that show newer Java and Terraform versions without switching, covered by recorded transcripts
-- [ ] Add Ruby gems (`gem update --system`, `gem update` for user-installed gems), skipped when Ruby is managed by a system package manager, covered by recorded transcripts
+- [ ] Add jenv as a report-only step that shows newer Java versions without switching, covered by recorded transcripts
+- [ ] Add tfenv as a report-only step that shows newer Terraform versions without switching, covered by recorded transcripts
+- [ ] Add `gem update --system`, skipped when Ruby is managed by a system package manager, covered by recorded transcripts
+- [ ] Add `gem update` for user-installed gems, skipping the system gem directory, covered by recorded transcripts
 - [ ] Add Composer (`composer self-update`, `composer global update`), skipped when the tool is absent, covered by recorded transcripts
-- [ ] Add Conda and Mamba (`conda update -n base conda`, `micromamba self-update`) and report-only checks for other environments, covered by recorded transcripts
+- [ ] Add Conda (`conda update -n base conda`) with a report-only check for the other environments, covered by recorded transcripts
+- [ ] Add Mamba (`micromamba self-update`) with a report-only check for the other environments, covered by recorded transcripts
 - [ ] Add .NET global tools (`dotnet tool update --global` for each installed tool), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add Elixir tooling (`mix local.hex --force`, `mix local.rebar --force`), skipped when the tool is absent, covered by recorded transcripts
-- [ ] Add VS Code extensions (`code --update-extensions`), and the same for Cursor and VSCodium when their CLIs exist, covered by recorded transcripts
-- [ ] Add Neovim plugin managers (`lazy.nvim` through `nvim --headless "+Lazy! sync" +qa`, packer) as opt-in steps because they change plugins, covered by recorded transcripts
-- [ ] Add Mason and Treesitter parser updates (`nvim --headless "+MasonUpdate" +qa`) as an opt-in step, covered by recorded transcripts
+- [ ] Add VS Code extension updates (`code --update-extensions`), skipped when the CLI is absent, covered by recorded transcripts
+- [ ] Add Cursor extension updates when its CLI exists, covered by recorded transcripts
+- [ ] Add VSCodium extension updates when its CLI exists, covered by recorded transcripts
+- [ ] Add lazy.nvim plugin sync (`nvim --headless "+Lazy! sync" +qa`) as an opt-in step, covered by recorded transcripts
+- [ ] Add packer plugin sync as an opt-in step, covered by recorded transcripts
+- [ ] Add Mason tool updates (`nvim --headless "+MasonUpdate" +qa`) as an opt-in step, covered by recorded transcripts
+- [ ] Add Treesitter parser updates as an opt-in step, covered by recorded transcripts
 - [ ] Add oh-my-zsh (`omz update --unattended`), skipped when the tool is absent, covered by recorded transcripts
-- [ ] Add zinit (`zinit self-update`, `zinit update --all`) and antidote (`antidote update`), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add zinit (`zinit self-update`, `zinit update --all`), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add antidote (`antidote update`), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add the tmux plugin manager (`~/.tmux/plugins/tpm/bin/update_plugins all`), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add fisher (`fisher update`), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add GitHub CLI extensions (`gh extension upgrade --all`), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add kubectl plugins (`kubectl krew upgrade`), skipped when the tool is absent, covered by recorded transcripts
-- [ ] Add Helm (`helm repo update`) and a report-only list of releases with newer chart versions, covered by recorded transcripts
-- [ ] Add AWS CLI v2 for non-brew installs: report a newer version and update through the official installer only with an explicit flag, covered by recorded transcripts
+- [ ] Add Helm repository updates (`helm repo update`), skipped when the tool is absent, covered by recorded transcripts
+- [ ] Add a report-only list of Helm releases with newer chart versions, covered by recorded transcripts
+- [ ] Add a report of newer AWS CLI v2 versions for non-brew installs, covered by recorded transcripts
+- [ ] Add an explicit flag that updates AWS CLI v2 through the official installer, covered by recorded transcripts
 - [ ] Add the Google Cloud CLI (`gcloud components update --quiet`) when installed outside a system package manager, covered by recorded transcripts
 - [ ] Add the Azure CLI (`az upgrade --yes`) when installed outside a system package manager, covered by recorded transcripts
 - [ ] Add a `git lfs` self-check (`git lfs version`, `git lfs install --skip-repo`), skipped when the tool is absent, covered by recorded transcripts
@@ -275,74 +332,110 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 
 ## Milestone 8: Containers and Services
 
-- [ ] Per-project opt-out for compose pull/up using a label or a config list of excluded projects
-- [ ] Health-check aware recreation: after `up -d`, wait for health checks and report containers that did not become healthy, with the previous image digest for rollback
-- [ ] Pin-aware pulls: skip images referenced by digest or a fixed non-`latest` tag unless `--docker-bump` is given
-- [ ] Add Podman and `podman-compose` support with the same pull/recreate/prune flow
-- [ ] Add local Kubernetes tooling handling: k3d, kind and minikube clusters are stopped/started around runtime upgrades
-- [ ] Image cleanup policy options: prune dangling only (default), prune unused older than N days, report-only mode that shows reclaimable space
-- [ ] Build cache and volume reporting with `docker system df`, and opt-in `docker builder prune`
-- [ ] Support Docker contexts and remote engines safely (never touch a non-local context unless selected)
-- [ ] Restart containers that were running before a runtime restart even if they were started with `docker run --restart no`, using the recorded snapshot
+- [ ] Per-project opt-out for compose pull/up using a label or a config list of excluded projects, covered by tests
+- [ ] Add health-check aware recreation: after `up -d`, wait for health checks and report the containers that did not become healthy, covered by stub-based tests
+- [ ] Record the previous image digest per container so an unhealthy recreation has a rollback hint, covered by stub-based tests
+- [ ] Pin-aware pulls: skip images referenced by digest or a fixed non-`latest` tag unless `--docker-bump` is given, covered by tests
+- [ ] Add Podman and `podman-compose` support with the same pull/recreate/prune flow, covered by stub-based tests
+- [ ] Add k3d handling: stop and start k3d clusters around a container runtime upgrade, covered by stub-based tests
+- [ ] Add kind handling: stop and start the kind clusters around a container runtime upgrade, covered by stub-based tests
+- [ ] Add minikube handling: stop and start minikube profiles around a container runtime upgrade, covered by stub-based tests
+- [ ] Add a `--prune-unused-older-than N` option that prunes images unused for N days, covered by tests
+- [ ] Add a report-only prune mode that shows the reclaimable space without removing anything, covered by tests
+- [ ] Report build cache and volume usage with `docker system df` in the summary, covered by stub-based tests
+- [ ] Add opt-in `docker builder prune` as a cleanup step that runs only with `--cleanup`, covered by stub-based tests
+- [ ] Support Docker contexts and remote engines safely (never touch a non-local context unless selected), covered by tests
+- [ ] Restart containers that were running before a runtime restart even if they were started with `docker run --restart no`, using the recorded snapshot, covered by stub-based tests
 - [ ] Detect and control a rootless Docker Engine (`$XDG_RUNTIME_DIR/docker.sock`, `systemctl --user restart docker`), so it is not mistaken for an unreachable system daemon, covered by tests with injected facts
 
 ## Milestone 9: Configuration and UX
 
-- [ ] Support named profiles (e.g. `work`, `minimal`) selectable with `--profile`
-- [ ] Add pre/post hooks per step and global hooks (`pre_run`, `post_run`) with environment variables describing the run
-- [ ] Add user-defined custom steps (a name, a command, platforms, order) so anything not built in can be added without code changes
-- [ ] Environment variable overrides for every config key with a documented naming scheme
-- [ ] Add `--doctor` that verifies the environment (tools found, permissions, config validity) and prints actionable fixes
-- [ ] Rich terminal output: step progress, spinners when interactive, plain output when piped or in CI, `NO_COLOR` support
-- [ ] Add desktop notifications at the end of a run (macOS Notification Center, `notify-send`, Windows toast) with the result summary
-- [ ] Log files with rotation in the OS-appropriate location, `--verbose` / `--quiet` levels and a `logs` subcommand to show the last run
-- [ ] Add a `history` subcommand listing previous runs and what each one changed (from the snapshots)
-- [ ] Add shell completions for zsh, bash, fish and PowerShell, and a man page
-- [ ] Add a `self-update` subcommand and an update-available hint that never blocks the run
-- [ ] Cap captured subprocess output (for example the last N bytes per stream) so a runaway command cannot exhaust memory, while still streaming every line live
+- [ ] Support named profiles (e.g. `work`, `minimal`) selectable with `--profile`, covered by tests
+- [ ] Add per-step pre/post hooks with environment variables describing the run, covered by tests
+- [ ] Add global `pre_run`/`post_run` hooks, covered by tests
+- [ ] Add user-defined custom steps (a name, a command, platforms, order) so anything not built in can be added without code changes, covered by tests
+- [ ] Environment variable overrides for every config key with a documented naming scheme, covered by tests
+- [ ] Add `--doctor` that verifies the environment (tools found, permissions, config validity) and prints actionable fixes, covered by tests
+- [ ] Rich terminal output: step progress and spinners when interactive, plain output when piped or in CI, covered by tests
+- [ ] Add `NO_COLOR` support and document it, covered by tests
+- [ ] Add macOS desktop notifications at the end of a run (Notification Center) with the result summary, covered by tests
+- [ ] Add Linux desktop notifications at the end of a run (`notify-send`) with the result summary, covered by tests
+- [ ] Add Windows toast notifications at the end of a run with the result summary, covered by tests
+- [ ] Add log files with rotation in the OS-appropriate location, covered by tests
+- [ ] Add `--verbose` / `--quiet` output levels, covered by tests
+- [ ] Add a `logs` subcommand that shows the last run, covered by tests
+- [ ] Add a `history` subcommand listing previous runs and what each one changed (from the snapshots), covered by tests
+- [ ] Add shell completions for zsh, bash, fish and PowerShell, covered by tests
+- [ ] Add a man page, covered by tests
+- [ ] Add a `self-update` subcommand, covered by tests
+- [ ] Add an update-available hint that never blocks the run, covered by tests
+- [ ] Cap captured subprocess output (for example the last N bytes per stream) so a runaway command cannot exhaust memory, while still streaming every line live, covered by tests
 - [ ] Refuse to load the config file, hooks and custom steps from world-writable files or directories and print the offending path, covered by tests on Unix and with injected ACL facts on Windows
-- [ ] Print the exact command of every hook and custom step before running it (unless `--quiet`) and require `--trust-config`, or an interactive confirmation that stores a hash, the first time a new or changed hook or custom step is seen, covered by tests
-- [ ] Add a `FRESHEN_CONFIG` environment variable that points at an alternative configuration file, so a scheduled run or a wrapper script can choose the file without changing the command line, covered by tests
-- [ ] Print the configuration file freshen read and the values it set (in `--doctor` and in the run summary), so a user can see which settings were in effect, covered by tests
+- [ ] Print the exact command of every hook and custom step before running it (unless `--quiet`), covered by tests
+- [ ] Require `--trust-config`, or an interactive confirmation that stores a hash, the first time a new or changed hook or custom step is seen, covered by tests
+- [ ] Add a `FRESHEN_CONFIG` environment variable that points at an alternative configuration file, covered by tests
+- [ ] Print the configuration file freshen read and the values it set (in `--doctor` and in the run summary), covered by tests
 
 ## Milestone 10: Automation
 
-- [ ] Add a `schedule install` / `schedule remove` subcommand: launchd agent (macOS), systemd user timer (Linux), Task Scheduler task (Windows)
-- [ ] Scheduled runs default to check-only mode and notify when updates are pending; a separate opt-in enables unattended upgrades
-- [ ] Skip scheduled runs when on battery, on a metered connection, in a meeting/presentation (frontmost full-screen app) or when the user was active in the last N minutes
-- [ ] Catch-up behaviour: run once after wake/login when the scheduled time was missed
-- [ ] Add a `--non-interactive` mode that never prompts and picks the safe default for every decision
-- [ ] Make the `--non-interactive` mode skip the casks whose installer needs an administrator password, so a scheduled run never waits for a password even when a terminal is attached
+- [ ] Add a `schedule install` / `schedule remove` subcommand for macOS that writes and removes a launchd agent, covered by tests
+- [ ] Add a `schedule install` / `schedule remove` subcommand for Linux that writes and removes a systemd user timer, covered by tests
+- [ ] Add a `schedule install` / `schedule remove` subcommand for Windows that registers and deletes a Task Scheduler task, covered by tests
+- [ ] Scheduled runs default to check-only mode and notify when updates are pending, covered by tests
+- [ ] Add a separate opt-in that enables unattended upgrades for scheduled runs, covered by tests
+- [ ] Skip scheduled runs when on battery or on a metered connection, covered by tests with injected facts
+- [ ] Skip scheduled runs when the user is in a meeting or presentation (frontmost full-screen app) or was active in the last N minutes, covered by tests with injected facts
+- [ ] Catch-up behaviour: run once after wake/login when the scheduled time was missed, covered by tests
+- [ ] Add a `--non-interactive` mode that never prompts and picks the safe default for every decision, covered by tests
+- [ ] Make `--non-interactive` skip the casks whose installer needs an administrator password, so a scheduled run never waits for a password even when a terminal is attached, covered by tests
 
 ## Milestone 11: Distribution and Docs
 
-- [ ] GitHub Releases with prebuilt binaries for macOS (arm64, x86_64), Linux (x86_64, aarch64) and Windows (x86_64), with checksums (cargo-dist or an equivalent cross-compilation workflow)
+- [ ] Add GitHub Releases with prebuilt macOS binaries (arm64, x86_64) and checksums, using cargo-dist or an equivalent workflow, proposed under `ci-proposals/`
+- [ ] Add prebuilt Linux (x86_64, aarch64) and Windows (x86_64) binaries to the release workflow, with checksums for every artifact
 - [ ] Add Windows aarch64 and fully static Linux (musl) targets to the release workflow, with checksums for every artifact
-- [ ] Publish to crates.io (`cargo install freshen`) and support `cargo binstall`
-- [ ] Sign and notarize the macOS binary, sign the Windows binary, and publish SBOM / provenance attestations
-- [ ] Homebrew tap formula, Scoop bucket manifest and winget manifest
-- [ ] Linux packages: `.deb`, `.rpm`, an AUR PKGBUILD and a Nix flake
+- [ ] Publish to crates.io, proposed as a release workflow change
+- [ ] Support `cargo binstall` for the published crate
+- [ ] Sign and notarize the macOS binary and sign the Windows binary, proposed as a release workflow change
+- [ ] Publish SBOM / provenance attestations for every release artifact
+- [ ] Add a Homebrew tap formula
+- [ ] Add a Scoop bucket manifest
+- [ ] Add a winget manifest and the pull request to `microsoft/winget-pkgs`
+- [ ] Add a `.deb` package, proposed under `ci-proposals/`
+- [ ] Add an `.rpm` package, proposed under `ci-proposals/`
+- [ ] Add an AUR PKGBUILD
+- [ ] Add a Nix flake
 - [ ] One-line install script with checksum verification
-- [ ] Docs site (mkdocs) with: quick start, config reference, step reference (one page per step), platform notes, FAQ and troubleshooting
+- [ ] Docs site (mkdocs) with quick start and the config reference
+- [ ] Docs site: one page per step, generated from the step registry where possible
+- [ ] Docs site: platform notes and FAQ
+- [ ] Docs site: troubleshooting page
 - [ ] "Writing a step" contributor guide with a worked example and a step template
 - [ ] Add a terminal recording (asciinema/GIF) to the README
-- [ ] Add issue templates (bug report with `--doctor` output, new step request) and a security policy
+- [ ] Add issue templates (bug report with `--doctor` output, new step request)
+- [ ] Add a security policy
 - [ ] State in the README and docs that freshen collects no telemetry and sends no data itself (only the tools it runs and the optional self-update check use the network), and make the self-update check easy to disable
 
 ## Milestone 12: Quality
 
-- [ ] Recorded-transcript tests for parsers of third-party output (brew JSON, docker compose ls, winget, apt) with fixtures for several tool versions
-- [ ] Property tests (`proptest`) and `cargo fuzz` targets for the parsers so unexpected output never crashes the run
-- [ ] Enforce a minimum test coverage threshold in CI with `cargo llvm-cov`
+- [ ] Add a recorded-transcript fixture harness for parser tests, with fixtures stored per tool and version, covered by a test for the harness itself
+- [ ] Add recorded-transcript fixtures for the Homebrew JSON parsers, covering several Homebrew versions
+- [ ] Add recorded-transcript fixtures for the `docker compose ls` parser, covering several compose versions
+- [ ] Add recorded-transcript fixtures for the winget parser, covering several winget versions
+- [ ] Add recorded-transcript fixtures for the apt/dpkg parsers, covering several distributions
+- [ ] Add property tests (`proptest`) for the parsers so unexpected output never crashes the run
+- [ ] Add `cargo fuzz` targets for the parsers and wire them into a scheduled workflow proposal under `ci-proposals/`
+- [ ] Enforce a minimum test coverage threshold in CI with `cargo llvm-cov`, proposed under `ci-proposals/`
 - [ ] Container-based integration tests on Linux that exercise real package managers against throwaway images
-- [ ] Add a scheduled CI job that runs against the latest Homebrew/winget/apt metadata to catch upstream output changes early
+- [ ] Add a scheduled CI job that runs against the latest Homebrew/winget/apt metadata to catch upstream output changes early, proposed under `ci-proposals/`
 - [ ] Add performance budget: `--check` on a typical machine completes within a documented time
 - [ ] Add `docs/TESTING.md` with a manual checklist per operating system (a real run on macOS, Linux and Windows with the expected output and a rollback check) to run before every minor release
 
 ## Discovered
 
 - [ ] Add the Cargo workspace checks promised by `tests/README.md` to `tests/run-tests.sh`: the workspace sets an MSRV (`rust-version`), `rust-toolchain.toml` pins an exact channel with `rustfmt`/`clippy`, and every crate under `crates/` inherits the workspace MSRV and lints
-- [ ] Probe both IPv4 and IPv6 (and allow overriding the endpoint) in the network preflight check so IPv6-only or filtered networks are not reported as unreachable, covered by tests with injected endpoints
+- [ ] Probe both IPv4 and IPv6 in the network preflight check so IPv6-only or filtered networks are not reported as unreachable, covered by tests with injected endpoints
+- [ ] Allow overriding the network preflight endpoint, so an offline CI runner can point at a local probe, covered by tests
 - [ ] Detect user-marked metered networks on macOS instead of only hotspot SSIDs, so the metered preflight check matches the system setting, covered by tests with injected command output
 - [ ] Make `StubTools` append each invocation to the stub log atomically, so integration tests can assert the calls of concurrently executed `--check` steps without interleaved lines, covered by a test that runs two stubs at once
 - [ ] Run every Windows command that needs a shell through `cmd.exe /C` with `cmd`-compatible quoting: the C runtime escapes a quote inside an argument with a backslash, which `cmd.exe` does not understand, so a quoted path arrives mangled
