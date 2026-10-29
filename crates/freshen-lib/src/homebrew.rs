@@ -72,15 +72,15 @@ const BREW_PREFIXES_ENV: &str = "FRESHEN_BREW_PREFIXES";
 
 /// One Homebrew installation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct BrewInstall {
+pub(crate) struct BrewInstall {
     /// The `bin/brew` executable.
-    program: PathBuf,
+    pub(crate) program: PathBuf,
     /// The installation prefix, for example `/opt/homebrew`.
-    prefix: PathBuf,
+    pub(crate) prefix: PathBuf,
     /// Whether the executable was found through `PATH`.
-    from_path: bool,
+    pub(crate) from_path: bool,
     /// The architecture this installation serves.
-    arch: Arch,
+    pub(crate) arch: Arch,
 }
 
 impl BrewInstall {
@@ -90,7 +90,7 @@ impl BrewInstall {
     /// transcript does not change for a normal single-install machine. The
     /// other installation is named by its absolute path, which is also what
     /// makes the two architectures unambiguous in the log.
-    fn command(&self) -> CommandSpec {
+    pub(crate) fn command(&self) -> CommandSpec {
         if self.from_path {
             CommandSpec::new("brew")
         } else {
@@ -161,7 +161,7 @@ fn install_message(brews: &BrewSet, install: &BrewInstall, message: impl Into<St
 }
 
 /// Discovers the `brew` on `PATH` and the standard prefixes.
-fn brew_installs() -> Vec<BrewInstall> {
+pub(crate) fn brew_installs() -> Vec<BrewInstall> {
     let path = crate::executable::resolve("brew");
     brew_installs_from(path, &brew_prefixes(), &Arch::current())
 }
@@ -3751,6 +3751,35 @@ mod tests {
         assert_eq!(installs.len(), 1, "installs: {installs:?}");
         assert_eq!(installs[0].program, program);
         assert!(installs[0].from_path);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_installation_and_a_prefix_installation_are_returned_and_deduplicated() {
+        let root = discovery_root("path-and-prefix");
+        let path_prefix = root.join("custom/brew");
+        let other_prefix = root.join("other/brew");
+        let path_program = executable_brew(&path_prefix);
+        let other_program = executable_brew(&other_prefix);
+
+        let installs = brew_installs_from(
+            Some(path_program.clone()),
+            &[path_prefix.clone(), other_prefix.clone()],
+            &Arch::X86_64,
+        );
+
+        assert_eq!(installs.len(), 2, "installs: {installs:?}");
+        let path_install = installs
+            .iter()
+            .find(|install| install.from_path)
+            .unwrap_or_else(|| panic!("no PATH installation: {installs:?}"));
+        assert_eq!(path_install.program, path_program);
+        let prefix_install = installs
+            .iter()
+            .find(|install| !install.from_path)
+            .unwrap_or_else(|| panic!("no prefix installation: {installs:?}"));
+        assert_eq!(prefix_install.program, other_program);
         let _ = std::fs::remove_dir_all(&root);
     }
 
