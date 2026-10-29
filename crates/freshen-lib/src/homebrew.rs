@@ -2292,11 +2292,11 @@ struct DoctorStep {
 
 /// One finding of `brew doctor`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct DoctorFinding {
+pub struct DoctorFinding {
     /// What Homebrew found.
-    message: String,
+    pub message: String,
     /// How to fix it, when Homebrew says so.
-    remedy: Option<String>,
+    pub remedy: Option<String>,
 }
 
 impl DoctorFinding {
@@ -2435,6 +2435,7 @@ impl Step for DoctorStep {
         );
         for finding in &findings {
             human!("  - {}", finding.item());
+            crate::doctor_warnings::record(finding.clone());
         }
         Ok(())
     }
@@ -2461,11 +2462,11 @@ struct BundleCleanupStep {
 
 /// One package `brew bundle cleanup` would remove.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct BundlePackage {
+pub struct BundlePackage {
     /// Name of the package.
-    name: String,
+    pub name: String,
     /// What kind of package it is, for example `"formula"`.
-    kind: String,
+    pub kind: String,
 }
 
 impl BundlePackage {
@@ -2592,6 +2593,7 @@ impl Step for BundleCleanupStep {
         );
         for package in &packages {
             human!("  - {}", package.item());
+            crate::bundle_cleanup_packages::record(package.clone());
         }
         Ok(())
     }

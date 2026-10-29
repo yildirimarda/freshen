@@ -37,6 +37,28 @@ pub(crate) fn run_json(summary: &RunSummary) -> String {
                 })
                 .collect();
 
+            let doctor_warnings: Vec<Value> = result
+                .doctor_warnings()
+                .iter()
+                .map(|finding| {
+                    json!({
+                        "message": finding.message,
+                        "remedy": finding.remedy,
+                    })
+                })
+                .collect();
+
+            let bundle_cleanup_packages: Vec<Value> = result
+                .bundle_cleanup_packages()
+                .iter()
+                .map(|package| {
+                    json!({
+                        "name": package.name,
+                        "kind": package.kind,
+                    })
+                })
+                .collect();
+
             json!({
                 "id": result.id(),
                 "name": result.name(),
@@ -44,6 +66,8 @@ pub(crate) fn run_json(summary: &RunSummary) -> String {
                 "duration_ms": result.duration().as_millis(),
                 "changes": changes,
                 "cleanup": cleanup,
+                "doctor_warnings": doctor_warnings,
+                "bundle_cleanup_packages": bundle_cleanup_packages,
                 "skip_reason": result.skip_reason().map(|reason| reason.to_string()),
                 "skipped_items": result.skipped_items().to_vec(),
                 "restarted_services": result.restarted_services().to_vec(),
@@ -172,6 +196,57 @@ pub(crate) fn run_markdown(summary: &RunSummary) -> String {
                 }
                 out.push('\n');
             }
+        }
+    }
+
+    if summary
+        .steps()
+        .iter()
+        .any(|result| !result.doctor_warnings().is_empty())
+    {
+        out.push_str("\n## Doctor warnings\n\n");
+        for result in summary
+            .steps()
+            .iter()
+            .filter(|result| !result.doctor_warnings().is_empty())
+        {
+            out.push_str(&format!(
+                "### {} (`{}`)\n\n",
+                escape_cell(result.name()),
+                result.id()
+            ));
+            for warning in result.doctor_warnings() {
+                out.push_str("- ");
+                out.push_str(&warning.message);
+                if let Some(remedy) = &warning.remedy {
+                    out.push_str(&format!(" ({remedy})"));
+                }
+                out.push('\n');
+            }
+            out.push('\n');
+        }
+    }
+
+    if summary
+        .steps()
+        .iter()
+        .any(|result| !result.bundle_cleanup_packages().is_empty())
+    {
+        out.push_str("\n## Bundle cleanup packages\n\n");
+        for result in summary
+            .steps()
+            .iter()
+            .filter(|result| !result.bundle_cleanup_packages().is_empty())
+        {
+            out.push_str(&format!(
+                "### {} (`{}`)\n\n",
+                escape_cell(result.name()),
+                result.id()
+            ));
+            for package in result.bundle_cleanup_packages() {
+                out.push_str(&format!("- {} ({})\n", package.name, package.kind));
+            }
+            out.push('\n');
         }
     }
 

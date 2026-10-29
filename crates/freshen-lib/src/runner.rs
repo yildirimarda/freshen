@@ -22,6 +22,7 @@ use crate::check::{CheckResult, CheckSummary};
 use crate::cleanup::{self, CleanupReport};
 use crate::containers::{ActiveContainerRuntime, COLIMA_STOP, DOCKER};
 use crate::deadline::{self, Deadline};
+use crate::homebrew::{BundlePackage, DoctorFinding};
 use crate::options::RunOptions;
 use crate::snapshot::{RollbackCommand, SnapshotRecorder};
 use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
@@ -139,6 +140,8 @@ pub struct StepResult {
     duration: Duration,
     changes: Vec<VersionChange>,
     cleanups: Vec<CleanupReport>,
+    doctor_warnings: Vec<DoctorFinding>,
+    bundle_cleanup_packages: Vec<BundlePackage>,
     skipped_items: Vec<String>,
     restarted_services: Vec<String>,
     left_running_apps: Vec<String>,
@@ -157,6 +160,8 @@ impl StepResult {
             duration,
             changes: Vec::new(),
             cleanups: Vec::new(),
+            doctor_warnings: Vec::new(),
+            bundle_cleanup_packages: Vec::new(),
             skipped_items: Vec::new(),
             restarted_services: Vec::new(),
             left_running_apps: Vec::new(),
@@ -174,6 +179,16 @@ impl StepResult {
 
     fn with_cleanups(mut self, cleanups: Vec<CleanupReport>) -> Self {
         self.cleanups = cleanups;
+        self
+    }
+
+    fn with_doctor_warnings(mut self, warnings: Vec<DoctorFinding>) -> Self {
+        self.doctor_warnings = warnings;
+        self
+    }
+
+    fn with_bundle_cleanup_packages(mut self, packages: Vec<BundlePackage>) -> Self {
+        self.bundle_cleanup_packages = packages;
         self
     }
 
@@ -283,6 +298,18 @@ impl StepResult {
     #[must_use]
     pub fn cleanups(&self) -> &[CleanupReport] {
         &self.cleanups
+    }
+
+    /// The `brew doctor` warnings reported by the step.
+    #[must_use]
+    pub fn doctor_warnings(&self) -> &[DoctorFinding] {
+        &self.doctor_warnings
+    }
+
+    /// The `brew bundle cleanup` packages reported by the step.
+    #[must_use]
+    pub fn bundle_cleanup_packages(&self) -> &[BundlePackage] {
+        &self.bundle_cleanup_packages
     }
 
     /// Items skipped by the step, for example casks that need an administrator
@@ -549,6 +576,16 @@ impl fmt::Display for RunSummary {
             }
             for app in result.restored_windows() {
                 writeln!(f, "          - window put back: {app}")?;
+            }
+            for warning in result.doctor_warnings() {
+                writeln!(f, "          - brew-doctor warning: {}", warning.message)?;
+            }
+            for package in result.bundle_cleanup_packages() {
+                writeln!(
+                    f,
+                    "          - bundle cleanup package: {} ({})",
+                    package.name, package.kind
+                )?;
             }
         }
 
@@ -989,6 +1026,8 @@ fn run_step(
             let left_running_apps = crate::left_running_apps::take();
             let reopened_hidden = crate::reopened_hidden::take();
             let restored_windows = crate::restored_windows::take();
+            let doctor_warnings = crate::doctor_warnings::take();
+            let bundle_cleanup_packages = crate::bundle_cleanup_packages::take();
 
             let changes =
                 if result.status() == StepStatus::Interrupted || result.skip_reason().is_some() {
@@ -1013,6 +1052,8 @@ fn run_step(
                 .with_left_running_apps(left_running_apps)
                 .with_reopened_hidden(reopened_hidden)
                 .with_restored_windows(restored_windows)
+                .with_doctor_warnings(doctor_warnings)
+                .with_bundle_cleanup_packages(bundle_cleanup_packages)
         }
         Err(_error) if interrupt() => StepResult::interrupted(step, started.elapsed()),
         Err(error) if error.is_registry_unreachable() => {
