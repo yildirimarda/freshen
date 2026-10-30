@@ -2051,7 +2051,7 @@ mod tests {
     use crate::step::{Detection, StepId};
     use std::collections::{HashMap, HashSet};
     use std::ffi::OsString;
-    use std::fs::{self, Permissions};
+    use std::fs::{self};
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
 
@@ -3153,7 +3153,7 @@ esac
                 outdated_list(casks)
             );
             fs::write(&program, script).unwrap_or_else(|error| panic!("{error}"));
-            fs::set_permissions(&program, Permissions::from_mode(0o755))
+            fs::set_permissions(&program, fs::Permissions::from_mode(0o755))
                 .unwrap_or_else(|error| panic!("{error}"));
             program
         }
