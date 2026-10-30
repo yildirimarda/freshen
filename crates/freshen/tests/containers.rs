@@ -8,6 +8,9 @@
 
 mod support;
 
+use std::fs::{self, Permissions};
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::process::Output;
 
 use support::{
@@ -434,5 +437,97 @@ esac"#,
     assert!(
         text.contains("docker-compose pull + up -d: web"),
         "output: {text}"
+    );
+}
+
+/// Creates `bin/<tool>` executables inside `prefix`, without putting anything
+/// on `PATH`.
+fn install_in_prefix(prefix: &Path, tools: &[&str]) {
+    let bin = prefix.join("bin");
+    fs::create_dir_all(&bin)
+        .unwrap_or_else(|error| panic!("failed to create {}: {error}", bin.display()));
+    for tool in tools {
+        let path = bin.join(tool);
+        fs::write(&path, "#!/bin/sh\n").unwrap_or_else(|error| panic!("{error}"));
+        fs::set_permissions(&path, Permissions::from_mode(0o755))
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+}
+
+/// The `--list-steps` line that describes `step`.
+fn listed_step(text: &str, step: &str) -> String {
+    text.lines()
+        .find(|line| line.contains(step))
+        .unwrap_or_else(|| panic!("step `{step}` is not listed: {text}"))
+        .to_owned()
+}
+
+#[test]
+fn colima_is_detected_when_installed_only_in_a_non_path_homebrew_prefix() {
+    let tools = StubTools::new(&[]);
+    let prefix = tools.home().join("homebrew");
+    install_in_prefix(&prefix, &["brew", "colima", "limactl"]);
+
+    let output = tools
+        .command()
+        .env("FRESHEN_BREW_PREFIXES", &prefix)
+        .arg("--list-steps")
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+
+    let text = stdout(&output);
+    for step in ["colima-stop", "colima-start"] {
+        let line = listed_step(&text, step);
+        assert!(
+            line.contains("installed") && !line.contains("skipped"),
+            "{step}: {line}"
+        );
+    }
+}
+
+#[test]
+fn limactl_alone_in_the_prefix_detects_the_colima_runtime() {
+    let tools = StubTools::new(&[]);
+    let prefix = tools.home().join("homebrew");
+    install_in_prefix(&prefix, &["brew", "limactl"]);
+
+    let output = tools
+        .command()
+        .env("FRESHEN_BREW_PREFIXES", &prefix)
+        .arg("--list-steps")
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+
+    let text = stdout(&output);
+    assert!(
+        listed_step(&text, "colima-stop").contains("installed"),
+        "lima installed through Homebrew must be detected: {text}"
+    );
+}
+
+#[test]
+fn colima_is_not_detected_when_only_brew_is_in_the_prefix() {
+    let tools = StubTools::new(&[]);
+    let prefix = tools.home().join("homebrew");
+    install_in_prefix(&prefix, &["brew"]);
+
+    let output = tools
+        .command()
+        .env("FRESHEN_BREW_PREFIXES", &prefix)
+        .arg("--list-steps")
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+
+    let text = stdout(&output);
+    let line = listed_step(&text, "colima-stop");
+    assert!(
+        line.contains("not installed") && line.contains("skipped: not installed"),
+        "{line}"
     );
 }
