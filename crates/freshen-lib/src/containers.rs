@@ -1532,13 +1532,18 @@ impl ContainerStopStep {
         }
     }
 
-    fn upgrade_triggers_restart(&self) -> Result<bool, StepError> {
+    fn upgrade_triggers_restart(&self, installs: &[BrewInstall]) -> Result<bool, StepError> {
         let mut outdated = Vec::new();
-        if !self.runtime.restart_formulae().is_empty() {
-            outdated.extend(self.outdated(&["outdated", "--formula", "--quiet"])?);
-        }
-        if !self.runtime.restart_casks().is_empty() {
-            outdated.extend(self.outdated(&["outdated", "--cask", "--greedy", "--quiet"])?);
+        for install in installs {
+            if !self.runtime.restart_formulae().is_empty() {
+                outdated
+                    .extend(self.outdated_through(install, &["outdated", "--formula", "--quiet"])?);
+            }
+            if !self.runtime.restart_casks().is_empty() {
+                outdated.extend(
+                    self.outdated_through(install, &["outdated", "--cask", "--greedy", "--quiet"])?,
+                );
+            }
         }
 
         Ok(outdated
@@ -1546,8 +1551,13 @@ impl ContainerStopStep {
             .any(|name| self.runtime.triggers_restart(name)))
     }
 
-    fn outdated(&self, arguments: &[&str]) -> Result<Vec<String>, StepError> {
-        let output = CommandSpec::new("brew")
+    fn outdated_through(
+        &self,
+        install: &BrewInstall,
+        arguments: &[&str],
+    ) -> Result<Vec<String>, StepError> {
+        let output = install
+            .command()
             .args(arguments)
             .neutral_locale()
             .retry_transient_network(NETWORK_RETRIES)
@@ -1579,7 +1589,8 @@ impl Step for ContainerStopStep {
     }
 
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
-        if !self.upgrade_triggers_restart()? || !self.runtime.is_running() {
+        if !self.upgrade_triggers_restart(&homebrew::brew_installs())? || !self.runtime.is_running()
+        {
             return Ok(());
         }
 
@@ -3105,5 +3116,155 @@ mod tests {
         );
 
         assert_eq!(runtime.to_string(), "Docker Desktop (docker context)");
+    }
+
+    #[cfg(unix)]
+    mod brew_install_injection {
+        use std::env;
+        use std::fs;
+        use std::fs::Permissions;
+        use std::os::unix::fs::PermissionsExt;
+        use std::path::{Path, PathBuf};
+        use std::sync::Arc;
+        use std::time::SystemTime;
+
+        use super::super::{ColimaRuntime, ContainerSnapshot, ContainerStopStep};
+        use crate::homebrew::BrewInstall;
+        use crate::system::Arch;
+
+        /// Writes a stub `brew` that prints the given outdated packages and
+        /// exits successfully, mirroring `brew outdated --quiet`.
+        fn stub_brew(prefix: &Path, packages: &[&str]) -> PathBuf {
+            let program = prefix.join("bin").join("brew");
+            fs::create_dir_all(program.parent().unwrap_or(prefix))
+                .unwrap_or_else(|error| panic!("failed to create {}: {error}", program.display()));
+            let mut script = String::from("#!/bin/sh\n");
+            for package in packages {
+                script.push_str(&format!("echo {package}\n"));
+            }
+            script.push_str("exit 0\n");
+            fs::write(&program, script)
+                .unwrap_or_else(|error| panic!("failed to write {}: {error}", program.display()));
+            fs::set_permissions(&program, Permissions::from_mode(0o755)).unwrap_or_else(|error| {
+                panic!("failed to make {} executable: {error}", program.display())
+            });
+            program
+        }
+
+        fn temp_root(name: &str) -> PathBuf {
+            let root = env::temp_dir().join(format!(
+                "freshen-container-stop-{}-{}-{name}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .map(|since| since.as_nanos())
+                    .unwrap_or_default()
+            ));
+            let _ = fs::remove_dir_all(&root);
+            fs::create_dir_all(&root)
+                .unwrap_or_else(|error| panic!("failed to create {}: {error}", root.display()));
+            root
+        }
+
+        fn stop_step() -> ContainerStopStep {
+            ContainerStopStep::new(
+                Arc::new(ColimaRuntime::new()),
+                ContainerSnapshot::default(),
+                None,
+            )
+        }
+
+        fn install(prefix: PathBuf, arch: Arch, from_path: bool) -> BrewInstall {
+            BrewInstall {
+                program: prefix.join("bin").join("brew"),
+                prefix,
+                from_path,
+                arch,
+            }
+        }
+
+        #[test]
+        fn stops_containers_when_colima_is_outdated_in_either_architecture() {
+            let root = temp_root("either-architecture");
+            let arm = root.join("opt/homebrew");
+            let intel = root.join("usr/local");
+            stub_brew(&arm, &["colima"]);
+            stub_brew(&intel, &[]);
+
+            let installs = [
+                install(arm, Arch::Aarch64, false),
+                install(intel, Arch::X86_64, false),
+            ];
+
+            assert!(
+                stop_step()
+                    .upgrade_triggers_restart(&installs)
+                    .unwrap_or_else(|error| panic!("upgrade_triggers_restart failed: {error}")),
+                "an outdated colima in any architecture should stop the containers"
+            );
+        }
+
+        #[test]
+        fn stops_containers_when_lima_is_outdated_in_either_architecture() {
+            let root = temp_root("lima-either-architecture");
+            let arm = root.join("opt/homebrew");
+            let intel = root.join("usr/local");
+            stub_brew(&arm, &[]);
+            stub_brew(&intel, &["lima"]);
+
+            let installs = [
+                install(arm, Arch::Aarch64, false),
+                install(intel, Arch::X86_64, false),
+            ];
+
+            assert!(
+                stop_step()
+                    .upgrade_triggers_restart(&installs)
+                    .unwrap_or_else(|error| panic!("upgrade_triggers_restart failed: {error}")),
+                "an outdated lima in any architecture should stop the containers"
+            );
+        }
+
+        #[test]
+        fn does_not_stop_containers_when_nothing_is_outdated() {
+            let root = temp_root("nothing-outdated");
+            let arm = root.join("opt/homebrew");
+            let intel = root.join("usr/local");
+            stub_brew(&arm, &[]);
+            stub_brew(&intel, &[]);
+
+            let installs = [
+                install(arm, Arch::Aarch64, false),
+                install(intel, Arch::X86_64, false),
+            ];
+
+            assert!(
+                !stop_step()
+                    .upgrade_triggers_restart(&installs)
+                    .unwrap_or_else(|error| panic!("upgrade_triggers_restart failed: {error}")),
+                "no outdated colima or lima means no restart"
+            );
+        }
+
+        #[test]
+        fn checks_every_installation_rather_than_only_the_first() {
+            let root = temp_root("check-every-installation");
+            let arm = root.join("opt/homebrew");
+            let intel = root.join("usr/local");
+            stub_brew(&arm, &[]); // first installation reports nothing
+            stub_brew(&intel, &["lima"]); // second installation reports lima
+
+            let installs = [
+                install(arm, Arch::Aarch64, false),
+                install(intel, Arch::X86_64, false),
+            ];
+
+            assert!(
+                stop_step()
+                    .upgrade_triggers_restart(&installs)
+                    .unwrap_or_else(|error| panic!("upgrade_triggers_restart failed: {error}")),
+                "the second installation must be consulted even when the first is current"
+            );
+        }
     }
 }
