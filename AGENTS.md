@@ -31,6 +31,12 @@ work you discovered along the way, open a pull request, and stop.
    version of every line except your own item's tick — never let a conflict
    resolution untick another item (its code is already merged on main).
 9. `gh pr create --fill --label automated`
+   Run it from the current directory exactly like this. `gh` has NO `-C`
+   option (that is `git -C`); `gh -C /work ...` just prints usage and creates
+   nothing. `gh` is already authenticated via `GH_TOKEN` — never conclude
+   "gh is not authenticated" from a usage dump. Before this step, confirm the
+   push in step 8 actually succeeded (`git status -sb` shows no "ahead").
+   Afterwards confirm the PR exists with `gh pr view --json number,url`.
 10. **STOP.** Do not wait for CI, do not merge, do not cut a release, do not
     poll the PR, do not start the next item. GitHub handles everything after
     the PR is open.
