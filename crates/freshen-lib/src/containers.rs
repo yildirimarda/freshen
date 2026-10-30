@@ -2051,7 +2051,6 @@ mod tests {
     use crate::step::{Detection, StepId};
     use std::collections::{HashMap, HashSet};
     use std::ffi::OsString;
-    use std::fs::{self};
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
 
@@ -3129,6 +3128,7 @@ mod tests {
         use super::*;
         use crate::homebrew::BrewInstall;
         use crate::system::Arch;
+        use std::fs;
         use std::os::unix::fs::PermissionsExt;
 
         /// A stub `brew` that reports the given whitespace-separated formulae
