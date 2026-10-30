@@ -1442,11 +1442,13 @@ pub fn register_with_compose(
 ) -> Registry {
     let runtime: Arc<dyn ContainerRuntime> = Arc::new(runtime);
     let snapshot = ContainerSnapshot::default();
+    let installs = homebrew::brew_installs();
     registry
         .with(ContainerStopStep::new(
             Arc::clone(&runtime),
             snapshot.clone(),
             compose,
+            installs,
         ))
         .with(ContainerStartStep::new(
             Arc::clone(&runtime),
@@ -1514,6 +1516,7 @@ struct ContainerStopStep {
     runtime: Arc<dyn ContainerRuntime>,
     snapshot: ContainerSnapshot,
     compose: Option<ComposeCommand>,
+    installs: Vec<BrewInstall>,
     display_name: String,
 }
 
@@ -1522,12 +1525,14 @@ impl ContainerStopStep {
         runtime: Arc<dyn ContainerRuntime>,
         snapshot: ContainerSnapshot,
         compose: Option<ComposeCommand>,
+        installs: Vec<BrewInstall>,
     ) -> Self {
         let display_name = format!("{} stop", runtime.display_name());
         Self {
             runtime,
             snapshot,
             compose,
+            installs,
             display_name,
         }
     }
@@ -1535,10 +1540,16 @@ impl ContainerStopStep {
     fn upgrade_triggers_restart(&self) -> Result<bool, StepError> {
         let mut outdated = Vec::new();
         if !self.runtime.restart_formulae().is_empty() {
-            outdated.extend(self.outdated(&["outdated", "--formula", "--quiet"])?);
+            for install in &self.installs {
+                outdated.extend(self.outdated(install, &["outdated", "--formula", "--quiet"])?);
+            }
         }
         if !self.runtime.restart_casks().is_empty() {
-            outdated.extend(self.outdated(&["outdated", "--cask", "--greedy", "--quiet"])?);
+            for install in &self.installs {
+                outdated.extend(
+                    self.outdated(install, &["outdated", "--cask", "--greedy", "--quiet"])?,
+                );
+            }
         }
 
         Ok(outdated
@@ -1546,8 +1557,13 @@ impl ContainerStopStep {
             .any(|name| self.runtime.triggers_restart(name)))
     }
 
-    fn outdated(&self, arguments: &[&str]) -> Result<Vec<String>, StepError> {
-        let output = CommandSpec::new("brew")
+    fn outdated(
+        &self,
+        install: &BrewInstall,
+        arguments: &[&str],
+    ) -> Result<Vec<String>, StepError> {
+        let output = install
+            .command()
             .args(arguments)
             .neutral_locale()
             .retry_transient_network(NETWORK_RETRIES)
@@ -2023,9 +2039,9 @@ mod tests {
         podman_machine_running, register, register_for, register_with_runtime,
         ActiveContainerRuntime, ColimaRuntime, ComposeCommand, ComposeCommandProbe, ComposeProject,
         ContainerRuntime, ContainerRuntimeKind, ContainerRuntimeProbe, ContainerRuntimeSource,
-        DockerDesktopRuntime, DockerEngineProbe, NativeDockerRuntime, OrbStackRuntime,
-        PodmanRuntime, RancherDesktopRuntime, StandaloneContainer, COLIMA_START, COLIMA_STOP,
-        DOCKER, PS_FORMAT,
+        ContainerSnapshot, ContainerStopStep, DockerDesktopRuntime, DockerEngineProbe,
+        NativeDockerRuntime, OrbStackRuntime, PodmanRuntime, RancherDesktopRuntime,
+        StandaloneContainer, COLIMA_START, COLIMA_STOP, DOCKER, PS_FORMAT,
     };
     use crate::homebrew;
     use crate::options::RunOptions;
@@ -2035,6 +2051,7 @@ mod tests {
     use crate::step::{Detection, StepId};
     use std::collections::{HashMap, HashSet};
     use std::ffi::OsString;
+    use std::fs::{self, Permissions};
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
 
@@ -3105,5 +3122,146 @@ mod tests {
         );
 
         assert_eq!(runtime.to_string(), "Docker Desktop (docker context)");
+    }
+
+    #[cfg(unix)]
+    mod upgrade_triggers_restart_per_installation {
+        use super::*;
+        use crate::homebrew::BrewInstall;
+        use crate::system::Arch;
+        use std::os::unix::fs::PermissionsExt;
+
+        /// A stub `brew` that reports the given whitespace-separated formulae
+        /// and casks as outdated. Each installation gets its own stub, so the
+        /// step is exercised per installation without `FRESHEN_BREW_PREFIXES`.
+        fn stub_brew(root: &Path, name: &str, formulae: &str, casks: &str) -> PathBuf {
+            let bin = root.join(name).join("bin");
+            fs::create_dir_all(&bin).unwrap_or_else(|error| panic!("{error}"));
+            let program = bin.join("brew");
+            let script = format!(
+                r#"#!/bin/sh
+case "$*" in
+  "outdated --formula --quiet")
+    {}
+    ;;
+  "outdated --cask --greedy --quiet")
+    {}
+    ;;
+esac
+"#,
+                outdated_list(formulae),
+                outdated_list(casks)
+            );
+            fs::write(&program, script).unwrap_or_else(|error| panic!("{error}"));
+            fs::set_permissions(&program, Permissions::from_mode(0o755))
+                .unwrap_or_else(|error| panic!("{error}"));
+            program
+        }
+
+        fn outdated_list(items: &str) -> String {
+            let items: Vec<&str> = items.split_whitespace().collect();
+            if items.is_empty() {
+                "printf ''".to_owned()
+            } else {
+                let quoted: Vec<String> = items.iter().map(|item| format!("'{item}'")).collect();
+                format!("printf '%s\\n' {}", quoted.join(" "))
+            }
+        }
+
+        fn install(program: PathBuf, arch: Arch) -> BrewInstall {
+            let prefix = program
+                .parent()
+                .and_then(Path::parent)
+                .unwrap_or_else(|| Path::new(""))
+                .to_path_buf();
+            BrewInstall {
+                program,
+                prefix,
+                from_path: false,
+                arch,
+            }
+        }
+
+        fn colima_step(installs: Vec<BrewInstall>) -> ContainerStopStep {
+            ContainerStopStep::new(
+                Arc::new(ColimaRuntime::new()),
+                ContainerSnapshot::default(),
+                None,
+                installs,
+            )
+        }
+
+        fn temp_root(name: &str) -> PathBuf {
+            let root = std::env::temp_dir().join(format!(
+                "freshen-container-stop-{}-{}-{:?}",
+                name,
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = fs::remove_dir_all(&root);
+            root
+        }
+
+        #[test]
+        fn an_outdated_formula_in_the_first_installation_triggers_a_restart() {
+            let root = temp_root("first");
+            let program = stub_brew(&root, "brew", "colima", "");
+
+            assert!(colima_step(vec![install(program, Arch::Aarch64)])
+                .upgrade_triggers_restart()
+                .unwrap_or_else(|error| panic!("{error}")));
+            let _ = fs::remove_dir_all(&root);
+        }
+
+        #[test]
+        fn an_outdated_formula_in_a_later_installation_still_triggers_a_restart() {
+            // The first installation reports nothing and the second one (the
+            // other architecture) reports `lima`. Every installation is
+            // checked, so the restart is still triggered.
+            let root = temp_root("later");
+            let arm = stub_brew(&root, "arm-brew", "", "");
+            let intel = stub_brew(&root, "intel-brew", "lima", "");
+
+            let installs = vec![install(arm, Arch::Aarch64), install(intel, Arch::X86_64)];
+
+            assert!(colima_step(installs)
+                .upgrade_triggers_restart()
+                .unwrap_or_else(|error| panic!("{error}")));
+            let _ = fs::remove_dir_all(&root);
+        }
+
+        #[test]
+        fn no_outdated_formulae_or_casks_means_no_restart() {
+            let root = temp_root("none");
+            let arm = stub_brew(&root, "arm-brew", "", "");
+            let intel = stub_brew(&root, "intel-brew", "", "");
+
+            let installs = vec![install(arm, Arch::Aarch64), install(intel, Arch::X86_64)];
+
+            assert!(!colima_step(installs)
+                .upgrade_triggers_restart()
+                .unwrap_or_else(|error| panic!("{error}")));
+            let _ = fs::remove_dir_all(&root);
+        }
+
+        #[test]
+        fn an_outdated_cask_in_any_installation_triggers_a_restart() {
+            let root = temp_root("cask");
+            let arm = stub_brew(&root, "arm-brew", "", "docker-desktop");
+            let intel = stub_brew(&root, "intel-brew", "", "");
+
+            let installs = vec![install(arm, Arch::Aarch64), install(intel, Arch::X86_64)];
+
+            let step = ContainerStopStep::new(
+                Arc::new(DockerDesktopRuntime::new()),
+                ContainerSnapshot::default(),
+                None,
+                installs,
+            );
+            assert!(step
+                .upgrade_triggers_restart()
+                .unwrap_or_else(|error| panic!("{error}")));
+            let _ = fs::remove_dir_all(&root);
+        }
     }
 }
