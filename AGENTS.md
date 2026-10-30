@@ -135,6 +135,14 @@ items about CI are legitimate. Handle them like this:
 3. Tick the plan item as done — proposing IS the deliverable for CI items.
    A human applies it in a separate commit.
 
+## Cross-platform CI
+
+Your sandbox is Linux, but CI may also run Windows, macOS and a minimum
+toolchain version. Code that only exists on one platform (unix-only APIs and
+their imports, shell/path assumptions, `chmod`) and its tests must carry an
+explicit platform guard (e.g. `#[cfg(unix)]`, `sys.platform` checks). A green
+local run does not prove the other platforms are green.
+
 ## When you get stuck
 
 If you cannot finish the item in 3 attempts, stop pushing on it. Commit what
