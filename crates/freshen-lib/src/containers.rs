@@ -21,7 +21,8 @@ use serde_json::Value;
 
 use crate::apps::quit_command;
 use crate::cleanup;
-use crate::homebrew::{BREW, CASKS, FORMULAE, REOPEN};
+use crate::homebrew;
+use crate::homebrew::{BrewInstall, BREW, CASKS, FORMULAE, REOPEN};
 use crate::options::RunOptions;
 use crate::output::human;
 use crate::platform::Platform;
@@ -425,6 +426,14 @@ pub trait ContainerRuntime: Send + Sync {
     /// Executable that controls the runtime, e.g. `colima`.
     fn command(&self) -> &'static str;
 
+    /// The executables whose presence next to a discovered Homebrew `brew`
+    /// marks this runtime as installed.
+    ///
+    /// A tool installed through Homebrew lives in `{prefix}/bin` next to
+    /// `brew`, so `detect_with_brew` also finds a runtime installed only in a
+    /// non-`PATH` prefix such as `/opt/homebrew` or `/usr/local`.
+    fn detection_commands(&self) -> &'static [&'static str];
+
     /// Whether the runtime's tool is installed.
     fn detect(&self) -> Detection;
 
@@ -491,6 +500,10 @@ impl ContainerRuntime for ColimaRuntime {
 
     fn command(&self) -> &'static str {
         "colima"
+    }
+
+    fn detection_commands(&self) -> &'static [&'static str] {
+        &["colima", "limactl"]
     }
 
     fn detect(&self) -> Detection {
@@ -681,6 +694,10 @@ impl ContainerRuntime for DockerDesktopRuntime {
         "docker desktop"
     }
 
+    fn detection_commands(&self) -> &'static [&'static str] {
+        &["docker"]
+    }
+
     fn detect(&self) -> Detection {
         if command_exists("docker") {
             Detection::Installed
@@ -853,6 +870,10 @@ impl ContainerRuntime for NativeDockerRuntime {
         "docker"
     }
 
+    fn detection_commands(&self) -> &'static [&'static str] {
+        &["docker"]
+    }
+
     fn detect(&self) -> Detection {
         if self.probe.command_exists("docker") && self.probe.command_exists("systemctl") {
             Detection::Installed
@@ -916,6 +937,10 @@ impl ContainerRuntime for OrbStackRuntime {
 
     fn command(&self) -> &'static str {
         "orbctl"
+    }
+
+    fn detection_commands(&self) -> &'static [&'static str] {
+        &["orbctl"]
     }
 
     fn detect(&self) -> Detection {
@@ -993,6 +1018,10 @@ impl ContainerRuntime for RancherDesktopRuntime {
         "rdctl"
     }
 
+    fn detection_commands(&self) -> &'static [&'static str] {
+        &["rdctl"]
+    }
+
     fn detect(&self) -> Detection {
         if command_exists(self.command()) {
             Detection::Installed
@@ -1059,6 +1088,10 @@ impl ContainerRuntime for PodmanRuntime {
 
     fn command(&self) -> &'static str {
         "podman machine"
+    }
+
+    fn detection_commands(&self) -> &'static [&'static str] {
+        &["podman"]
     }
 
     fn detect(&self) -> Detection {
@@ -1944,11 +1977,37 @@ fn docker_command(arguments: &[&str], id: &str) -> CommandSpec {
 }
 
 fn detect_with_brew(runtime: &dyn ContainerRuntime) -> Detection {
-    if command_exists("brew") && runtime.detect().is_installed() {
+    let installs = homebrew::brew_installs();
+    if installs.is_empty() {
+        return Detection::NotInstalled;
+    }
+
+    let installed = installs.iter().any(|install| {
+        runtime
+            .detection_commands()
+            .iter()
+            .any(|command| command_next_to_brew(install, command))
+    });
+
+    if installed {
         Detection::Installed
     } else {
         Detection::NotInstalled
     }
+}
+
+/// Whether `command` is executable next to a discovered Homebrew `brew`.
+///
+/// A tool installed through Homebrew lives in `{prefix}/bin`, the same
+/// directory as the installation's `brew`. A `PATH` installation keeps its
+/// tools in the directory that also contains `brew`, so this covers both a
+/// non-`PATH` prefix such as `/opt/homebrew` or `/usr/local` and the
+/// `brew` found through `PATH`.
+fn command_next_to_brew(install: &BrewInstall, command: &str) -> bool {
+    let Some(bin) = install.program.parent() else {
+        return false;
+    };
+    crate::executable::resolve(bin.join(command)).is_some()
 }
 
 fn command_exists(program: &str) -> bool {
@@ -2774,6 +2833,10 @@ mod tests {
 
         fn command(&self) -> &'static str {
             "fake"
+        }
+
+        fn detection_commands(&self) -> &'static [&'static str] {
+            &["fake"]
         }
 
         fn detect(&self) -> Detection {
