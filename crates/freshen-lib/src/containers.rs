@@ -1447,6 +1447,7 @@ pub fn register_with_compose(
             Arc::clone(&runtime),
             snapshot.clone(),
             compose,
+            homebrew::brew_installs(),
         ))
         .with(ContainerStartStep::new(
             Arc::clone(&runtime),
@@ -1515,6 +1516,7 @@ struct ContainerStopStep {
     snapshot: ContainerSnapshot,
     compose: Option<ComposeCommand>,
     display_name: String,
+    installs: Vec<BrewInstall>,
 }
 
 impl ContainerStopStep {
@@ -1522,6 +1524,7 @@ impl ContainerStopStep {
         runtime: Arc<dyn ContainerRuntime>,
         snapshot: ContainerSnapshot,
         compose: Option<ComposeCommand>,
+        installs: Vec<BrewInstall>,
     ) -> Self {
         let display_name = format!("{} stop", runtime.display_name());
         Self {
@@ -1529,16 +1532,23 @@ impl ContainerStopStep {
             snapshot,
             compose,
             display_name,
+            installs,
         }
     }
 
     fn upgrade_triggers_restart(&self) -> Result<bool, StepError> {
         let mut outdated = Vec::new();
         if !self.runtime.restart_formulae().is_empty() {
-            outdated.extend(self.outdated(&["outdated", "--formula", "--quiet"])?);
+            for install in &self.installs {
+                outdated.extend(self.outdated(install, &["outdated", "--formula", "--quiet"])?);
+            }
         }
         if !self.runtime.restart_casks().is_empty() {
-            outdated.extend(self.outdated(&["outdated", "--cask", "--greedy", "--quiet"])?);
+            for install in &self.installs {
+                outdated.extend(
+                    self.outdated(install, &["outdated", "--cask", "--greedy", "--quiet"])?,
+                );
+            }
         }
 
         Ok(outdated
@@ -1546,8 +1556,13 @@ impl ContainerStopStep {
             .any(|name| self.runtime.triggers_restart(name)))
     }
 
-    fn outdated(&self, arguments: &[&str]) -> Result<Vec<String>, StepError> {
-        let output = CommandSpec::new("brew")
+    fn outdated(
+        &self,
+        install: &BrewInstall,
+        arguments: &[&str],
+    ) -> Result<Vec<String>, StepError> {
+        let output = install
+            .command()
             .args(arguments)
             .neutral_locale()
             .retry_transient_network(NETWORK_RETRIES)
@@ -2021,11 +2036,11 @@ mod tests {
         parse_compose_projects, parse_live_restore_enabled,
         parse_running_standalone_lima_instances, parse_standalone_containers,
         podman_machine_running, register, register_for, register_with_runtime,
-        ActiveContainerRuntime, ColimaRuntime, ComposeCommand, ComposeCommandProbe, ComposeProject,
-        ContainerRuntime, ContainerRuntimeKind, ContainerRuntimeProbe, ContainerRuntimeSource,
-        DockerDesktopRuntime, DockerEngineProbe, NativeDockerRuntime, OrbStackRuntime,
-        PodmanRuntime, RancherDesktopRuntime, StandaloneContainer, COLIMA_START, COLIMA_STOP,
-        DOCKER, PS_FORMAT,
+        ActiveContainerRuntime, BrewInstall, ColimaRuntime, ComposeCommand, ComposeCommandProbe,
+        ComposeProject, ContainerRuntime, ContainerRuntimeKind, ContainerRuntimeProbe,
+        ContainerRuntimeSource, ContainerSnapshot, ContainerStopStep, DockerDesktopRuntime,
+        DockerEngineProbe, NativeDockerRuntime, OrbStackRuntime, PodmanRuntime,
+        RancherDesktopRuntime, StandaloneContainer, COLIMA_START, COLIMA_STOP, DOCKER, PS_FORMAT,
     };
     use crate::homebrew;
     use crate::options::RunOptions;
@@ -2033,9 +2048,13 @@ mod tests {
     use crate::process::ProcessError;
     use crate::registry::Registry;
     use crate::step::{Detection, StepId};
+    use crate::system::Arch;
     use std::collections::{HashMap, HashSet};
     use std::ffi::OsString;
+    use std::fs::{self, Permissions};
+    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
 
     fn ordered_ids(platform: Platform) -> Vec<StepId> {
@@ -2871,6 +2890,107 @@ mod tests {
         assert!(runtime.triggers_restart("fake-formula"));
         assert!(runtime.triggers_restart("fake-cask"));
         assert!(!runtime.triggers_restart("other"));
+    }
+
+    /// A `bin/brew` stub that reports the given outdated formulae and casks.
+    #[cfg(unix)]
+    fn brew_stub(prefix: &Path, outdated_formulae: &str, outdated_casks: &str) -> PathBuf {
+        let bin = prefix.join("bin");
+        fs::create_dir_all(&bin)
+            .unwrap_or_else(|error| panic!("failed to create {}: {error}", bin.display()));
+        let brew = bin.join("brew");
+        fs::write(
+            &brew,
+            format!(
+                r#"#!/bin/sh
+case "$*" in
+  "outdated --formula --quiet")
+    printf '%s' {}
+    ;;
+  "outdated --cask --greedy --quiet")
+    printf '%s' {}
+    ;;
+esac
+"#,
+                outdated_formulae, outdated_casks
+            ),
+        )
+        .unwrap_or_else(|error| panic!("failed to write {brew:?}: {error}"));
+        fs::set_permissions(&brew, Permissions::from_mode(0o755))
+            .unwrap_or_else(|error| panic!("failed to make {brew:?} executable: {error}"));
+        brew
+    }
+
+    static STOP_PREFIX_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[cfg(unix)]
+    fn stop_install(arch: Arch, outdated_formulae: &str, outdated_casks: &str) -> BrewInstall {
+        let n = STOP_PREFIX_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let home = std::env::temp_dir().join(format!("freshen-container-stop-{n}"));
+        let program = brew_stub(&home, outdated_formulae, outdated_casks);
+        BrewInstall {
+            program,
+            prefix: home,
+            from_path: false,
+            arch,
+        }
+    }
+
+    fn stop_step(installs: Vec<BrewInstall>) -> ContainerStopStep {
+        ContainerStopStep::new(
+            Arc::new(FakeRuntime),
+            ContainerSnapshot::default(),
+            None,
+            installs,
+        )
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_outdated_formula_in_any_discovered_installation_triggers_a_restart() {
+        let arm = stop_install(Arch::Aarch64, "fake-formula\n", "");
+        let intel = stop_install(Arch::X86_64, "", "");
+
+        assert_eq!(
+            stop_step(vec![arm.clone(), intel.clone()]).upgrade_triggers_restart(),
+            Ok(true)
+        );
+        assert_eq!(
+            stop_step(vec![intel, arm]).upgrade_triggers_restart(),
+            Ok(true)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_outdated_cask_in_any_discovered_installation_triggers_a_restart() {
+        let arm = stop_install(Arch::Aarch64, "", "");
+        let intel = stop_install(Arch::X86_64, "", "fake-cask\n");
+
+        assert_eq!(
+            stop_step(vec![arm, intel]).upgrade_triggers_restart(),
+            Ok(true)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn no_outdated_package_means_no_restart() {
+        let arm = stop_install(Arch::Aarch64, "", "");
+        let intel = stop_install(Arch::X86_64, "", "");
+
+        assert_eq!(
+            stop_step(vec![arm, intel]).upgrade_triggers_restart(),
+            Ok(false)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_outdated_package_that_does_not_trigger_a_restart_is_ignored() {
+        let arm = stop_install(Arch::Aarch64, "other-formula\n", "");
+
+        assert_eq!(stop_step(vec![arm]).upgrade_triggers_restart(), Ok(false));
     }
 
     #[test]
