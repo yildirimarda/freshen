@@ -10,6 +10,7 @@ use crate::output::human;
 use crate::platform::Platform;
 use crate::process::{CommandSpec, NETWORK_RETRIES};
 use crate::registry::Registry;
+use crate::restart_needed;
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
 
 /// The dnf package manager step.
@@ -64,6 +65,10 @@ impl Step for DnfStep {
     fn run_with_options(&self, _options: &RunOptions) -> Result<(), StepError> {
         let mut failures = Vec::new();
         self.upgrade(&mut failures);
+
+        if failures.is_empty() && dnf_restart_needed() {
+            restart_needed::record();
+        }
         finish(failures)
     }
 
@@ -85,5 +90,22 @@ fn detect_dnf() -> Detection {
         Detection::Installed
     } else {
         Detection::NotInstalled
+    }
+}
+
+/// Whether a restart is needed after the dnf upgrade.
+///
+/// `needs-restarting -r` (from `dnf-utils`) reports whether running services
+/// or the kernel itself require a reboot. It exits 0 when no restart is
+/// needed and 1 when one is. When the tool is not installed, or cannot be
+/// run, no restart is reported.
+fn dnf_restart_needed() -> bool {
+    if !command_exists("needs-restarting") {
+        return false;
+    }
+    match CommandSpec::new("needs-restarting").args(["-r"]).run() {
+        Ok(_) => false, // exit 0: no restart needed
+        Err(crate::process::ProcessError::Failed { status, .. }) => !status.success(), // non-zero: restart needed
+        Err(_) => false, // could not run: assume no restart
     }
 }

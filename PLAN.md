@@ -199,7 +199,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Wait for or abort on the dpkg/apt lock with a clear message naming the holder, instead of running while another apt process is active, covered by tests with injected lock facts
 - [x] Add `apt-get autoremove -y` and `apt-get autoclean` to the apt step, running only with `--cleanup`, covered by recorded transcripts
 - [x] Add dnf detection and the `dnf upgrade -y` step, skipped when dnf is absent, covered by recorded transcripts
-- [ ] Detect a required restart after the dnf step with `needs-restarting -r` and report it in the summary, covered by recorded transcripts
+- [x] Detect a required restart after the dnf step with `needs-restarting -r` and report it in the summary, covered by recorded transcripts
 - [ ] Add `dnf autoremove -y` to the dnf step, running only with `--cleanup`, covered by recorded transcripts
 - [ ] Add yum as a fallback when dnf is absent, reusing the same step and the same output parser, covered by recorded transcripts
 - [ ] Add pacman detection and the `pacman -Syu --noconfirm` step, skipped when pacman is absent, covered by recorded transcripts
