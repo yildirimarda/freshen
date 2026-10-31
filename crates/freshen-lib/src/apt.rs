@@ -11,7 +11,9 @@ use crate::output::human;
 use crate::platform::Platform;
 use crate::process::{CommandSpec, NETWORK_RETRIES};
 use crate::registry::Registry;
+use crate::restart_needed;
 use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
+use std::path::Path;
 
 /// The apt package manager step.
 pub const APT: StepId = "apt";
@@ -82,6 +84,9 @@ impl Step for AptStep {
     fn run_with_options(&self, _options: &RunOptions) -> Result<(), StepError> {
         let mut failures = Vec::new();
         self.upgrade(&mut failures);
+        if failures.is_empty() && restart_needed() {
+            restart_needed::record();
+        }
         finish(failures)
     }
 
@@ -103,6 +108,39 @@ fn detect_apt() -> Detection {
         Detection::Installed
     } else {
         Detection::NotInstalled
+    }
+}
+
+/// Marker file that Debian/Ubuntu creates when an upgrade requires a reboot.
+const REBOOT_REQUIRED: &str = "/var/run/reboot-required";
+/// `needrestart` reports whether running services (or the system) need a
+/// restart after an apt upgrade.
+const NEEDRESTART: &str = "needrestart";
+
+/// Whether a restart is needed after an apt upgrade.
+///
+/// `reboot_required` is injected so tests can point it at a temp file instead
+/// of `/var/run/reboot-required`. When the marker file is absent, `needrestart`
+/// is consulted: if it is installed and reports that action is needed, a
+/// restart is required.
+fn restart_needed() -> bool {
+    restart_needed_at(Path::new(REBOOT_REQUIRED))
+}
+
+/// Whether a restart is needed, checking `reboot_required` first and then
+/// `needrestart`. Returns `true` as soon as either signal says a restart is
+/// required.
+fn restart_needed_at(reboot_required: &Path) -> bool {
+    if reboot_required.exists() {
+        return true;
+    }
+    if !command_exists(NEEDRESTART) {
+        return false;
+    }
+    match CommandSpec::new(NEEDRESTART).args(["-b"]).run() {
+        Ok(_) => false, // exit 0: no restart needed
+        Err(crate::process::ProcessError::Failed { status, .. }) => !status.success(), // non-zero: restart needed
+        Err(_) => false, // could not run: assume no restart
     }
 }
 
@@ -149,8 +187,25 @@ fn parenthesized(text: &str) -> Option<&str> {
 }
 
 #[cfg(test)]
+/// A unique temp path for the reboot-required marker, so parallel tests do not
+/// collide and never touch the real `/var/run/reboot-required`.
+fn temp_marker_path() -> std::path::PathBuf {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "freshen-apt-restart-{pid}-{id}",
+        pid = std::process::id(),
+        id = id
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)
+        .unwrap_or_else(|error| panic!("failed to create {}: {error}", dir.display()));
+    dir.join("reboot-required")
+}
+
+#[cfg(test)]
 mod tests {
-    use super::parse_apt_simulated_upgrade;
+    use super::{parse_apt_simulated_upgrade, restart_needed_at, temp_marker_path};
 
     #[test]
     fn parses_simulated_upgrade_lines() {
@@ -183,5 +238,18 @@ mod tests {
              0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n",
         );
         assert!(items.is_empty());
+    }
+
+    #[test]
+    fn restart_needed_at_reports_restart_when_marker_file_exists() {
+        let marker = temp_marker_path();
+        std::fs::write(&marker, "")
+            .unwrap_or_else(|error| panic!("failed to write marker file: {error}"));
+
+        assert!(restart_needed_at(&marker));
+
+        if let Some(parent) = marker.parent() {
+            let _ = std::fs::remove_dir_all(parent);
+        }
     }
 }

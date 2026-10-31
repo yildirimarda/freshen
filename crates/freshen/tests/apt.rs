@@ -139,3 +139,90 @@ fn check_reports_apt_up_to_date_without_running_anything_else() {
     assert_eq!(tools.step_calls(), vec!["apt-get -s upgrade".to_string()]);
     assert_eq!(stdout(&output), "Everything is up to date.\n");
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+fn apt_reports_restart_needed_when_needrestart_says_so() {
+    let tools = StubTools::new(&["apt-get", "needrestart"]);
+    tools.set_responses(
+        "apt-get",
+        &[
+            StubOutput::new(), // apt-get -s upgrade (check, up to date)
+            StubOutput::new(), // apt-get update
+            StubOutput::new(), // apt-get upgrade -y
+        ],
+    );
+    tools.set_responses(
+        "needrestart",
+        &[StubOutput::new().with_status(1)], // needrestart -b: restart needed
+    );
+
+    let output = run(&tools, "apt");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        vec![
+            "apt-get -s upgrade",
+            "apt-get update",
+            "apt-get upgrade -y",
+            "needrestart -b",
+        ]
+    );
+    assert!(
+        stdout(&output).contains("restart needed"),
+        "summary: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn apt_does_not_report_restart_when_needrestart_says_no() {
+    let tools = StubTools::new(&["apt-get", "needrestart"]);
+    tools.set_responses(
+        "apt-get",
+        &[
+            StubOutput::new(), // apt-get -s upgrade (check, up to date)
+            StubOutput::new(), // apt-get update
+            StubOutput::new(), // apt-get upgrade -y
+        ],
+    );
+    tools.set_responses(
+        "needrestart",
+        &[StubOutput::new()], // needrestart -b: exit 0, no restart needed
+    );
+
+    let output = run(&tools, "apt");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("restart needed"),
+        "summary: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn apt_does_not_report_restart_when_needrestart_is_not_installed() {
+    let tools = StubTools::new(&["apt-get"]);
+    tools.set_responses(
+        "apt-get",
+        &[
+            StubOutput::new(), // apt-get -s upgrade (check, up to date)
+            StubOutput::new(), // apt-get update
+            StubOutput::new(), // apt-get upgrade -y
+        ],
+    );
+
+    let output = run(&tools, "apt");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("restart needed"),
+        "summary: {}",
+        stdout(&output)
+    );
+    assert_eq!(tools.step_calls(), support::apt_transcript());
+}

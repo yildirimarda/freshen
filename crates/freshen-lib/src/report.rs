@@ -74,6 +74,7 @@ pub(crate) fn run_json(summary: &RunSummary) -> String {
                 "left_running_apps": result.left_running_apps().to_vec(),
                 "reopened_hidden": result.reopened_hidden().to_vec(),
                 "restored_windows": result.restored_windows().to_vec(),
+                "restart_needed": result.restart_needed(),
                 "error": result.error().map(|error| error.to_string()),
             })
         })
@@ -347,6 +348,22 @@ pub(crate) fn run_markdown(summary: &RunSummary) -> String {
                 out.push('\n');
             }
             out.push('\n');
+        }
+    }
+
+    if summary.steps().iter().any(|result| result.restart_needed()) {
+        out.push_str("\n## Restart needed\n\n");
+        for result in summary
+            .steps()
+            .iter()
+            .filter(|result| result.restart_needed())
+        {
+            out.push_str(&format!(
+                "### {} (`{}`)\n\n",
+                escape_cell(result.name()),
+                result.id()
+            ));
+            out.push_str("- A restart is required after this step.\n\n");
         }
     }
 

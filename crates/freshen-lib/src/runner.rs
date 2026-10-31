@@ -147,6 +147,7 @@ pub struct StepResult {
     left_running_apps: Vec<String>,
     reopened_hidden: Vec<String>,
     restored_windows: Vec<String>,
+    restart_needed: bool,
     skip_reason: Option<SkipReason>,
     error: Option<StepError>,
 }
@@ -167,6 +168,7 @@ impl StepResult {
             left_running_apps: Vec::new(),
             reopened_hidden: Vec::new(),
             restored_windows: Vec::new(),
+            restart_needed: false,
             skip_reason: None,
             error: None,
         }
@@ -214,6 +216,11 @@ impl StepResult {
 
     fn with_restored_windows(mut self, restored_windows: Vec<String>) -> Self {
         self.restored_windows = restored_windows;
+        self
+    }
+
+    fn with_restart_needed(mut self, restart_needed: bool) -> Self {
+        self.restart_needed = restart_needed;
         self
     }
 
@@ -341,6 +348,13 @@ impl StepResult {
     #[must_use]
     pub fn restored_windows(&self) -> &[String] {
         &self.restored_windows
+    }
+
+    /// Whether the step reports that a restart is needed (for example after an
+    /// apt upgrade).
+    #[must_use]
+    pub fn restart_needed(&self) -> bool {
+        self.restart_needed
     }
 
     /// Why the step was skipped, when it was.
@@ -576,6 +590,9 @@ impl fmt::Display for RunSummary {
             }
             for app in result.restored_windows() {
                 writeln!(f, "          - window put back: {app}")?;
+            }
+            if result.restart_needed() {
+                writeln!(f, "          - restart needed")?;
             }
             for warning in result.doctor_warnings() {
                 writeln!(f, "          - brew-doctor warning: {}", warning.message)?;
@@ -1028,6 +1045,7 @@ fn run_step(
             let restored_windows = crate::restored_windows::take();
             let doctor_warnings = crate::doctor_warnings::take();
             let bundle_cleanup_packages = crate::bundle_cleanup_packages::take();
+            let restart_needed = crate::restart_needed::take();
 
             let changes =
                 if result.status() == StepStatus::Interrupted || result.skip_reason().is_some() {
@@ -1054,6 +1072,7 @@ fn run_step(
                 .with_restored_windows(restored_windows)
                 .with_doctor_warnings(doctor_warnings)
                 .with_bundle_cleanup_packages(bundle_cleanup_packages)
+                .with_restart_needed(restart_needed)
         }
         Err(_error) if interrupt() => StepResult::interrupted(step, started.elapsed()),
         Err(error) if error.is_registry_unreachable() => {
