@@ -252,3 +252,59 @@ fn docker_desktop_stop_wait_times_out_with_a_clear_failure_message() {
         "expected a clear stop-timeout failure, got:\n{output_text}"
     );
 }
+
+#[test]
+fn starts_docker_desktop_by_its_app_bundle_when_docker_desktop_start_is_unavailable() {
+    let tools = StubTools::new(&["brew", "docker", "osascript", "open"]);
+    install_brew(&tools);
+    // Older releases of Docker Desktop do not have `docker desktop start`; it
+    // fails, so freshen starts the app by its bundle id instead.
+    tools.set_script(
+        "docker",
+        r#"case "$*" in
+  "desktop version")
+    exit 0
+    ;;
+  "desktop start")
+    # `docker desktop start` is unavailable in this release.
+    exit 1
+    ;;
+  "desktop status")
+    if [ -f "${FRESHEN_STUB_STATE:?FRESHEN_STUB_STATE is not set}/docker-desktop-quit" ]; then
+      printf 'stopped'
+    fi
+    exit 0
+    ;;
+  "desktop stop")
+    exit "${FRESHEN_DOCKER_STOP_STATUS:-0}"
+    ;;
+  "compose ls --format json")
+    printf '%s' "$FRESHEN_COMPOSE_JSON"
+    ;;
+  "ps --format "*)
+    printf '%s' "$FRESHEN_PS_OUTPUT"
+    ;;
+esac"#,
+    );
+
+    let output = run(&tools, "docker-desktop\n", "0");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    let stop = index_of(&calls, "docker desktop stop");
+    let upgrade = index_of(&calls, "brew upgrade --cask");
+    let start = index_of(&calls, "open -a com.docker.docker");
+
+    assert!(stop < upgrade, "calls: {calls:?}");
+    assert!(upgrade < start, "calls: {calls:?}");
+    // The containers that were stopped are brought back after the start.
+    assert!(
+        calls.contains(&"docker start def".to_owned()),
+        "calls: {calls:?}"
+    );
+    assert!(calls.contains(&web("up -d")), "calls: {calls:?}");
+    assert!(
+        calls.contains(&"docker image prune -f".to_owned()),
+        "calls: {calls:?}"
+    );
+}
