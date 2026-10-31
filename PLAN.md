@@ -195,7 +195,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 ## Milestone 5: Linux
 
 - [x] Add apt detection and the `apt-get update` + `apt-get upgrade -y` step, skipped when apt is absent, covered by recorded transcripts
-- [ ] Detect whether a restart is needed after the apt step (`needrestart` or `/var/run/reboot-required`) and report it in the summary, covered by tests with injected files
+- [x] Detect whether a restart is needed after the apt step (`needrestart` or `/var/run/reboot-required`) and report it in the summary, covered by tests with injected files
 - [ ] Wait for or abort on the dpkg/apt lock with a clear message naming the holder, instead of running while another apt process is active, covered by tests with injected lock facts
 - [ ] Add `apt-get autoremove -y` and `apt-get autoclean` to the apt step, running only with `--cleanup`, covered by recorded transcripts
 - [ ] Add dnf detection and the `dnf upgrade -y` step, skipped when dnf is absent, covered by recorded transcripts
