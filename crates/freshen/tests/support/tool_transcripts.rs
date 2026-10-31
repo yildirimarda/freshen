@@ -261,6 +261,16 @@ pub fn apt_transcript() -> Vec<&'static str> {
     apt_steps().to_vec()
 }
 
+/// Named insertion: the dnf upgrade step.
+pub fn dnf_steps() -> &'static [&'static str] {
+    &["dnf upgrade -y"]
+}
+
+/// Named insertion: full dnf transcript (upgrade).
+pub fn dnf_transcript() -> Vec<&'static str> {
+    dnf_steps().to_vec()
+}
+
 /// Named insertion: probe stub transcript.
 pub fn probe_transcript() -> Vec<&'static str> {
     let mut t = Vec::new();

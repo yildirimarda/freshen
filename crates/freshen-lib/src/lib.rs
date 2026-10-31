@@ -13,6 +13,7 @@ pub mod cleanup;
 pub mod config;
 pub mod containers;
 pub(crate) mod deadline;
+pub mod dnf;
 pub mod doctor_warnings;
 mod executable;
 pub mod exit;
