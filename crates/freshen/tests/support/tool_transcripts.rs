@@ -331,6 +331,16 @@ pub fn pacman_transcript() -> Vec<&'static str> {
     pacman_steps().to_vec()
 }
 
+/// Named insertion: the zypper refresh and update steps.
+pub fn zypper_steps() -> &'static [&'static str] {
+    &["zypper refresh", "zypper update -y"]
+}
+
+/// Named insertion: full zypper transcript (refresh and update).
+pub fn zypper_transcript() -> Vec<&'static str> {
+    zypper_steps().to_vec()
+}
+
 /// Named insertion: the pacman cleanup steps (with `--cleanup`).
 pub fn pacman_cleanup_steps() -> &'static [&'static str] {
     &[
