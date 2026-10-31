@@ -28,6 +28,7 @@ pub mod options;
 pub mod output;
 pub mod package_manager;
 pub mod pacman;
+pub mod pacman_findings;
 pub mod platform;
 pub mod policy;
 pub mod preflight;

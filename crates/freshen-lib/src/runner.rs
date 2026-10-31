@@ -147,6 +147,7 @@ pub struct StepResult {
     left_running_apps: Vec<String>,
     reopened_hidden: Vec<String>,
     restored_windows: Vec<String>,
+    pacman_findings: Vec<crate::pacman_findings::PacmanFinding>,
     restart_needed: bool,
     skip_reason: Option<SkipReason>,
     error: Option<StepError>,
@@ -168,6 +169,7 @@ impl StepResult {
             left_running_apps: Vec::new(),
             reopened_hidden: Vec::new(),
             restored_windows: Vec::new(),
+            pacman_findings: Vec::new(),
             restart_needed: false,
             skip_reason: None,
             error: None,
@@ -219,6 +221,14 @@ impl StepResult {
         self
     }
 
+    fn with_pacman_findings(
+        mut self,
+        findings: Vec<crate::pacman_findings::PacmanFinding>,
+    ) -> Self {
+        self.pacman_findings = findings;
+        self
+    }
+
     fn with_restart_needed(mut self, restart_needed: bool) -> Self {
         self.restart_needed = restart_needed;
         self
@@ -262,6 +272,7 @@ impl StepResult {
         self.status = StepStatus::TimedOut;
         self.error = None;
         self.changes.clear();
+        self.pacman_findings.clear();
         self
     }
 
@@ -348,6 +359,13 @@ impl StepResult {
     #[must_use]
     pub fn restored_windows(&self) -> &[String] {
         &self.restored_windows
+    }
+
+    /// `.pacnew` and `.pacsave` files found by the pacman step, in sorted
+    /// order.
+    #[must_use]
+    pub fn pacman_findings(&self) -> &[crate::pacman_findings::PacmanFinding] {
+        &self.pacman_findings
     }
 
     /// Whether the step reports that a restart is needed (for example after an
@@ -590,6 +608,14 @@ impl fmt::Display for RunSummary {
             }
             for app in result.restored_windows() {
                 writeln!(f, "          - window put back: {app}")?;
+            }
+            for finding in result.pacman_findings() {
+                writeln!(
+                    f,
+                    "          - {} configuration file: {}",
+                    finding.kind(),
+                    finding.path().display()
+                )?;
             }
             if result.restart_needed() {
                 writeln!(f, "          - restart needed")?;
@@ -1045,6 +1071,7 @@ fn run_step(
             let restored_windows = crate::restored_windows::take();
             let doctor_warnings = crate::doctor_warnings::take();
             let bundle_cleanup_packages = crate::bundle_cleanup_packages::take();
+            let pacman_findings = crate::pacman_findings::take();
             let restart_needed = crate::restart_needed::take();
 
             let changes =
@@ -1072,6 +1099,7 @@ fn run_step(
                 .with_restored_windows(restored_windows)
                 .with_doctor_warnings(doctor_warnings)
                 .with_bundle_cleanup_packages(bundle_cleanup_packages)
+                .with_pacman_findings(pacman_findings)
                 .with_restart_needed(restart_needed)
         }
         Err(_error) if interrupt() => StepResult::interrupted(step, started.elapsed()),

@@ -7,6 +7,7 @@
 use crate::executable::command_exists;
 use crate::options::RunOptions;
 use crate::output::human;
+use crate::pacman_findings;
 use crate::platform::Platform;
 use crate::process::{CommandSpec, NETWORK_RETRIES};
 use crate::registry::Registry;
@@ -64,6 +65,15 @@ impl Step for PacmanStep {
     fn run_with_options(&self, _options: &RunOptions) -> Result<(), StepError> {
         let mut failures = Vec::new();
         self.upgrade(&mut failures);
+
+        // Report `.pacnew` and `.pacsave` files left behind by a successful
+        // upgrade so the user knows which configuration files need merging.
+        if failures.is_empty() {
+            for finding in pacman_findings::pacman_findings() {
+                pacman_findings::record(finding);
+            }
+        }
+
         finish(failures)
     }
 
