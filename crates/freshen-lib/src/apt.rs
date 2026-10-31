@@ -1,10 +1,12 @@
-//! The apt step: `apt-get update` followed by `apt-get upgrade -y`.
+//! The apt step: `apt-get update` followed by `apt-get upgrade -y`, and
+//! `apt-get autoremove -y` plus `apt-get autoclean` when `--cleanup` is set.
 //!
 //! The zsh implementation runs `apt-get update` and `apt-get upgrade -y`
 //! whenever `apt-get` is available. The step is skipped entirely when apt is
 //! absent, so it is safe to register on every machine; on macOS and Windows
 //! it is never detected.
 
+use crate::cleanup;
 use crate::executable::command_exists;
 use crate::options::RunOptions;
 use crate::output::human;
@@ -81,9 +83,32 @@ impl Step for AptStep {
         self.run_with_options(&RunOptions::new())
     }
 
-    fn run_with_options(&self, _options: &RunOptions) -> Result<(), StepError> {
+    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
         let mut failures = Vec::new();
         self.upgrade(&mut failures);
+
+        if let Err(error) = cleanup::run(
+            APT,
+            "apt: autoremove",
+            CommandSpec::new("apt-get")
+                .args(["autoremove", "-y"])
+                .retry_transient_network(NETWORK_RETRIES),
+            options,
+        ) {
+            failures.push(error);
+        }
+
+        if let Err(error) = cleanup::run(
+            APT,
+            "apt: autoclean",
+            CommandSpec::new("apt-get")
+                .args(["autoclean"])
+                .retry_transient_network(NETWORK_RETRIES),
+            options,
+        ) {
+            failures.push(error);
+        }
+
         if failures.is_empty() && restart_needed() {
             restart_needed::record();
         }

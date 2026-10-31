@@ -38,6 +38,8 @@ fn apt_updates_and_upgrades() {
             StubOutput::new(), // apt-get -s upgrade (check, up to date)
             StubOutput::new(), // apt-get update
             StubOutput::new(), // apt-get upgrade -y
+            StubOutput::new(), // apt-get autoremove -y
+            StubOutput::new(), // apt-get autoclean
         ],
     );
 
@@ -57,6 +59,8 @@ fn a_failing_apt_update_still_attempts_the_upgrade_and_fails_the_step() {
             StubOutput::new(),                // apt-get -s upgrade (check, up to date)
             StubOutput::new().with_status(1), // apt-get update fails
             StubOutput::new(),                // apt-get upgrade -y still runs
+            StubOutput::new(),                // apt-get autoremove -y still runs
+            StubOutput::new(),                // apt-get autoclean still runs
         ],
     );
 
@@ -150,6 +154,8 @@ fn apt_reports_restart_needed_when_needrestart_says_so() {
             StubOutput::new(), // apt-get -s upgrade (check, up to date)
             StubOutput::new(), // apt-get update
             StubOutput::new(), // apt-get upgrade -y
+            StubOutput::new(), // apt-get autoremove -y
+            StubOutput::new(), // apt-get autoclean
         ],
     );
     tools.set_responses(
@@ -166,6 +172,8 @@ fn apt_reports_restart_needed_when_needrestart_says_so() {
             "apt-get -s upgrade",
             "apt-get update",
             "apt-get upgrade -y",
+            "apt-get autoremove -y",
+            "apt-get autoclean",
             "needrestart -b",
         ]
     );
@@ -186,6 +194,8 @@ fn apt_does_not_report_restart_when_needrestart_says_no() {
             StubOutput::new(), // apt-get -s upgrade (check, up to date)
             StubOutput::new(), // apt-get update
             StubOutput::new(), // apt-get upgrade -y
+            StubOutput::new(), // apt-get autoremove -y
+            StubOutput::new(), // apt-get autoclean
         ],
     );
     tools.set_responses(
@@ -213,6 +223,8 @@ fn apt_does_not_report_restart_when_needrestart_is_not_installed() {
             StubOutput::new(), // apt-get -s upgrade (check, up to date)
             StubOutput::new(), // apt-get update
             StubOutput::new(), // apt-get upgrade -y
+            StubOutput::new(), // apt-get autoremove -y
+            StubOutput::new(), // apt-get autoclean
         ],
     );
 
@@ -225,4 +237,35 @@ fn apt_does_not_report_restart_when_needrestart_is_not_installed() {
         stdout(&output)
     );
     assert_eq!(tools.step_calls(), support::apt_transcript());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn apt_skips_cleanup_without_cleanup_flag() {
+    let tools = StubTools::new(&["apt-get"]);
+    tools.set_responses(
+        "apt-get",
+        &[
+            StubOutput::new(), // apt-get -s upgrade (check, up to date)
+            StubOutput::new(), // apt-get update
+            StubOutput::new(), // apt-get upgrade -y
+        ],
+    );
+
+    let output = tools
+        .command()
+        .args(["--only", "apt"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        vec!["apt-get -s upgrade", "apt-get update", "apt-get upgrade -y",]
+    );
+    assert!(
+        stdout(&output).contains("skipped destructive cleanup"),
+        "summary: {}",
+        stdout(&output)
+    );
 }
