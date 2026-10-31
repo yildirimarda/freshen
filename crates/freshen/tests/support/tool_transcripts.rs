@@ -291,6 +291,36 @@ pub fn dnf_cleanup_transcript() -> Vec<&'static str> {
     dnf_cleanup_steps().to_vec()
 }
 
+/// Named insertion: the yum upgrade step (the dnf step's fallback when dnf is absent).
+pub fn yum_steps() -> &'static [&'static str] {
+    &["yum update -y"]
+}
+
+/// Named insertion: full yum transcript (upgrade).
+pub fn yum_transcript() -> Vec<&'static str> {
+    yum_steps().to_vec()
+}
+
+/// Named insertion: the yum upgrade step plus the restart probe.
+pub fn yum_restart_steps() -> &'static [&'static str] {
+    &["yum update -y", "needs-restarting -r"]
+}
+
+/// Named insertion: full yum transcript with the restart probe.
+pub fn yum_restart_transcript() -> Vec<&'static str> {
+    yum_restart_steps().to_vec()
+}
+
+/// Named insertion: the yum upgrade step plus the cleanup step (with --cleanup).
+pub fn yum_cleanup_steps() -> &'static [&'static str] {
+    &["yum update -y", "yum autoremove -y"]
+}
+
+/// Named insertion: full yum transcript with cleanup.
+pub fn yum_cleanup_transcript() -> Vec<&'static str> {
+    yum_cleanup_steps().to_vec()
+}
+
 /// Named insertion: probe stub transcript.
 pub fn probe_transcript() -> Vec<&'static str> {
     let mut t = Vec::new();
