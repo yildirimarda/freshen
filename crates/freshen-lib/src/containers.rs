@@ -774,10 +774,19 @@ impl ContainerRuntime for DockerDesktopRuntime {
     }
 
     fn start(&self) -> Result<(), ProcessError> {
-        CommandSpec::new("docker")
-            .args(["desktop", "start"])
-            .run()
-            .map(|_| ())
+        match CommandSpec::new("docker").args(["desktop", "start"]).run() {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                // Older releases lack `docker desktop start`, so start Docker
+                // Desktop by its app bundle instead.
+                CommandSpec::new("open")
+                    .arg("-a")
+                    .arg(DOCKER_DESKTOP_BUNDLE_ID)
+                    .run()
+                    .map(|_| ())
+                    .map_err(|_| error)
+            }
+        }
     }
 
     fn restart_formulae(&self) -> &'static [&'static str] {
