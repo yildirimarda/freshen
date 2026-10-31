@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Managed by release-please from Conventional Commits. Do not edit by hand. -->
 
+## [0.2.0](https://github.com/yildirimarda/freshen/compare/v0.1.0...v0.2.0) (2026-10-31)
+
+
+### Features
+
+* add native Docker Engine runtime on Linux ([#104](https://github.com/yildirimarda/freshen/issues/104)) ([0e8d067](https://github.com/yildirimarda/freshen/commit/0e8d067cb510b2e062740c4a2a5802a0ccfd79c5))
+* decide per cask whether the upgrade needs --greedy ([#84](https://github.com/yildirimarda/freshen/issues/84)) ([74f199e](https://github.com/yildirimarda/freshen/commit/74f199e9b6a361fc597c9918266fedcdb3a50f3c))
+* detect the active container runtime ([#97](https://github.com/yildirimarda/freshen/issues/97)) ([7d6bf8a](https://github.com/yildirimarda/freshen/commit/7d6bf8a29e5f3c60674b2d670d636e0a409a657c))
+* explain a denied Automation request when quitting apps ([#82](https://github.com/yildirimarda/freshen/issues/82)) ([b06e5cb](https://github.com/yildirimarda/freshen/commit/b06e5cb26df5581c97a80d5755f882f935af0af3))
+* extend real-tools CI proposal to apt and Windows ([#75](https://github.com/yildirimarda/freshen/issues/75)) ([5013d63](https://github.com/yildirimarda/freshen/commit/5013d63d00f5da4c28565ff454708bce08371447))
+* guard screen, byobu, dtach, abduco and mosh sessions ([#63](https://github.com/yildirimarda/freshen/issues/63)) ([f6ca4ed](https://github.com/yildirimarda/freshen/commit/f6ca4eda6eca679e942f3ded22ba6a8d53f9810d))
+* handle Docker Desktop cask upgrades on macOS ([#98](https://github.com/yildirimarda/freshen/issues/98)) ([9a695af](https://github.com/yildirimarda/freshen/commit/9a695afb65e284b502b0cbd9cbb260441bf30377))
+* handle dual-architecture Homebrew installs ([#95](https://github.com/yildirimarda/freshen/issues/95)) ([33d3ed3](https://github.com/yildirimarda/freshen/commit/33d3ed387c925c736037cf6e3fc1cec45843eb64))
+* quit cask apps named only in the uninstall stanza ([#87](https://github.com/yildirimarda/freshen/issues/87)) ([7061f6d](https://github.com/yildirimarda/freshen/commit/7061f6dbd56806d520705baaef9456973e59e73b))
+* reopen the apps the way they were before the upgrade ([#89](https://github.com/yildirimarda/freshen/issues/89)) ([d1d8b78](https://github.com/yildirimarda/freshen/commit/d1d8b788e91f9d08a4f49c56987611c7c44385da))
+* report outdated uv and mise tools in check mode ([#67](https://github.com/yildirimarda/freshen/issues/67)) ([6e849f2](https://github.com/yildirimarda/freshen/commit/6e849f21dbd13296adf94de908e92b41f441d174))
+* respect pinned Homebrew formulae ([#85](https://github.com/yildirimarda/freshen/issues/85)) ([9df5981](https://github.com/yildirimarda/freshen/commit/9df59812d617b6886d3ec0a42b786aaf9f34f12c))
+* restart Homebrew services for upgraded formulae ([#86](https://github.com/yildirimarda/freshen/issues/86)) ([b28aa95](https://github.com/yildirimarda/freshen/commit/b28aa956544eee9bbffa675e2784416a9c26784a))
+* run check queries concurrently with bounded jobs ([#68](https://github.com/yildirimarda/freshen/issues/68)) ([35573f1](https://github.com/yildirimarda/freshen/commit/35573f1cce783c2fa92201e68e4d9fd3db1d4f48))
+* run Rust CI on macOS, Ubuntu and Windows ([#73](https://github.com/yildirimarda/freshen/issues/73)) ([a536246](https://github.com/yildirimarda/freshen/commit/a5362464f1d51c8037973b73fc42aba94969f14e))
+* run the commands freshen parses in a neutral locale ([#81](https://github.com/yildirimarda/freshen/issues/81)) ([8021b21](https://github.com/yildirimarda/freshen/commit/8021b215eae7a62c4a60cef618bcf5eb80f55c5d))
+* stop and start standalone Lima instances around a lima upgrade ([#102](https://github.com/yildirimarda/freshen/issues/102)) ([a73b0c8](https://github.com/yildirimarda/freshen/commit/a73b0c8dbbd7dbb335ce30cdf327bf7ee7d468f6))
+* support per-step flags, include/exclude lists and app lists ([#80](https://github.com/yildirimarda/freshen/issues/80)) ([e099f15](https://github.com/yildirimarda/freshen/commit/e099f15d62f49be1d257e7e9ca4ba6f8b9b1845a))
+* wait for apps that update themselves instead of quitting them ([#88](https://github.com/yildirimarda/freshen/issues/88)) ([ce8b9eb](https://github.com/yildirimarda/freshen/commit/ce8b9eb8c8a038c13c5309298877d91c8ac36cb9))
+
+
+### Bug Fixes
+
+* make cask app roots overridable so macOS tests ignore the real /Applications; windows clippy ([1030c44](https://github.com/yildirimarda/freshen/commit/1030c44cfe698a404f52c68c4aeec32d6070dad7))
+* protect detected terminal when quitting casks ([#69](https://github.com/yildirimarda/freshen/issues/69)) ([57c6a48](https://github.com/yildirimarda/freshen/commit/57c6a4819ea469a03c4f8cc3b1bb0870b7c4ecfb))
+
 ## 0.1.0 (2026-10-21)
 
 
