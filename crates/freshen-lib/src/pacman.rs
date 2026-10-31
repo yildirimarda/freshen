@@ -1,9 +1,12 @@
 //! The pacman step: `pacman -Syu --noconfirm`, skipped when pacman is absent.
 //!
 //! The step runs `pacman -Syu --noconfirm` whenever `pacman` is available.
-//! It is skipped entirely when pacman is absent, so it is safe to register
-//! on every machine; on macOS and Windows it is never detected.
+//! With `--cleanup` it also cleans the package cache (`pacman -Sc`) and
+//! removes orphaned packages (`pacman -Qtdq` then `pacman -Rns`). It is
+//! skipped entirely when pacman is absent, so it is safe to register on
+//! every machine; on macOS and Windows it is never detected.
 
+use crate::cleanup;
 use crate::executable::command_exists;
 use crate::options::RunOptions;
 use crate::output::human;
@@ -39,6 +42,65 @@ impl PacmanStep {
             failures.push(StepError::run_from_process(PACMAN, &error));
         }
     }
+
+    /// Cleans the package cache and removes orphaned packages, running only
+    /// when `--cleanup` is enabled.
+    fn cleanup(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
+        self.clean_package_cache(options, failures);
+        self.remove_orphans(options, failures);
+    }
+
+    /// Removes cached packages that are no longer installed and unused sync
+    /// databases.
+    fn clean_package_cache(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
+        if let Err(error) = cleanup::run(
+            PACMAN,
+            "pacman: package cache",
+            CommandSpec::new("pacman")
+                .args(["-Sc", "--noconfirm"])
+                .retry_transient_network(NETWORK_RETRIES),
+            options,
+        ) {
+            failures.push(error);
+        }
+    }
+
+    /// Removes orphaned packages (packages no longer required by anything).
+    fn remove_orphans(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
+        if !options.cleanup_enabled() {
+            human!(
+                "pacman: orphans: skipped destructive cleanup (pass {} to enable)",
+                cleanup::ENABLE_FLAG
+            );
+            return;
+        }
+
+        let Ok(listing) = CommandSpec::new("pacman").args(["-Qtdq"]).run() else {
+            return;
+        };
+        let orphans: Vec<&str> = listing
+            .stdout()
+            .lines()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .collect();
+        if orphans.is_empty() {
+            human!("pacman: orphans: nothing to remove");
+            return;
+        }
+
+        if let Err(error) = cleanup::run(
+            PACMAN,
+            "pacman: orphans",
+            CommandSpec::new("pacman")
+                .args(["-Rns", "--noconfirm"])
+                .args(orphans.as_slice())
+                .retry_transient_network(NETWORK_RETRIES),
+            options,
+        ) {
+            failures.push(error);
+        }
+    }
 }
 
 impl Step for PacmanStep {
@@ -62,7 +124,7 @@ impl Step for PacmanStep {
         self.run_with_options(&RunOptions::new())
     }
 
-    fn run_with_options(&self, _options: &RunOptions) -> Result<(), StepError> {
+    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
         let mut failures = Vec::new();
         self.upgrade(&mut failures);
 
@@ -73,6 +135,8 @@ impl Step for PacmanStep {
                 pacman_findings::record(finding);
             }
         }
+
+        self.cleanup(options, &mut failures);
 
         finish(failures)
     }
