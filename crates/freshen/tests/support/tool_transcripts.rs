@@ -346,6 +346,27 @@ pub fn pacman_cleanup_transcript() -> Vec<&'static str> {
     pacman_cleanup_steps().to_vec()
 }
 
+/// Named insertion: the AUR helpers upgrade step (`yay` is preferred, `paru`
+/// is the fallback).
+pub fn aur_steps() -> &'static [&'static str] {
+    &["yay -Syu --noconfirm"]
+}
+
+/// Named insertion: full AUR helpers transcript (upgrade with `yay`).
+pub fn aur_transcript() -> Vec<&'static str> {
+    aur_steps().to_vec()
+}
+
+/// Named insertion: the AUR helpers upgrade step with `paru`.
+pub fn aur_paru_steps() -> &'static [&'static str] {
+    &["paru -Syu --noconfirm"]
+}
+
+/// Named insertion: full AUR helpers transcript (upgrade with `paru`).
+pub fn aur_paru_transcript() -> Vec<&'static str> {
+    aur_paru_steps().to_vec()
+}
+
 /// Named insertion: probe stub transcript.
 pub fn probe_transcript() -> Vec<&'static str> {
     let mut t = Vec::new();
