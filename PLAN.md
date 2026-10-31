@@ -205,7 +205,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add pacman detection and the `pacman -Syu --noconfirm` step, skipped when pacman is absent, covered by recorded transcripts
 - [x] Report `.pacnew` and `.pacsave` files after a pacman upgrade, so the user knows which configuration files need merging, covered by tests with injected directory listings
 - [x] Add package-cache cleaning and orphan removal to the pacman step, running only with `--cleanup`, covered by recorded transcripts
-- [ ] Add optional AUR helpers (`yay`/`paru`) as a separate opt-in step that runs only when the helper is installed, covered by recorded transcripts
+- [x] Add optional AUR helpers (`yay`/`paru`) as a separate opt-in step that runs only when the helper is installed, covered by recorded transcripts
 - [ ] Add zypper detection and the `zypper refresh` + `zypper update -y` step, skipped when zypper is absent, covered by recorded transcripts
 - [ ] Report the services that need a restart after a zypper upgrade (`zypper ps -s`), covered by recorded transcripts
 - [ ] Add apk support (`apk update`, `apk upgrade`) for Alpine as an opt-in step, skipped when apk is absent, covered by recorded transcripts
