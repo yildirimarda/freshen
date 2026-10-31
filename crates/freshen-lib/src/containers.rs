@@ -1520,7 +1520,22 @@ pub fn register_with_runtime(
         registry,
         runtime,
         detect_compose_command(&HostComposeCommandProbe, Some(kind)),
+        container_cli(kind),
     )
+}
+
+/// The CLI used to list and control standalone containers for a runtime.
+///
+/// Colima, OrbStack, Docker Desktop, Rancher Desktop and native Docker Engine
+/// all expose a Docker-compatible CLI, so standalone containers are managed
+/// with `docker`. Podman exposes its own CLI, so a Podman-only host without
+/// the Docker CLI uses `podman` instead.
+#[must_use]
+fn container_cli(kind: ContainerRuntimeKind) -> &'static str {
+    match kind {
+        ContainerRuntimeKind::Podman => "podman",
+        _ => "docker",
+    }
 }
 
 /// Registers the container steps for a specific runtime and compose command.
@@ -1532,6 +1547,7 @@ pub fn register_with_compose(
     registry: Registry,
     runtime: impl ContainerRuntime + 'static,
     compose: Option<ComposeCommand>,
+    container_cli: &'static str,
 ) -> Registry {
     let runtime: Arc<dyn ContainerRuntime> = Arc::new(runtime);
     let snapshot = ContainerSnapshot::default();
@@ -1540,11 +1556,13 @@ pub fn register_with_compose(
             Arc::clone(&runtime),
             snapshot.clone(),
             compose,
+            container_cli,
         ))
         .with(ContainerStartStep::new(
             Arc::clone(&runtime),
             snapshot,
             compose,
+            container_cli,
         ))
         .with(DockerStep::new(runtime, compose))
 }
@@ -1617,6 +1635,7 @@ struct ContainerStopStep {
     runtime: Arc<dyn ContainerRuntime>,
     snapshot: ContainerSnapshot,
     compose: Option<ComposeCommand>,
+    container_cli: &'static str,
     display_name: String,
 }
 
@@ -1625,12 +1644,14 @@ impl ContainerStopStep {
         runtime: Arc<dyn ContainerRuntime>,
         snapshot: ContainerSnapshot,
         compose: Option<ComposeCommand>,
+        container_cli: &'static str,
     ) -> Self {
         let display_name = format!("{} stop", runtime.display_name());
         Self {
             runtime,
             snapshot,
             compose,
+            container_cli,
             display_name,
         }
     }
@@ -1725,8 +1746,9 @@ impl Step for ContainerStopStep {
         if let Some(compose) = self.compose {
             snapshot.compose = selected_projects(list_compose_projects(compose), options);
         }
-        if command_exists("docker") {
-            snapshot.standalone = selected_containers(list_standalone_containers(), options);
+        if command_exists(self.container_cli) {
+            snapshot.standalone =
+                selected_containers(list_standalone_containers(self.container_cli), options);
         }
 
         self.snapshot.store(snapshot.clone());
@@ -1740,8 +1762,10 @@ impl Step for ContainerStopStep {
             }
         }
         for container in &snapshot.standalone {
-            human!("docker stop: {}", container.name());
-            if let Err(error) = docker_command(&["stop"], container.id()).run() {
+            human!("{} stop: {}", self.container_cli, container.name());
+            if let Err(error) =
+                container_command(self.container_cli, &["stop"], container.id()).run()
+            {
                 failures.push(StepError::run_from_process(COLIMA_STOP, &error));
             }
         }
@@ -1763,6 +1787,7 @@ impl Step for ContainerStopStep {
             &self.snapshot,
             COLIMA_STOP,
             self.compose,
+            self.container_cli,
         )
     }
 
@@ -1783,6 +1808,7 @@ struct ContainerStartStep {
     runtime: Arc<dyn ContainerRuntime>,
     snapshot: ContainerSnapshot,
     compose: Option<ComposeCommand>,
+    container_cli: &'static str,
     display_name: String,
 }
 
@@ -1791,12 +1817,14 @@ impl ContainerStartStep {
         runtime: Arc<dyn ContainerRuntime>,
         snapshot: ContainerSnapshot,
         compose: Option<ComposeCommand>,
+        container_cli: &'static str,
     ) -> Self {
         let display_name = format!("{} start", runtime.display_name());
         Self {
             runtime,
             snapshot,
             compose,
+            container_cli,
             display_name,
         }
     }
@@ -1818,8 +1846,10 @@ impl ContainerStartStep {
         }
 
         for container in &snapshot.standalone {
-            human!("docker start: {}", container.name());
-            if let Err(error) = docker_command(&["start"], container.id()).run() {
+            human!("{} start: {}", self.container_cli, container.name());
+            if let Err(error) =
+                container_command(self.container_cli, &["start"], container.id()).run()
+            {
                 failures.push(StepError::run_from_process(COLIMA_START, &error));
             }
         }
@@ -1845,6 +1875,7 @@ fn restore_runtime(
     snapshot: &ContainerSnapshot,
     step: StepId,
     compose: Option<ComposeCommand>,
+    container_cli: &'static str,
 ) -> Result<(), StepError> {
     let Some(stopped) = snapshot.get() else {
         return Ok(());
@@ -1862,8 +1893,8 @@ fn restore_runtime(
     }
 
     for container in &stopped.standalone {
-        human!("docker start: {}", container.name());
-        if let Err(error) = docker_command(&["start"], container.id()).run() {
+        human!("{} start: {}", container_cli, container.name());
+        if let Err(error) = container_command(container_cli, &["start"], container.id()).run() {
             failures.push(StepError::run_from_process(step, &error));
         }
     }
@@ -2049,8 +2080,8 @@ fn list_compose_projects(compose: ComposeCommand) -> Vec<ComposeProject> {
     parse_compose_projects(output.stdout())
 }
 
-fn list_standalone_containers() -> Vec<StandaloneContainer> {
-    let Ok(output) = CommandSpec::new("docker")
+fn list_standalone_containers(container_cli: &'static str) -> Vec<StandaloneContainer> {
+    let Ok(output) = CommandSpec::new(container_cli)
         .arg("ps")
         .args(["--format", PS_FORMAT])
         .neutral_locale()
@@ -2101,8 +2132,8 @@ fn selected_containers(
         .collect()
 }
 
-fn docker_command(arguments: &[&str], id: &str) -> CommandSpec {
-    CommandSpec::new("docker").args(arguments).arg(id)
+fn container_command(container_cli: &'static str, arguments: &[&str], id: &str) -> CommandSpec {
+    CommandSpec::new(container_cli).args(arguments).arg(id)
 }
 
 fn detect_with_brew(runtime: &dyn ContainerRuntime) -> Detection {
@@ -3329,6 +3360,7 @@ mod tests {
                 Arc::new(ColimaRuntime::new()),
                 ContainerSnapshot::default(),
                 None,
+                "docker",
             )
         }
 

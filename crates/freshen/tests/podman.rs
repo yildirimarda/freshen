@@ -3,7 +3,9 @@
 //! The runtime is detected from `DOCKER_HOST`, its state comes from
 //! `podman machine list --format json`, and it is stopped with
 //! `podman machine stop` before the `podman` formula is upgraded and started
-//! again with `podman machine start` afterwards. No real Podman is touched.
+//! again with `podman machine start` afterwards. Standalone containers are
+//! listed and restored through the `podman` CLI, so a Podman-only host without
+//! the Docker CLI still restores its containers. No real Podman is touched.
 
 #![cfg(all(feature = "test-harness", unix))]
 
@@ -11,12 +13,16 @@ mod support;
 
 use std::process::Output;
 
-use support::{StubTools, COMPOSE_JSON, PS_CALL, PS_OUTPUT};
+use support::{StubTools, COMPOSE_JSON, PS_OUTPUT};
 
 const ALL_STEPS: &str = "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-reopen,colima-stop,colima-start,docker";
 
 const MACHINE_RUNNING: &str = r#"[{"Name":"podman-machine-default","Running":true}]"#;
 const MACHINE_STOPPED: &str = r#"[{"Name":"podman-machine-default","Running":false}]"#;
+
+/// `podman ps --format ...` with the same tab-separated shape as `docker ps`.
+const PODMAN_PS_CALL: &str =
+    "podman ps --format {{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.project\"}}";
 
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
@@ -52,20 +58,6 @@ esac"#,
     );
 }
 
-fn install_docker(tools: &StubTools) {
-    tools.set_script(
-        "docker",
-        r#"case "$*" in
-  "compose ls --format json")
-    printf '%s' "$FRESHEN_COMPOSE_JSON"
-    ;;
-  "ps --format "*)
-    printf '%s' "$FRESHEN_PS_OUTPUT"
-    ;;
-esac"#,
-    );
-}
-
 fn install_podman(tools: &StubTools) {
     tools.set_script(
         "podman",
@@ -84,6 +76,15 @@ fn install_podman(tools: &StubTools) {
     ;;
   "machine start")
     exit "${FRESHEN_PODMAN_START_STATUS:-0}"
+    ;;
+  "ps --format "*)
+    printf '%s' "$FRESHEN_PS_OUTPUT"
+    ;;
+  "stop def"|"stop ghi")
+    exit 0
+    ;;
+  "start def"|"start ghi")
+    exit 0
     ;;
 esac"#,
     );
@@ -115,9 +116,10 @@ fn index_of(calls: &[String], call: &str) -> usize {
 
 #[test]
 fn stops_the_podman_machine_before_its_upgrade_and_restores_containers_afterwards() {
-    let tools = StubTools::new(&["brew", "docker", "podman"]);
+    // A Podman-only host: no Docker CLI on PATH, yet containers are still
+    // listed and restored through `podman ps` / `podman stop` / `podman start`.
+    let tools = StubTools::new(&["brew", "podman"]);
     install_brew(&tools);
-    install_docker(&tools);
     install_podman(&tools);
 
     let output = run(&tools, "podman\n", MACHINE_RUNNING);
@@ -138,7 +140,7 @@ fn stops_the_podman_machine_before_its_upgrade_and_restores_containers_afterward
     );
     assert!(stop < upgrade, "calls: {calls:?}");
     assert!(upgrade < start, "calls: {calls:?}");
-    assert!(index_of(&calls, PS_CALL) < stop, "calls: {calls:?}");
+    assert!(index_of(&calls, PODMAN_PS_CALL) < stop, "calls: {calls:?}");
     assert!(
         index_of(&calls, &podman_web("down")) < stop,
         "calls: {calls:?}"
@@ -148,19 +150,19 @@ fn stops_the_podman_machine_before_its_upgrade_and_restores_containers_afterward
         "calls: {calls:?}"
     );
     assert!(
-        index_of(&calls, "docker stop def") < stop,
+        index_of(&calls, "podman stop def") < stop,
         "calls: {calls:?}"
     );
     assert!(
-        index_of(&calls, "docker stop ghi") < stop,
+        index_of(&calls, "podman stop ghi") < stop,
         "calls: {calls:?}"
     );
     assert!(
-        index_of(&calls, "docker start def") > start,
+        index_of(&calls, "podman start def") > start,
         "calls: {calls:?}"
     );
     assert!(
-        index_of(&calls, "docker start ghi") > start,
+        index_of(&calls, "podman start ghi") > start,
         "calls: {calls:?}"
     );
     assert!(
@@ -176,7 +178,7 @@ fn stops_the_podman_machine_before_its_upgrade_and_restores_containers_afterward
         "calls: {calls:?}"
     );
     assert!(
-        index_of(&calls, "docker image prune -f") > start,
+        !calls.iter().any(|call| call == "docker image prune -f"),
         "calls: {calls:?}"
     );
 
@@ -193,9 +195,8 @@ fn stops_the_podman_machine_before_its_upgrade_and_restores_containers_afterward
 
 #[test]
 fn a_stopped_podman_machine_is_not_started_and_containers_are_left_alone() {
-    let tools = StubTools::new(&["brew", "docker", "podman"]);
+    let tools = StubTools::new(&["brew", "podman"]);
     install_brew(&tools);
-    install_docker(&tools);
     install_podman(&tools);
 
     let output = run(&tools, "podman\n", MACHINE_STOPPED);
@@ -212,13 +213,13 @@ fn a_stopped_podman_machine_is_not_started_and_containers_are_left_alone() {
         "calls: {calls:?}"
     );
     assert!(
-        !calls.iter().any(|call| call.starts_with("docker stop")),
+        !calls.iter().any(|call| call.starts_with("podman stop")),
         "calls: {calls:?}"
     );
     assert!(
         !calls
             .iter()
-            .any(|call| call.starts_with("docker compose -p")),
+            .any(|call| call.starts_with("podman compose -p")),
         "calls: {calls:?}"
     );
 
@@ -231,9 +232,8 @@ fn a_stopped_podman_machine_is_not_started_and_containers_are_left_alone() {
 
 #[test]
 fn an_up_to_date_podman_is_never_stopped() {
-    let tools = StubTools::new(&["brew", "docker", "podman"]);
+    let tools = StubTools::new(&["brew", "podman"]);
     install_brew(&tools);
-    install_docker(&tools);
     install_podman(&tools);
 
     let output = run(&tools, "", MACHINE_RUNNING);
@@ -249,16 +249,15 @@ fn an_up_to_date_podman_is_never_stopped() {
         "calls: {calls:?}"
     );
     assert!(
-        calls.contains(&"docker image prune -f".to_owned()),
+        !calls.iter().any(|call| call == "docker image prune -f"),
         "calls: {calls:?}"
     );
 }
 
 #[test]
 fn a_failing_podman_machine_start_is_recorded_and_containers_are_not_restored() {
-    let tools = StubTools::new(&["brew", "docker", "podman"]);
+    let tools = StubTools::new(&["brew", "podman"]);
     install_brew(&tools);
-    install_docker(&tools);
     install_podman(&tools);
 
     let output = tools
@@ -286,7 +285,7 @@ fn a_failing_podman_machine_start_is_recorded_and_containers_are_not_restored() 
     assert!(
         !calls
             .iter()
-            .any(|call| call.starts_with("docker compose -p")),
+            .any(|call| call.starts_with("podman compose -p")),
         "calls: {calls:?}"
     );
 
