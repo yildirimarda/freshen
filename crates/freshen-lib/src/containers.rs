@@ -1352,11 +1352,20 @@ impl ComposeCommandProbe for HostComposeCommandProbe {
 
 /// Detects the compose command freshen should use.
 ///
-/// `docker compose` wins when the Docker CLI has a working compose plugin,
-/// then the standalone `docker-compose` binary, then `podman compose`. Returns
-/// `None` when no implementation is available.
+/// When Podman is the active runtime, `podman compose` is preferred even if a
+/// Docker compose implementation is also installed, so a forced
+/// `--container-runtime podman` run never falls back to the Docker CLI.
+/// Otherwise `docker compose` wins when the Docker CLI has a working compose
+/// plugin, then the standalone `docker-compose` binary, then `podman compose`.
+/// Returns `None` when no implementation is available.
 #[must_use]
-pub fn detect_compose_command(probe: &dyn ComposeCommandProbe) -> Option<ComposeCommand> {
+pub fn detect_compose_command(
+    probe: &dyn ComposeCommandProbe,
+    runtime: Option<ContainerRuntimeKind>,
+) -> Option<ComposeCommand> {
+    if runtime == Some(ContainerRuntimeKind::Podman) && probe.supports_compose("podman") {
+        return Some(ComposeCommand::PodmanCompose);
+    }
     if probe.supports_compose("docker") {
         Some(ComposeCommand::DockerCompose)
     } else if probe.command_exists("docker-compose") {
@@ -1497,19 +1506,20 @@ pub fn parse_standalone_containers(output: &str) -> Vec<StandaloneContainer> {
 /// cleanup, reopen and finally the Docker image step.
 #[must_use]
 pub fn register(registry: Registry) -> Registry {
-    register_with_runtime(registry, ColimaRuntime::new())
+    register_with_runtime(registry, ContainerRuntimeKind::Colima, ColimaRuntime::new())
 }
 
 /// Registers the container steps for a specific container runtime.
 #[must_use]
 pub fn register_with_runtime(
     registry: Registry,
+    kind: ContainerRuntimeKind,
     runtime: impl ContainerRuntime + 'static,
 ) -> Registry {
     register_with_compose(
         registry,
         runtime,
-        detect_compose_command(&HostComposeCommandProbe),
+        detect_compose_command(&HostComposeCommandProbe, Some(kind)),
     )
 }
 
@@ -1548,17 +1558,27 @@ pub fn register_with_compose(
 #[must_use]
 pub fn register_for(registry: Registry, kind: Option<ContainerRuntimeKind>) -> Registry {
     match kind {
-        Some(ContainerRuntimeKind::OrbStack) => register_with_runtime(registry, OrbStackRuntime),
-        Some(ContainerRuntimeKind::DockerDesktop) => {
-            register_with_runtime(registry, DockerDesktopRuntime::default())
+        Some(ContainerRuntimeKind::OrbStack) => {
+            register_with_runtime(registry, ContainerRuntimeKind::OrbStack, OrbStackRuntime)
         }
-        Some(ContainerRuntimeKind::RancherDesktop) => {
-            register_with_runtime(registry, RancherDesktopRuntime)
+        Some(ContainerRuntimeKind::DockerDesktop) => register_with_runtime(
+            registry,
+            ContainerRuntimeKind::DockerDesktop,
+            DockerDesktopRuntime::default(),
+        ),
+        Some(ContainerRuntimeKind::RancherDesktop) => register_with_runtime(
+            registry,
+            ContainerRuntimeKind::RancherDesktop,
+            RancherDesktopRuntime,
+        ),
+        Some(ContainerRuntimeKind::Podman) => {
+            register_with_runtime(registry, ContainerRuntimeKind::Podman, PodmanRuntime)
         }
-        Some(ContainerRuntimeKind::Podman) => register_with_runtime(registry, PodmanRuntime),
-        Some(ContainerRuntimeKind::NativeDocker) => {
-            register_with_runtime(registry, NativeDockerRuntime::new())
-        }
+        Some(ContainerRuntimeKind::NativeDocker) => register_with_runtime(
+            registry,
+            ContainerRuntimeKind::NativeDocker,
+            NativeDockerRuntime::new(),
+        ),
         _ => register(registry),
     }
 }
@@ -2441,7 +2461,7 @@ mod tests {
         );
 
         assert_eq!(
-            detect_compose_command(&probe),
+            detect_compose_command(&probe, None),
             Some(ComposeCommand::DockerCompose)
         );
     }
@@ -2451,7 +2471,7 @@ mod tests {
         let probe = FakeComposeProbe::new(&["docker", "docker-compose"], &[]);
 
         assert_eq!(
-            detect_compose_command(&probe),
+            detect_compose_command(&probe, None),
             Some(ComposeCommand::DockerComposeStandalone)
         );
     }
@@ -2461,7 +2481,7 @@ mod tests {
         let probe = FakeComposeProbe::new(&["docker", "podman"], &["podman"]);
 
         assert_eq!(
-            detect_compose_command(&probe),
+            detect_compose_command(&probe, None),
             Some(ComposeCommand::PodmanCompose)
         );
     }
@@ -2470,7 +2490,43 @@ mod tests {
     fn no_compose_command_is_detected_without_a_working_implementation() {
         let probe = FakeComposeProbe::new(&["docker", "podman"], &[]);
 
-        assert_eq!(detect_compose_command(&probe), None);
+        assert_eq!(detect_compose_command(&probe, None), None);
+    }
+
+    #[test]
+    fn prefers_podman_compose_when_podman_is_the_active_runtime() {
+        let probe = FakeComposeProbe::new(
+            &["docker", "docker-compose", "podman"],
+            &["docker", "podman"],
+        );
+
+        assert_eq!(
+            detect_compose_command(&probe, Some(ContainerRuntimeKind::Podman)),
+            Some(ComposeCommand::PodmanCompose)
+        );
+    }
+
+    #[test]
+    fn does_not_prefer_podman_compose_for_other_active_runtimes() {
+        let probe = FakeComposeProbe::new(
+            &["docker", "docker-compose", "podman"],
+            &["docker", "podman"],
+        );
+
+        assert_eq!(
+            detect_compose_command(&probe, Some(ContainerRuntimeKind::NativeDocker)),
+            Some(ComposeCommand::DockerCompose)
+        );
+    }
+
+    #[test]
+    fn podman_compose_only_when_podman_supports_it() {
+        let probe = FakeComposeProbe::new(&["docker", "docker-compose", "podman"], &["docker"]);
+
+        assert_eq!(
+            detect_compose_command(&probe, Some(ContainerRuntimeKind::Podman)),
+            Some(ComposeCommand::DockerCompose)
+        );
     }
 
     #[test]
@@ -2984,7 +3040,11 @@ mod tests {
 
     #[test]
     fn the_steps_take_their_names_from_the_registered_runtime() {
-        let registry = register_with_runtime(Registry::new(), FakeRuntime);
+        let registry = register_with_runtime(
+            Registry::new(),
+            ContainerRuntimeKind::NativeDocker,
+            FakeRuntime,
+        );
 
         let names: Vec<_> = registry
             .steps()

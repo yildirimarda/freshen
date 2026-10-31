@@ -11,7 +11,7 @@ mod support;
 
 use std::process::Output;
 
-use support::{db, web, StubTools, COMPOSE_JSON, PS_CALL, PS_OUTPUT};
+use support::{StubTools, COMPOSE_JSON, PS_CALL, PS_OUTPUT};
 
 const ALL_STEPS: &str = "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-reopen,colima-stop,colima-start,docker";
 
@@ -70,6 +70,12 @@ fn install_podman(tools: &StubTools) {
     tools.set_script(
         "podman",
         r#"case "$*" in
+  "compose version")
+    exit 0
+    ;;
+  "compose ls --format json")
+    printf '%s' "$FRESHEN_COMPOSE_JSON"
+    ;;
   "machine list --format json")
     printf '%s' "$FRESHEN_PODMAN_MACHINES"
     ;;
@@ -121,6 +127,10 @@ fn stops_the_podman_machine_before_its_upgrade_and_restores_containers_afterward
     let stop = index_of(&calls, "podman machine stop");
     let upgrade = index_of(&calls, "brew upgrade --formula");
     let start = index_of(&calls, "podman machine start");
+    let podman_web = |action: &str| {
+        format!("podman compose -p web -f /srv/web/compose.yml -f /srv/web/override.yml {action}")
+    };
+    let podman_db = |action: &str| format!("podman compose -p db -f /srv/db/compose.yml {action}");
 
     assert!(
         index_of(&calls, "podman machine list --format json") < stop,
@@ -129,8 +139,14 @@ fn stops_the_podman_machine_before_its_upgrade_and_restores_containers_afterward
     assert!(stop < upgrade, "calls: {calls:?}");
     assert!(upgrade < start, "calls: {calls:?}");
     assert!(index_of(&calls, PS_CALL) < stop, "calls: {calls:?}");
-    assert!(index_of(&calls, &web("down")) < stop, "calls: {calls:?}");
-    assert!(index_of(&calls, &db("down")) < stop, "calls: {calls:?}");
+    assert!(
+        index_of(&calls, &podman_web("down")) < stop,
+        "calls: {calls:?}"
+    );
+    assert!(
+        index_of(&calls, &podman_db("down")) < stop,
+        "calls: {calls:?}"
+    );
     assert!(
         index_of(&calls, "docker stop def") < stop,
         "calls: {calls:?}"
@@ -147,10 +163,16 @@ fn stops_the_podman_machine_before_its_upgrade_and_restores_containers_afterward
         index_of(&calls, "docker start ghi") > start,
         "calls: {calls:?}"
     );
-    assert!(index_of(&calls, &web("up -d")) > start, "calls: {calls:?}");
-    assert!(index_of(&calls, &db("up -d")) > start, "calls: {calls:?}");
     assert!(
-        index_of(&calls, &web("pull --quiet")) > start,
+        index_of(&calls, &podman_web("up -d")) > start,
+        "calls: {calls:?}"
+    );
+    assert!(
+        index_of(&calls, &podman_db("up -d")) > start,
+        "calls: {calls:?}"
+    );
+    assert!(
+        index_of(&calls, &podman_web("pull --quiet")) > start,
         "calls: {calls:?}"
     );
     assert!(
@@ -315,10 +337,6 @@ esac"#,
     };
 
     assert!(
-        calls.contains(&"docker compose version".to_owned()),
-        "calls: {calls:?}"
-    );
-    assert!(
         calls.contains(&"podman compose version".to_owned()),
         "calls: {calls:?}"
     );
@@ -332,6 +350,101 @@ esac"#,
         !calls
             .iter()
             .any(|call| call.starts_with("docker compose -p")),
+        "calls: {calls:?}"
+    );
+
+    let text = stdout(&output);
+    assert!(text.contains("podman compose down: web"), "output: {text}");
+    assert!(
+        text.contains("podman compose pull + up -d: web"),
+        "output: {text}"
+    );
+}
+
+#[test]
+fn prefers_podman_compose_even_when_docker_compose_is_installed() {
+    let tools = StubTools::new(&["brew", "docker", "podman"]);
+    install_brew(&tools);
+    tools.set_script(
+        "docker",
+        r#"case "$*" in
+  "compose version")
+    exit 0
+    ;;
+  "compose ls --format json")
+    printf '%s' "$FRESHEN_COMPOSE_JSON"
+    ;;
+  "ps --format "*)
+    printf '%s' "$FRESHEN_PS_OUTPUT"
+    ;;
+esac"#,
+    );
+    tools.set_script(
+        "podman",
+        r#"case "$*" in
+  "compose version")
+    exit 0
+    ;;
+  "compose ls --format json")
+    printf '%s' "$FRESHEN_COMPOSE_JSON"
+    ;;
+  "machine list --format json")
+    printf '%s' "$FRESHEN_PODMAN_MACHINES"
+    ;;
+  "machine stop")
+    exit 0
+    ;;
+  "machine start")
+    exit 0
+    ;;
+esac"#,
+    );
+
+    let output = tools
+        .command()
+        .env(
+            "DOCKER_HOST",
+            "unix:///Users/me/.local/share/containers/podman/machine/podman.sock",
+        )
+        .env("FRESHEN_OUTDATED_FORMULAE", "podman\n")
+        .env("FRESHEN_OUTDATED_CASKS", "")
+        .env("FRESHEN_PODMAN_MACHINES", MACHINE_RUNNING)
+        .env("FRESHEN_COMPOSE_JSON", COMPOSE_JSON)
+        .env("FRESHEN_PS_OUTPUT", PS_OUTPUT)
+        .args([
+            "--container-runtime",
+            "podman",
+            "--only",
+            ALL_STEPS,
+            "--cleanup",
+        ])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    let podman_compose = |action: &str| {
+        format!("podman compose -p web -f /srv/web/compose.yml -f /srv/web/override.yml {action}")
+    };
+
+    assert!(
+        calls.contains(&"podman compose version".to_owned()),
+        "calls: {calls:?}"
+    );
+    assert!(calls.contains(&podman_compose("down")), "calls: {calls:?}");
+    assert!(
+        calls.contains(&podman_compose("pull --quiet")),
+        "calls: {calls:?}"
+    );
+    assert!(calls.contains(&podman_compose("up -d")), "calls: {calls:?}");
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.starts_with("docker compose -p")),
+        "calls: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call == "docker compose version"),
         "calls: {calls:?}"
     );
 
