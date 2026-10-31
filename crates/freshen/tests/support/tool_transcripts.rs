@@ -244,6 +244,16 @@ pub fn brew_transcript() -> Vec<&'static str> {
     t
 }
 
+/// Named insertion: apt-get update and upgrade steps.
+pub fn apt_steps() -> &'static [&'static str] {
+    &["apt-get -s upgrade", "apt-get update", "apt-get upgrade -y"]
+}
+
+/// Named insertion: full apt transcript (simulated upgrade query, update, upgrade).
+pub fn apt_transcript() -> Vec<&'static str> {
+    apt_steps().to_vec()
+}
+
 /// Named insertion: probe stub transcript.
 pub fn probe_transcript() -> Vec<&'static str> {
     let mut t = Vec::new();
