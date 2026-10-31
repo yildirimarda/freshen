@@ -1,9 +1,11 @@
-//! The dnf step: `dnf upgrade -y`, skipped when dnf is absent.
+//! The dnf step: `dnf upgrade -y`, skipped when dnf is absent, and
+//! `dnf autoremove -y` when `--cleanup` is set.
 //!
 //! The step runs `dnf upgrade -y` whenever `dnf` is available. It is skipped
 //! entirely when dnf is absent, so it is safe to register on every machine;
 //! on macOS and Windows it is never detected.
 
+use crate::cleanup;
 use crate::executable::command_exists;
 use crate::options::RunOptions;
 use crate::output::human;
@@ -62,9 +64,20 @@ impl Step for DnfStep {
         self.run_with_options(&RunOptions::new())
     }
 
-    fn run_with_options(&self, _options: &RunOptions) -> Result<(), StepError> {
+    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
         let mut failures = Vec::new();
         self.upgrade(&mut failures);
+
+        if let Err(error) = cleanup::run(
+            DNF,
+            "dnf: autoremove",
+            CommandSpec::new("dnf")
+                .args(["autoremove", "-y"])
+                .retry_transient_network(NETWORK_RETRIES),
+            options,
+        ) {
+            failures.push(error);
+        }
 
         if failures.is_empty() && dnf_restart_needed() {
             restart_needed::record();
