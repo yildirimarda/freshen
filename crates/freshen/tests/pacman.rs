@@ -24,6 +24,15 @@ fn run(tools: &StubTools) -> Output {
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
 }
 
+fn run_with_cleanup(tools: &StubTools) -> Output {
+    tools
+        .command()
+        .env("FRESHEN_PACMAN_CONFIG_DIR", tools.home().join("etc"))
+        .args(["--only", "pacman", "--cleanup"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
+}
+
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
@@ -183,4 +192,75 @@ fn check_reports_pacman_up_to_date_without_calling_anything() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(tools.step_calls().is_empty());
     assert_eq!(stdout(&output), "Everything is up to date.\n");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn pacman_cleans_cache_and_removes_orphans_with_cleanup() {
+    let tools = StubTools::new(&["pacman"]);
+    tools.set_responses(
+        "pacman",
+        &[
+            StubOutput::new(),                // pacman -Syu --noconfirm
+            StubOutput::new(),                // pacman -Sc --noconfirm
+            StubOutput::stdout("foo\nbar\n"), // pacman -Qtdq: two orphans
+            StubOutput::new(),                // pacman -Rns --noconfirm foo bar
+        ],
+    );
+
+    let output = run_with_cleanup(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(tools.step_calls(), support::pacman_cleanup_transcript());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn pacman_removes_no_orphans_when_none_with_cleanup() {
+    let tools = StubTools::new(&["pacman"]);
+    tools.set_responses(
+        "pacman",
+        &[
+            StubOutput::new(), // pacman -Syu --noconfirm
+            StubOutput::new(), // pacman -Sc --noconfirm
+            StubOutput::new(), // pacman -Qtdq: no orphans
+        ],
+    );
+
+    let output = run_with_cleanup(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        vec![
+            "pacman -Syu --noconfirm",
+            "pacman -Sc --noconfirm",
+            "pacman -Qtdq",
+        ]
+    );
+    assert!(
+        stdout(&output).contains("pacman: orphans: nothing to remove"),
+        "summary: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn pacman_skips_cleanup_without_cleanup_flag() {
+    let tools = StubTools::new(&["pacman"]);
+    tools.set_responses(
+        "pacman",
+        &[StubOutput::new()], // pacman -Syu --noconfirm
+    );
+
+    let output = run(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(tools.step_calls(), vec!["pacman -Syu --noconfirm"]);
+    assert!(
+        stdout(&output).contains("skipped destructive cleanup"),
+        "summary: {}",
+        stdout(&output)
+    );
 }

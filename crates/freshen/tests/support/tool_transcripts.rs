@@ -331,6 +331,21 @@ pub fn pacman_transcript() -> Vec<&'static str> {
     pacman_steps().to_vec()
 }
 
+/// Named insertion: the pacman cleanup steps (with `--cleanup`).
+pub fn pacman_cleanup_steps() -> &'static [&'static str] {
+    &[
+        "pacman -Syu --noconfirm",
+        "pacman -Sc --noconfirm",
+        "pacman -Qtdq",
+        "pacman -Rns --noconfirm foo bar",
+    ]
+}
+
+/// Named insertion: full pacman transcript with cleanup.
+pub fn pacman_cleanup_transcript() -> Vec<&'static str> {
+    pacman_cleanup_steps().to_vec()
+}
+
 /// Named insertion: probe stub transcript.
 pub fn probe_transcript() -> Vec<&'static str> {
     let mut t = Vec::new();
