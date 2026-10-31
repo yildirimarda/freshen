@@ -462,6 +462,12 @@ pub trait ContainerRuntime: Send + Sync {
     fn triggers_restart(&self, package: &str) -> bool {
         self.restart_formulae().contains(&package) || self.restart_casks().contains(&package)
     }
+
+    /// Records whether the `lima` formula itself is being upgraded, as opposed
+    /// to only `colima`. When `false`, standalone Lima instances are left
+    /// running while Colima is stopped and started. Runtimes that do not
+    /// manage standalone Lima instances can ignore this.
+    fn set_lima_upgrading(&self, _upgrading: bool) {}
 }
 
 /// The Colima/lima container runtime.
@@ -469,7 +475,8 @@ pub trait ContainerRuntime: Send + Sync {
 /// Colima manages a Lima VM that runs Docker. Upgrading either the `colima`
 /// or the `lima` formula can restart the VM, so both trigger a stop/start
 /// cycle. Standalone Lima instances that Colima does not manage are stopped
-/// and started through `limactl` in the same cycle.
+/// and started through `limactl` only when the `lima` formula itself is being
+/// upgraded; on a Colima-only upgrade they keep running.
 #[derive(Debug, Default, Clone)]
 pub struct ColimaRuntime {
     state: Arc<Mutex<ColimaState>>,
@@ -480,6 +487,10 @@ struct ColimaState {
     observed: bool,
     colima_running: bool,
     standalone_lima: Vec<String>,
+    /// Whether the `lima` formula itself is being upgraded, as opposed to only
+    /// `colima`. Standalone Lima instances are stopped and started only when
+    /// this is `true`; on a Colima-only upgrade they keep running.
+    lima_upgrading: bool,
 }
 
 impl ColimaRuntime {
@@ -528,7 +539,7 @@ impl ContainerRuntime for ColimaRuntime {
     }
 
     fn stop(&self) -> Result<(), ProcessError> {
-        let (colima_running, standalone_lima) = self.observed_state();
+        let (colima_running, standalone_lima, lima_upgrading) = self.observed_state();
         let mut failures = Vec::new();
 
         if colima_running {
@@ -537,10 +548,12 @@ impl ContainerRuntime for ColimaRuntime {
             }
         }
 
-        for instance in &standalone_lima {
-            human!("limactl stop: {instance}");
-            if let Err(error) = CommandSpec::new("limactl").args(["stop", instance]).run() {
-                failures.push(error);
+        if lima_upgrading {
+            for instance in &standalone_lima {
+                human!("limactl stop: {instance}");
+                if let Err(error) = CommandSpec::new("limactl").args(["stop", instance]).run() {
+                    failures.push(error);
+                }
             }
         }
 
@@ -548,7 +561,7 @@ impl ContainerRuntime for ColimaRuntime {
     }
 
     fn start(&self) -> Result<(), ProcessError> {
-        let (colima_running, standalone_lima) = self.observed_state();
+        let (colima_running, standalone_lima, lima_upgrading) = self.observed_state();
         let mut failures = Vec::new();
 
         if colima_running {
@@ -557,10 +570,12 @@ impl ContainerRuntime for ColimaRuntime {
             }
         }
 
-        for instance in &standalone_lima {
-            human!("limactl start: {instance}");
-            if let Err(error) = CommandSpec::new("limactl").args(["start", instance]).run() {
-                failures.push(error);
+        if lima_upgrading {
+            for instance in &standalone_lima {
+                human!("limactl start: {instance}");
+                if let Err(error) = CommandSpec::new("limactl").args(["start", instance]).run() {
+                    failures.push(error);
+                }
             }
         }
 
@@ -574,17 +589,30 @@ impl ContainerRuntime for ColimaRuntime {
     fn restart_casks(&self) -> &'static [&'static str] {
         &[]
     }
+
+    fn set_lima_upgrading(&self, upgrading: bool) {
+        let mut state = lock(&self.state);
+        state.lima_upgrading = upgrading;
+    }
 }
 
 impl ColimaRuntime {
-    fn observed_state(&self) -> (bool, Vec<String>) {
+    fn observed_state(&self) -> (bool, Vec<String>, bool) {
         let state = lock(&self.state);
         if state.observed {
-            return (state.colima_running, state.standalone_lima.clone());
+            return (
+                state.colima_running,
+                state.standalone_lima.clone(),
+                state.lima_upgrading,
+            );
         }
         drop(state);
 
-        (colima_is_running(), running_standalone_lima_instances())
+        (
+            colima_is_running(),
+            running_standalone_lima_instances(),
+            false,
+        )
     }
 }
 
@@ -1588,6 +1616,24 @@ impl ContainerStopStep {
     }
 
     fn upgrade_triggers_restart(&self, installs: &[BrewInstall]) -> Result<bool, StepError> {
+        let outdated = self.outdated_restart_packages(installs)?;
+        let triggers_restart = outdated
+            .iter()
+            .any(|name| self.runtime.triggers_restart(name));
+        // Standalone Lima instances are stopped and started only when the
+        // `lima` formula itself is being upgraded; on a Colima-only upgrade
+        // they keep running.
+        self.runtime
+            .set_lima_upgrading(outdated.iter().any(|name| name == "lima"));
+        Ok(triggers_restart)
+    }
+
+    /// Every outdated formula or cask whose upgrade would restart the runtime,
+    /// across all discovered Homebrew installations.
+    fn outdated_restart_packages(
+        &self,
+        installs: &[BrewInstall],
+    ) -> Result<Vec<String>, StepError> {
         let mut outdated = Vec::new();
         for install in installs {
             if !self.runtime.restart_formulae().is_empty() {
@@ -1600,10 +1646,7 @@ impl ContainerStopStep {
                 );
             }
         }
-
-        Ok(outdated
-            .iter()
-            .any(|name| self.runtime.triggers_restart(name)))
+        Ok(outdated)
     }
 
     fn outdated_through(

@@ -146,6 +146,46 @@ fn stops_standalone_lima_instances_around_the_lima_upgrade() {
 }
 
 #[test]
+fn colima_only_upgrade_keeps_standalone_lima_running() {
+    let tools = StubTools::new(&["brew", "colima", "limactl"]);
+    install_brew(&tools);
+    install_colima(&tools);
+    install_limactl(&tools);
+
+    let output = tools
+        .command()
+        .env("FRESHEN_OUTDATED_FORMULAE", "colima\n")
+        .env("FRESHEN_LIMA_INSTANCES", LIMA_INSTANCES)
+        .args(["--only", STEPS])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    let upgrade = index_of(&calls, brew_formula_upgrade()[4]);
+    let colima_stop_call = index_of(&calls, colima_stop()[0]);
+    let colima_start_call = index_of(&calls, colima_start()[0]);
+
+    assert!(
+        index_of(&calls, limactl_list_json()[0]) < colima_stop_call,
+        "calls: {calls:?}"
+    );
+    assert!(colima_stop_call < upgrade, "calls: {calls:?}");
+    assert!(upgrade < colima_start_call, "calls: {calls:?}");
+
+    // Standalone Lima instances must not be stopped or started on a
+    // Colima-only upgrade: the unrelated VM keeps running.
+    assert!(
+        !calls.iter().any(|call| call.starts_with("limactl stop")),
+        "calls: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call.starts_with("limactl start")),
+        "calls: {calls:?}"
+    );
+}
+
+#[test]
 fn standalone_lima_is_stopped_even_when_colima_is_not_installed() {
     let tools = StubTools::new(&["brew", "limactl"]);
     install_brew(&tools);
