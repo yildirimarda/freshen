@@ -33,6 +33,7 @@ pub mod process;
 pub mod registry;
 pub mod reopened_hidden;
 pub mod report;
+pub mod restart_needed;
 pub mod restarted_services;
 pub mod restored_windows;
 pub mod runner;
