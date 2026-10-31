@@ -50,7 +50,10 @@ impl AurStep {
 
     /// The AUR helper that is installed on `PATH`, preferring `yay`.
     fn installed_helper() -> Option<&'static str> {
-        AUR_HELPERS.iter().copied().find(|helper| command_exists(helper))
+        AUR_HELPERS
+            .iter()
+            .copied()
+            .find(|helper| command_exists(helper))
     }
 }
 
