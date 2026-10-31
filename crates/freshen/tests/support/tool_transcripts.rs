@@ -321,6 +321,16 @@ pub fn yum_cleanup_transcript() -> Vec<&'static str> {
     yum_cleanup_steps().to_vec()
 }
 
+/// Named insertion: the pacman upgrade step.
+pub fn pacman_steps() -> &'static [&'static str] {
+    &["pacman -Syu --noconfirm"]
+}
+
+/// Named insertion: full pacman transcript (upgrade).
+pub fn pacman_transcript() -> Vec<&'static str> {
+    pacman_steps().to_vec()
+}
+
 /// Named insertion: probe stub transcript.
 pub fn probe_transcript() -> Vec<&'static str> {
     let mut t = Vec::new();
