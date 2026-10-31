@@ -244,12 +244,19 @@ pub fn brew_transcript() -> Vec<&'static str> {
     t
 }
 
-/// Named insertion: apt-get update and upgrade steps.
+/// Named insertion: apt-get update, upgrade and cleanup steps (with --cleanup).
 pub fn apt_steps() -> &'static [&'static str] {
-    &["apt-get -s upgrade", "apt-get update", "apt-get upgrade -y"]
+    &[
+        "apt-get -s upgrade",
+        "apt-get update",
+        "apt-get upgrade -y",
+        "apt-get autoremove -y",
+        "apt-get autoclean",
+    ]
 }
 
-/// Named insertion: full apt transcript (simulated upgrade query, update, upgrade).
+/// Named insertion: full apt transcript (simulated upgrade query, update,
+/// upgrade, autoremove and autoclean).
 pub fn apt_transcript() -> Vec<&'static str> {
     apt_steps().to_vec()
 }
