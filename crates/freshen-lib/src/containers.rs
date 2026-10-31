@@ -1564,7 +1564,7 @@ pub fn register_with_compose(
             compose,
             container_cli,
         ))
-        .with(DockerStep::new(runtime, compose))
+        .with(DockerStep::new(runtime, compose, container_cli))
 }
 
 /// Registers the container steps for the detected runtime.
@@ -1959,11 +1959,20 @@ impl Step for ContainerStartStep {
 struct DockerStep {
     runtime: Arc<dyn ContainerRuntime>,
     compose: Option<ComposeCommand>,
+    container_cli: &'static str,
 }
 
 impl DockerStep {
-    fn new(runtime: Arc<dyn ContainerRuntime>, compose: Option<ComposeCommand>) -> Self {
-        Self { runtime, compose }
+    fn new(
+        runtime: Arc<dyn ContainerRuntime>,
+        compose: Option<ComposeCommand>,
+        container_cli: &'static str,
+    ) -> Self {
+        Self {
+            runtime,
+            compose,
+            container_cli,
+        }
     }
 }
 
@@ -2025,11 +2034,11 @@ impl Step for DockerStep {
             }
         }
 
-        if command_exists("docker") {
+        if command_exists(self.container_cli) {
             if let Err(error) = cleanup::run(
                 DOCKER,
                 "Docker: prune dangling images",
-                CommandSpec::new("docker")
+                CommandSpec::new(self.container_cli)
                     .args(["image", "prune", "-f"])
                     .neutral_locale(),
                 options,
