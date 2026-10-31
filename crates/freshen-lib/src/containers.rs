@@ -16,6 +16,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde_json::Value;
 
@@ -664,20 +665,59 @@ fn first_process_failure(failures: Vec<ProcessError>) -> Result<(), ProcessError
 /// The bundle id of the Docker Desktop application.
 const DOCKER_DESKTOP_BUNDLE_ID: &str = "com.docker.docker";
 
+/// How long to wait for Docker Desktop to exit after the AppleScript quit.
+const DOCKER_DESKTOP_QUIT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How often to poll whether Docker Desktop has exited.
+const DOCKER_DESKTOP_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
 /// Docker Desktop on macOS.
 ///
 /// Docker Desktop ships as the `docker-desktop` cask, so its cask upgrade
 /// triggers the stop/start cycle. The `docker desktop` CLI is preferred;
 /// older releases do not have it, so stopping falls back to the AppleScript
 /// quit that freshen uses for every other app.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct DockerDesktopRuntime;
+#[derive(Debug, Clone, Copy)]
+pub struct DockerDesktopRuntime {
+    /// How long to wait for Docker Desktop to exit after the AppleScript quit.
+    quit_timeout: Duration,
+}
+
+impl Default for DockerDesktopRuntime {
+    fn default() -> Self {
+        Self {
+            quit_timeout: DOCKER_DESKTOP_QUIT_TIMEOUT,
+        }
+    }
+}
 
 impl DockerDesktopRuntime {
     /// Creates the Docker Desktop runtime.
     #[must_use]
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    /// Waits for Docker Desktop to exit after it was asked to quit.
+    ///
+    /// Returns an error with a clear message when it does not stop before the
+    /// timeout, so an older Docker Desktop without `docker desktop stop` is
+    /// known to have stopped before its cask is upgraded.
+    fn wait_until_stopped(&self) -> Result<(), ProcessError> {
+        let mut waited = Duration::ZERO;
+        while self.is_running() && waited < self.quit_timeout {
+            std::thread::sleep(DOCKER_DESKTOP_POLL_INTERVAL);
+            waited += DOCKER_DESKTOP_POLL_INTERVAL;
+        }
+
+        if self.is_running() {
+            return Err(ProcessError::StopTimedOut {
+                program: "docker desktop".to_owned(),
+                timeout: self.quit_timeout,
+            });
+        }
+
+        Ok(())
     }
 }
 
@@ -720,10 +760,16 @@ impl ContainerRuntime for DockerDesktopRuntime {
     fn stop(&self) -> Result<(), ProcessError> {
         match CommandSpec::new("docker").args(["desktop", "stop"]).run() {
             Ok(_) => Ok(()),
-            Err(error) => quit_command(DOCKER_DESKTOP_BUNDLE_ID)
-                .run()
-                .map(|_| ())
-                .map_err(|_| error),
+            Err(error) => {
+                // Older releases lack `docker desktop stop`, so ask Docker
+                // Desktop to quit through AppleScript and wait for it to
+                // actually exit before the upgrade proceeds.
+                if quit_command(DOCKER_DESKTOP_BUNDLE_ID).run().is_err() {
+                    return Err(error);
+                }
+                self.wait_until_stopped()?;
+                Ok(())
+            }
         }
     }
 
@@ -1467,7 +1513,7 @@ pub fn register_for(registry: Registry, kind: Option<ContainerRuntimeKind>) -> R
     match kind {
         Some(ContainerRuntimeKind::OrbStack) => register_with_runtime(registry, OrbStackRuntime),
         Some(ContainerRuntimeKind::DockerDesktop) => {
-            register_with_runtime(registry, DockerDesktopRuntime)
+            register_with_runtime(registry, DockerDesktopRuntime::default())
         }
         Some(ContainerRuntimeKind::RancherDesktop) => {
             register_with_runtime(registry, RancherDesktopRuntime)

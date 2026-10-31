@@ -51,7 +51,15 @@ fn install_docker(tools: &StubTools) {
     tools.set_script(
         "docker",
         r#"case "$*" in
-  "desktop version"|"desktop status"|"desktop start")
+  "desktop version"|"desktop start")
+    exit 0
+    ;;
+  "desktop status")
+    # Reports "stopped" once the AppleScript quit has been delivered, so the
+    # wait-for-exit in the stop fallback can observe the app exiting.
+    if [ -f "${FRESHEN_STUB_STATE:?FRESHEN_STUB_STATE is not set}/docker-desktop-quit" ]; then
+      printf 'stopped'
+    fi
     exit 0
     ;;
   "desktop stop")
@@ -150,10 +158,23 @@ fn falls_back_to_the_applescript_quit_when_the_cli_stop_fails() {
     let tools = StubTools::new(&["brew", "docker", "osascript"]);
     install_brew(&tools);
     install_docker(&tools);
+    // The AppleScript quit is delivered, and it marks Docker Desktop as
+    // stopped so the wait-for-exit observes it exiting.
+    tools.set_script(
+        "osascript",
+        r#"printf '' > "${FRESHEN_STUB_STATE:?FRESHEN_STUB_STATE is not set}/docker-desktop-quit"
+exit 0
+"#,
+    );
 
     let output = run(&tools, "docker-desktop\n", "1");
 
-    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        output.status.success(),
+        "stderr: {}\nstdout: {}",
+        stderr(&output),
+        stdout(&output)
+    );
     let calls = tools.step_calls();
     let stop = index_of(&calls, "docker desktop stop");
     let applescript = calls
@@ -166,6 +187,14 @@ fn falls_back_to_the_applescript_quit_when_the_cli_stop_fails() {
     assert!(stop < applescript, "calls: {calls:?}");
     assert!(applescript < upgrade, "calls: {calls:?}");
     assert!(upgrade < start, "calls: {calls:?}");
+    // After the AppleScript quit, freshen polls `docker desktop status` until
+    // the app is known to have stopped.
+    assert!(
+        calls[applescript + 1..]
+            .iter()
+            .any(|call| call == "docker desktop status"),
+        "no docker desktop status poll after the AppleScript quit: {calls:?}"
+    );
     assert!(
         calls.contains(&"docker start def".to_owned()),
         "calls: {calls:?}"
@@ -204,5 +233,22 @@ fn an_up_to_date_docker_desktop_is_never_stopped() {
             || stdout(&output).contains("docker compose pull + up -d: web"),
         "output: {}",
         stdout(&output)
+    );
+}
+
+#[test]
+fn docker_desktop_stop_wait_times_out_with_a_clear_failure_message() {
+    let tools = StubTools::new(&["brew", "docker", "osascript"]);
+    install_brew(&tools);
+    install_docker(&tools);
+    // The default osascript stub delivers the quit but does not mark Docker
+    // Desktop as stopped, so `docker desktop status` keeps reporting it as
+    // running and the wait-for-exit times out.
+    let output = run(&tools, "docker-desktop\n", "1");
+
+    let output_text = format!("{}\n{}", stdout(&output), stderr(&output));
+    assert!(
+        output_text.contains("did not stop before the"),
+        "expected a clear stop-timeout failure, got:\n{output_text}"
     );
 }
