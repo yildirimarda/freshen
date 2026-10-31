@@ -77,6 +77,9 @@ fn install_podman(tools: &StubTools) {
   "machine start")
     exit "${FRESHEN_PODMAN_START_STATUS:-0}"
     ;;
+  "image prune -f")
+    exit "${FRESHEN_PODMAN_PRUNE_STATUS:-0}"
+    ;;
   "ps --format "*)
     printf '%s' "$FRESHEN_PS_OUTPUT"
     ;;
@@ -178,7 +181,13 @@ fn stops_the_podman_machine_before_its_upgrade_and_restores_containers_afterward
         "calls: {calls:?}"
     );
     assert!(
-        !calls.iter().any(|call| call == "docker image prune -f"),
+        calls.contains(&"podman image prune -f".to_owned()),
+        "calls: {calls:?}"
+    );
+    let prune = index_of(&calls, "podman image prune -f");
+    assert!(prune > start, "calls: {calls:?}");
+    assert!(
+        prune > index_of(&calls, &podman_web("pull --quiet")),
         "calls: {calls:?}"
     );
 
@@ -249,7 +258,7 @@ fn an_up_to_date_podman_is_never_stopped() {
         "calls: {calls:?}"
     );
     assert!(
-        !calls.iter().any(|call| call == "docker image prune -f"),
+        calls.contains(&"podman image prune -f".to_owned()),
         "calls: {calls:?}"
     );
 }
