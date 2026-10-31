@@ -1,9 +1,10 @@
 //! The dnf step: `dnf upgrade -y`, skipped when dnf is absent, and
 //! `dnf autoremove -y` when `--cleanup` is set.
 //!
-//! The step runs `dnf upgrade -y` whenever `dnf` is available. It is skipped
-//! entirely when dnf is absent, so it is safe to register on every machine;
-//! on macOS and Windows it is never detected.
+//! The step runs `dnf upgrade -y` whenever `dnf` is available. When dnf is
+//! absent but `yum` is available, it runs `yum update -y` instead, so the
+//! step is skipped only when neither is installed. It is safe to register
+//! on every machine; on macOS and Windows it is never detected.
 
 use crate::cleanup;
 use crate::executable::command_exists;
@@ -15,7 +16,7 @@ use crate::registry::Registry;
 use crate::restart_needed;
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
 
-/// The dnf package manager step.
+/// The dnf package manager step (falls back to `yum` when dnf is absent).
 pub const DNF: StepId = "dnf";
 
 /// dnf only runs on Linux.
@@ -29,12 +30,49 @@ pub fn register(registry: Registry) -> Registry {
 
 struct DnfStep;
 
+/// Which package manager binary the step uses.
+enum DnfBinary {
+    Dnf,
+    Yum,
+}
+
+impl DnfBinary {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Dnf => "dnf",
+            Self::Yum => "yum",
+        }
+    }
+
+    /// Arguments for the upgrade command (`dnf upgrade -y` / `yum update -y`).
+    fn upgrade_args(&self) -> &'static [&'static str] {
+        match self {
+            Self::Dnf => &["upgrade", "-y"],
+            Self::Yum => &["update", "-y"],
+        }
+    }
+}
+
+/// The binary to run: `dnf` when present, otherwise `yum`.
+fn dnf_binary() -> Option<DnfBinary> {
+    if command_exists("dnf") {
+        Some(DnfBinary::Dnf)
+    } else if command_exists("yum") {
+        Some(DnfBinary::Yum)
+    } else {
+        None
+    }
+}
+
 impl DnfStep {
-    /// Runs `dnf upgrade -y`.
+    /// Runs `dnf upgrade -y`, or `yum update -y` when dnf is absent.
     fn upgrade(&self, failures: &mut Vec<StepError>) {
-        human!("dnf upgrade -y");
-        if let Err(error) = CommandSpec::new("dnf")
-            .args(["upgrade", "-y"])
+        let Some(binary) = dnf_binary() else {
+            return;
+        };
+        human!("{} {}", binary.name(), binary.upgrade_args().join(" "));
+        if let Err(error) = CommandSpec::new(binary.name())
+            .args(binary.upgrade_args())
             .retry_transient_network(NETWORK_RETRIES)
             .run()
         {
@@ -68,15 +106,17 @@ impl Step for DnfStep {
         let mut failures = Vec::new();
         self.upgrade(&mut failures);
 
-        if let Err(error) = cleanup::run(
-            DNF,
-            "dnf: autoremove",
-            CommandSpec::new("dnf")
-                .args(["autoremove", "-y"])
-                .retry_transient_network(NETWORK_RETRIES),
-            options,
-        ) {
-            failures.push(error);
+        if let Some(binary) = dnf_binary() {
+            if let Err(error) = cleanup::run(
+                DNF,
+                "dnf: autoremove",
+                CommandSpec::new(binary.name())
+                    .args(["autoremove", "-y"])
+                    .retry_transient_network(NETWORK_RETRIES),
+                options,
+            ) {
+                failures.push(error);
+            }
         }
 
         if failures.is_empty() && dnf_restart_needed() {
@@ -97,12 +137,11 @@ fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
     }
 }
 
-/// Whether the `dnf` binary is discoverable on `PATH`.
+/// Whether `dnf` or `yum` is discoverable on `PATH`.
 fn detect_dnf() -> Detection {
-    if command_exists("dnf") {
-        Detection::Installed
-    } else {
-        Detection::NotInstalled
+    match dnf_binary() {
+        Some(_) => Detection::Installed,
+        None => Detection::NotInstalled,
     }
 }
 
