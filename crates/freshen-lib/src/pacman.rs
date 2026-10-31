@@ -87,4 +87,3 @@ fn detect_pacman() -> Detection {
         Detection::NotInstalled
     }
 }
-
