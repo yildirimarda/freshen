@@ -4,7 +4,7 @@
 //! asserts the exact command transcript of the `apt-get update` + `apt-get
 //! upgrade -y` block. No real package manager is touched.
 
-#![cfg(feature = "test-harness")]
+#![cfg(all(feature = "test-harness", target_os = "linux"))]
 
 mod support;
 
