@@ -29,6 +29,7 @@ fn stderr(output: &Output) -> String {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn apt_updates_and_upgrades() {
     let tools = StubTools::new(&["apt-get"]);
     tools.set_responses(
@@ -47,6 +48,7 @@ fn apt_updates_and_upgrades() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn a_failing_apt_update_still_attempts_the_upgrade_and_fails_the_step() {
     let tools = StubTools::new(&["apt-get"]);
     tools.set_responses(
@@ -70,6 +72,7 @@ fn a_failing_apt_update_still_attempts_the_upgrade_and_fails_the_step() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn a_missing_apt_is_skipped_without_calling_anything() {
     let tools = StubTools::new(&[]);
 
@@ -85,6 +88,7 @@ fn a_missing_apt_is_skipped_without_calling_anything() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn check_reports_outdated_apt_packages_and_exits_2() {
     let tools = StubTools::new(&["apt-get"]);
     tools.set_responses(
@@ -120,6 +124,7 @@ fn check_reports_outdated_apt_packages_and_exits_2() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn check_reports_apt_up_to_date_without_running_anything_else() {
     let tools = StubTools::new(&["apt-get"]);
     tools.set_responses("apt-get", &[StubOutput::new()]);
