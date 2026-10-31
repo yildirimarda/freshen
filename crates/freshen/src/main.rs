@@ -144,12 +144,14 @@ fn build_registry(runtime: Option<ContainerRuntimeKind>) -> Registry {
     }
 
     freshen_lib::appstore::register(freshen_lib::tooling::register(freshen_lib::apt::register(
-        freshen_lib::dnf::register(freshen_lib::pacman::register(freshen_lib::aur::register(
-            freshen_lib::homebrew::register(freshen_lib::containers::register_for(
-                Registry::new(),
-                runtime,
+        freshen_lib::dnf::register(freshen_lib::pacman::register(
+            freshen_lib::zypper::register(freshen_lib::aur::register(
+                freshen_lib::homebrew::register(freshen_lib::containers::register_for(
+                    Registry::new(),
+                    runtime,
+                )),
             )),
-        ))),
+        )),
     )))
 }
 
