@@ -143,12 +143,12 @@ fn build_registry(runtime: Option<ContainerRuntimeKind>) -> Registry {
         return test_steps::with_probe_steps(Registry::new());
     }
 
-    freshen_lib::appstore::register(freshen_lib::tooling::register(
+    freshen_lib::appstore::register(freshen_lib::tooling::register(freshen_lib::apt::register(
         freshen_lib::homebrew::register(freshen_lib::containers::register_for(
             Registry::new(),
             runtime,
         )),
-    ))
+    )))
 }
 
 fn run_preflight(options: &freshen_lib::RunOptions) -> PreflightReport {
