@@ -20,6 +20,14 @@ fn run(tools: &StubTools) -> Output {
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
 }
 
+fn run_with_cleanup(tools: &StubTools) -> Output {
+    tools
+        .command()
+        .args(["--only", "dnf", "--cleanup"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
+}
+
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
@@ -160,4 +168,58 @@ fn dnf_does_not_report_restart_when_needs_restarting_is_not_installed() {
         stdout(&output)
     );
     assert_eq!(tools.step_calls(), support::dnf_transcript());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn dnf_runs_autoremove_with_cleanup() {
+    let tools = StubTools::new(&["dnf"]);
+    tools.set_responses(
+        "dnf",
+        &[
+            StubOutput::new(), // dnf upgrade -y
+            StubOutput::new(), // dnf autoremove -y
+        ],
+    );
+
+    let output = run_with_cleanup(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(tools.step_calls(), support::dnf_cleanup_transcript());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn dnf_skips_cleanup_without_cleanup_flag() {
+    let tools = StubTools::new(&["dnf"]);
+    tools.set_responses(
+        "dnf",
+        &[StubOutput::new()], // dnf upgrade -y
+    );
+
+    let output = run(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(tools.step_calls(), vec!["dnf upgrade -y"]);
+    assert!(
+        stdout(&output).contains("skipped destructive cleanup"),
+        "summary: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn dnf_skips_cleanup_when_dnf_is_missing() {
+    let tools = StubTools::new(&[]);
+
+    let output = run_with_cleanup(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(tools.step_calls().is_empty());
+    assert!(
+        stdout(&output).contains("0 ok, 0 planned, 1 skipped, 0 failed"),
+        "summary: {}",
+        stdout(&output)
+    );
 }

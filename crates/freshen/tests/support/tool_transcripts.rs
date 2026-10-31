@@ -281,6 +281,16 @@ pub fn dnf_restart_transcript() -> Vec<&'static str> {
     dnf_restart_steps().to_vec()
 }
 
+/// Named insertion: the dnf upgrade step plus the cleanup step (with --cleanup).
+pub fn dnf_cleanup_steps() -> &'static [&'static str] {
+    &["dnf upgrade -y", "dnf autoremove -y"]
+}
+
+/// Named insertion: full dnf transcript with cleanup.
+pub fn dnf_cleanup_transcript() -> Vec<&'static str> {
+    dnf_cleanup_steps().to_vec()
+}
+
 /// Named insertion: probe stub transcript.
 pub fn probe_transcript() -> Vec<&'static str> {
     let mut t = Vec::new();
