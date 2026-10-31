@@ -94,3 +94,70 @@ fn check_reports_dnf_up_to_date_without_calling_anything() {
     assert!(tools.step_calls().is_empty());
     assert_eq!(stdout(&output), "Everything is up to date.\n");
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+fn dnf_reports_restart_needed_when_needs_restarting_says_so() {
+    let tools = StubTools::new(&["dnf", "needs-restarting"]);
+    tools.set_responses(
+        "dnf",
+        &[StubOutput::new()], // dnf upgrade -y
+    );
+    tools.set_responses(
+        "needs-restarting",
+        &[StubOutput::new().with_status(1)], // needs-restarting -r: restart needed
+    );
+
+    let output = run(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(tools.step_calls(), support::dnf_restart_transcript());
+    assert!(
+        stdout(&output).contains("restart needed"),
+        "summary: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn dnf_does_not_report_restart_when_needs_restarting_says_no() {
+    let tools = StubTools::new(&["dnf", "needs-restarting"]);
+    tools.set_responses(
+        "dnf",
+        &[StubOutput::new()], // dnf upgrade -y
+    );
+    tools.set_responses(
+        "needs-restarting",
+        &[StubOutput::new()], // needs-restarting -r: exit 0, no restart needed
+    );
+
+    let output = run(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("restart needed"),
+        "summary: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn dnf_does_not_report_restart_when_needs_restarting_is_not_installed() {
+    let tools = StubTools::new(&["dnf"]);
+    tools.set_responses(
+        "dnf",
+        &[StubOutput::new()], // dnf upgrade -y
+    );
+
+    let output = run(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("restart needed"),
+        "summary: {}",
+        stdout(&output)
+    );
+    assert_eq!(tools.step_calls(), support::dnf_transcript());
+}

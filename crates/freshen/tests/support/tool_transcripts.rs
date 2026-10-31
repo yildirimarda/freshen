@@ -271,6 +271,16 @@ pub fn dnf_transcript() -> Vec<&'static str> {
     dnf_steps().to_vec()
 }
 
+/// Named insertion: the dnf upgrade step plus the restart probe.
+pub fn dnf_restart_steps() -> &'static [&'static str] {
+    &["dnf upgrade -y", "needs-restarting -r"]
+}
+
+/// Named insertion: full dnf transcript with the restart probe.
+pub fn dnf_restart_transcript() -> Vec<&'static str> {
+    dnf_restart_steps().to_vec()
+}
+
 /// Named insertion: probe stub transcript.
 pub fn probe_transcript() -> Vec<&'static str> {
     let mut t = Vec::new();
