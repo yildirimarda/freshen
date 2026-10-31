@@ -406,29 +406,49 @@ fn proc_processes() -> Vec<PackageManagerProcess> {
     found
 }
 
-#[cfg(target_os = "linux")]
-fn apt_lock_processes() -> Vec<PackageManagerProcess> {
-    use std::os::unix::fs::MetadataExt;
-
-    let Ok(locks) = std::fs::read_to_string("/proc/locks") else {
-        return Vec::new();
-    };
-    let locks = parse_proc_locks(&locks);
-
+/// Which running processes hold an apt or dpkg lock file, matched by inode.
+///
+/// `locks` is the parsed `/proc/locks` table as `(pid, inode)` pairs and
+/// `lock_inodes` lists each watched apt/dpkg lock file together with the
+/// inode it currently has. Returns one `"dpkg lock"` entry per holder so a
+/// contended run can name the process that holds the lock. Pure in `locks`
+/// and `lock_inodes`, so tests can inject synthetic lock facts instead of
+/// reading the real `/proc/locks` and lock files.
+#[cfg(any(test, target_os = "linux"))]
+fn apt_lock_holders(
+    locks: &[(u32, u64)],
+    lock_inodes: &[(&Path, u64)],
+) -> Vec<PackageManagerProcess> {
     let mut found = Vec::new();
-    for path in APT_LOCK_FILES {
-        let Ok(metadata) = std::fs::metadata(path) else {
-            continue;
-        };
-        let inode = metadata.ino();
-        for (pid, locked) in &locks {
-            if *locked == inode {
+    for (_path, inode) in lock_inodes {
+        for (pid, held) in locks {
+            if *held == *inode {
                 found.push(PackageManagerProcess::new("dpkg lock", *pid));
             }
         }
     }
-
     found
+}
+
+#[cfg(target_os = "linux")]
+fn apt_lock_processes() -> Vec<PackageManagerProcess> {
+    use std::os::unix::fs::MetadataExt;
+
+    let Ok(contents) = std::fs::read_to_string("/proc/locks") else {
+        return Vec::new();
+    };
+    let locks = parse_proc_locks(&contents);
+
+    let lock_inodes: Vec<_> = APT_LOCK_FILES
+        .iter()
+        .filter_map(|path| {
+            std::fs::metadata(path)
+                .ok()
+                .map(|metadata| (Path::new(path), metadata.ino()))
+        })
+        .collect();
+
+    apt_lock_holders(&locks, &lock_inodes)
 }
 
 /// Parses the `pid` and inode of every held lock in `/proc/locks`.
@@ -521,11 +541,12 @@ fn parse_tasklist(table: &str) -> Vec<PackageManagerProcess> {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_command, normalize, parse_proc_locks, parse_ps_processes, parse_tasklist,
-        wait_for_package_managers, wait_for_package_managers_with, PackageManagerConfig,
-        PackageManagerProbe, PackageManagerProcess, WaitOutcome,
+        apt_lock_holders, classify_command, normalize, parse_proc_locks, parse_ps_processes,
+        parse_tasklist, wait_for_package_managers, wait_for_package_managers_with,
+        PackageManagerConfig, PackageManagerProbe, PackageManagerProcess, WaitOutcome,
     };
     use std::cell::Cell;
+    use std::path::Path;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::thread;
@@ -640,6 +661,62 @@ mod tests {
             parse_proc_locks(table),
             vec![(1234, 123456), (5678, 789012)]
         );
+    }
+
+    #[test]
+    fn a_held_apt_lock_is_reported_as_dpkg_lock_naming_the_holder() {
+        // pid 1234 holds inode 123456, which is /var/lib/dpkg/lock-frontend's inode.
+        let locks = vec![(1234, 123456), (999, 777)];
+        let lock_inodes: Vec<(&Path, u64)> =
+            vec![(Path::new("/var/lib/dpkg/lock-frontend"), 123456)];
+
+        let holders = apt_lock_holders(&locks, &lock_inodes);
+
+        assert_eq!(
+            holders,
+            vec![PackageManagerProcess::new("dpkg lock", 1234)],
+            "a held lock must name its holder"
+        );
+    }
+
+    #[test]
+    fn an_unheld_apt_lock_is_not_reported() {
+        // 1234 holds inode 123456, but none of the watched lock files has it.
+        let locks = vec![(1234, 123456)];
+        let lock_inodes: Vec<(&Path, u64)> = vec![
+            (Path::new("/var/lib/dpkg/lock-frontend"), 999999),
+            (Path::new("/var/lib/dpkg/lock"), 888888),
+            (Path::new("/var/lib/apt/lists/lock"), 777777),
+            (Path::new("/var/cache/apt/archives/lock"), 666666),
+        ];
+
+        assert!(
+            apt_lock_holders(&locks, &lock_inodes).is_empty(),
+            "an unheld lock must not be reported"
+        );
+    }
+
+    #[test]
+    fn every_held_apt_lock_names_its_holder() {
+        let locks = vec![(111, 100), (222, 200), (333, 300)];
+        let lock_inodes: Vec<(&Path, u64)> = vec![
+            (Path::new("/var/lib/dpkg/lock-frontend"), 100),
+            (Path::new("/var/lib/dpkg/lock"), 200),
+            (Path::new("/var/lib/apt/lists/lock"), 999), // unheld inode
+            (Path::new("/var/cache/apt/archives/lock"), 300),
+        ];
+
+        let holders = apt_lock_holders(&locks, &lock_inodes);
+        assert_eq!(holders.len(), 3);
+        assert!(holders
+            .iter()
+            .any(|p| p.name() == "dpkg lock" && p.pid() == 111));
+        assert!(holders
+            .iter()
+            .any(|p| p.name() == "dpkg lock" && p.pid() == 222));
+        assert!(holders
+            .iter()
+            .any(|p| p.name() == "dpkg lock" && p.pid() == 333));
     }
 
     #[test]

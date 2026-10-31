@@ -90,6 +90,21 @@ fn every_running_package_manager_is_named() {
 }
 
 #[test]
+fn a_held_dpkg_lock_aborts_the_run_and_names_the_holder() {
+    let tools = StubTools::new(&["probe"]);
+
+    let output = run(&tools, "dpkg lock:789", &["--package-manager-wait", "0"]);
+
+    assert_eq!(output.status.code(), Some(3), "stderr: {}", stderr(&output));
+    let text = stderr(&output);
+    assert!(
+        text.contains("dpkg lock (PID 789)"),
+        "missing lock holder: {text}"
+    );
+    assert!(tools.calls().is_empty(), "no step should run");
+}
+
+#[test]
 fn skipping_the_check_lets_the_run_proceed() {
     let tools = StubTools::new(&["probe"]);
 
