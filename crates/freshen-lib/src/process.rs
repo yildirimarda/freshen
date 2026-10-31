@@ -1395,6 +1395,15 @@ pub enum ProcessError {
         #[source]
         source: std::io::Error,
     },
+
+    /// A runtime was asked to stop but did not exit before the timeout.
+    #[error("`{program}` did not stop before the {timeout:?} timeout")]
+    StopTimedOut {
+        /// Program that was asked to stop.
+        program: String,
+        /// Timeout that elapsed while waiting for it to exit.
+        timeout: Duration,
+    },
 }
 
 impl ProcessError {
@@ -1406,7 +1415,8 @@ impl ProcessError {
             Self::Spawn { .. }
             | Self::Interrupted { .. }
             | Self::Wait { .. }
-            | Self::Capture { .. } => None,
+            | Self::Capture { .. }
+            | Self::StopTimedOut { .. } => None,
         }
     }
 
