@@ -92,12 +92,68 @@ fn detect_snap() -> Detection {
 mod tests {
     use super::detect_snap;
     use crate::step::Detection;
+    use std::env;
+    use std::fs;
+    use std::fs::Permissions;
+    use std::path::{Path, PathBuf};
+
+    /// Runs `f` with `PATH` replaced by `dir`, restoring the previous `PATH`
+    /// afterwards so the test does not depend on what happens to be installed
+    /// on the host machine.
+    fn with_path<F>(dir: &Path, f: F)
+    where
+        F: FnOnce(),
+    {
+        let previous = env::var_os("PATH");
+        env::set_var("PATH", dir);
+        f();
+        match previous {
+            Some(value) => env::set_var("PATH", value),
+            None => env::remove_var("PATH"),
+        }
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = env::temp_dir().join(format!(
+            "freshen-snap-{}-{}-{name}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|since| since.as_nanos())
+                .unwrap_or_default()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir)
+            .unwrap_or_else(|error| panic!("failed to create {}: {error}", dir.display()));
+        dir
+    }
 
     #[test]
+    fn detect_snap_reports_not_installed_when_absent_from_path() {
+        let dir = temp_dir("absent");
+        with_path(&dir, || {
+            assert!(!detect_snap().is_installed());
+        });
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn detect_snap_reports_installed_when_on_path() {
-        // `snap` is not expected on the test machine; this just exercises the
-        // detection function against a name that is absent.
-        assert!(!detect_snap().is_installed());
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = temp_dir("present");
+        let program = dir.join("snap");
+        fs::write(&program, "#!/bin/sh\nexit 0\n")
+            .unwrap_or_else(|error| panic!("failed to write {}: {error}", program.display()));
+        fs::set_permissions(&program, Permissions::from_mode(0o755)).unwrap_or_else(|error| {
+            panic!("failed to make {} executable: {error}", program.display())
+        });
+
+        with_path(&dir, || {
+            assert!(detect_snap().is_installed());
+        });
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
