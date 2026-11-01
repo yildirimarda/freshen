@@ -468,6 +468,16 @@ pub fn home_manager_transcript() -> Vec<&'static str> {
     home_manager_steps().to_vec()
 }
 
+/// Named insertion: the Nix garbage-collection step (`nix-collect-garbage`).
+pub fn nix_collect_garbage_steps() -> &'static [&'static str] {
+    &["nix-collect-garbage"]
+}
+
+/// Named insertion: full Nix garbage-collection transcript.
+pub fn nix_collect_garbage_transcript() -> Vec<&'static str> {
+    nix_collect_garbage_steps().to_vec()
+}
+
 /// Named insertion: probe stub transcript.
 pub fn probe_transcript() -> Vec<&'static str> {
     let mut t = Vec::new();

@@ -12,6 +12,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
+use crate::cleanup;
 use crate::executable::command_exists;
 use crate::options::RunOptions;
 use crate::output::human;
@@ -24,6 +25,8 @@ use crate::step::{CheckReport, Detection, Step, StepError, StepId};
 pub const NIX: StepId = "nix";
 /// The Nix profile upgrade step.
 pub const NIX_PROFILE: StepId = "nix-profile";
+/// The Nix garbage-collection step: `nix-collect-garbage`.
+pub const NIX_COLLECT_GARBAGE: StepId = "nix-collect-garbage";
 /// The home-manager step.
 pub const HOME_MANAGER: StepId = "home-manager";
 
@@ -31,6 +34,8 @@ pub const HOME_MANAGER: StepId = "home-manager";
 const NIX_PLATFORMS: [Platform; 1] = [Platform::Linux];
 /// Nix profile upgrades only run on Linux.
 const NIX_PROFILE_PLATFORMS: [Platform; 1] = [Platform::Linux];
+/// Nix garbage collection only runs on Linux.
+const NIX_COLLECT_GARBAGE_PLATFORMS: [Platform; 1] = [Platform::Linux];
 /// home-manager runs on Linux and macOS.
 const HOME_MANAGER_PLATFORMS: [Platform; 2] = [Platform::Linux, Platform::Macos];
 
@@ -45,6 +50,7 @@ pub fn register(registry: Registry) -> Registry {
         .with(NixStep)
         .with(NixProfileStep)
         .with(HomeManagerStep)
+        .with(NixCollectGarbageStep)
 }
 
 struct NixStep;
@@ -140,6 +146,59 @@ impl Step for NixProfileStep {
 
     fn platforms(&self) -> &'static [Platform] {
         &NIX_PROFILE_PLATFORMS
+    }
+}
+
+/// The Nix garbage-collection step: `nix-collect-garbage`.
+///
+/// It runs `nix-collect-garbage` only when the user explicitly enables
+/// destructive cleanup with `--cleanup`, and reports the space the tool
+/// reclaimed. Without `--cleanup` it prints a skip notice and does nothing.
+struct NixCollectGarbageStep;
+
+impl NixCollectGarbageStep {
+    /// Runs `nix-collect-garbage`, gated on `--cleanup`.
+    fn cleanup(&self, failures: &mut Vec<StepError>, options: &RunOptions) {
+        if let Err(error) = cleanup::run(
+            NIX_COLLECT_GARBAGE,
+            "nix-collect-garbage",
+            CommandSpec::new("nix-collect-garbage"),
+            options,
+        ) {
+            failures.push(error);
+        }
+    }
+}
+
+impl Step for NixCollectGarbageStep {
+    fn id(&self) -> StepId {
+        NIX_COLLECT_GARBAGE
+    }
+
+    fn display_name(&self) -> &str {
+        "nix-collect-garbage"
+    }
+
+    fn detect(&self) -> Result<Detection, StepError> {
+        Ok(detect_nix())
+    }
+
+    fn check(&self) -> Result<CheckReport, StepError> {
+        Ok(CheckReport::up_to_date())
+    }
+
+    fn run(&self) -> Result<(), StepError> {
+        Ok(())
+    }
+
+    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
+        let mut failures = Vec::new();
+        self.cleanup(&mut failures, options);
+        finish(failures)
+    }
+
+    fn platforms(&self) -> &'static [Platform] {
+        &NIX_COLLECT_GARBAGE_PLATFORMS
     }
 }
 
