@@ -116,6 +116,12 @@ mod tests {
     use std::env;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    /// Serializes mutation of the global `PATH` env var so tests that replace
+    /// it cannot observe each other's changes while cargo runs tests in
+    /// parallel.
+    static PATH_GUARD: Mutex<()> = Mutex::new(());
 
     /// Runs `f` with `PATH` replaced by `dir`, restoring the previous `PATH`
     /// afterwards so the test does not depend on what happens to be installed
@@ -124,6 +130,9 @@ mod tests {
     where
         F: FnOnce(),
     {
+        let _guard = PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let previous = env::var_os("PATH");
         env::set_var("PATH", dir);
         f();
