@@ -94,7 +94,6 @@ mod tests {
     use crate::step::Detection;
     use std::env;
     use std::fs;
-    use std::fs::Permissions;
     use std::path::{Path, PathBuf};
 
     /// Runs `f` with `PATH` replaced by `dir`, restoring the previous `PATH`
@@ -140,6 +139,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn detect_snap_reports_installed_when_on_path() {
+        use std::fs::Permissions;
         use std::os::unix::fs::PermissionsExt;
 
         let dir = temp_dir("present");
