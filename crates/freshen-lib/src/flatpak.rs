@@ -1,9 +1,11 @@
-//! The Flatpak step: `flatpak update -y`, skipped when flatpak is absent.
+//! The Flatpak step: `flatpak update -y`, skipped when flatpak is absent, and
+//! `flatpak uninstall --unused` when `--cleanup` is set.
 //!
 //! The step runs `flatpak update -y` whenever `flatpak` is available. It is
 //! skipped entirely when flatpak is absent, so it is safe to register on
 //! every machine; on macOS and Windows it is never detected.
 
+use crate::cleanup;
 use crate::executable::command_exists;
 use crate::options::RunOptions;
 use crate::output::human;
@@ -38,6 +40,20 @@ impl FlatpakStep {
             failures.push(StepError::run_from_process(FLATPAK, &error));
         }
     }
+
+    /// Runs `flatpak uninstall --unused`, gated on `--cleanup`.
+    fn cleanup(&self, failures: &mut Vec<StepError>, options: &RunOptions) {
+        if let Err(error) = cleanup::run(
+            FLATPAK,
+            "flatpak: uninstall unused",
+            CommandSpec::new("flatpak")
+                .args(["uninstall", "--unused"])
+                .retry_transient_network(NETWORK_RETRIES),
+            options,
+        ) {
+            failures.push(error);
+        }
+    }
 }
 
 impl Step for FlatpakStep {
@@ -61,9 +77,10 @@ impl Step for FlatpakStep {
         self.run_with_options(&RunOptions::new())
     }
 
-    fn run_with_options(&self, _options: &RunOptions) -> Result<(), StepError> {
+    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
         let mut failures = Vec::new();
         self.upgrade(&mut failures);
+        self.cleanup(&mut failures, options);
         finish(failures)
     }
 

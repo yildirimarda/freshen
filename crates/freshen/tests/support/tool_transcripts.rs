@@ -418,6 +418,16 @@ pub fn flatpak_transcript() -> Vec<&'static str> {
     flatpak_steps().to_vec()
 }
 
+/// Named insertion: the Flatpak update step plus the cleanup step (with --cleanup).
+pub fn flatpak_cleanup_steps() -> &'static [&'static str] {
+    &["flatpak update -y", "flatpak uninstall --unused"]
+}
+
+/// Named insertion: full Flatpak transcript with cleanup.
+pub fn flatpak_cleanup_transcript() -> Vec<&'static str> {
+    flatpak_cleanup_steps().to_vec()
+}
+
 /// Named insertion: probe stub transcript.
 pub fn probe_transcript() -> Vec<&'static str> {
     let mut t = Vec::new();

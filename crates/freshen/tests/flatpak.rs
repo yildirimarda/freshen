@@ -20,6 +20,14 @@ fn run(tools: &StubTools) -> Output {
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
 }
 
+fn run_with_cleanup(tools: &StubTools) -> Output {
+    tools
+        .command()
+        .args(["--only", "flatpak", "--cleanup"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
+}
+
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
@@ -41,6 +49,60 @@ fn flatpak_updates_packages() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(tools.step_calls(), support::flatpak_transcript());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn flatpak_runs_uninstall_unused_with_cleanup() {
+    let tools = StubTools::new(&["flatpak"]);
+    tools.set_responses(
+        "flatpak",
+        &[
+            StubOutput::new(), // flatpak update -y
+            StubOutput::new(), // flatpak uninstall --unused
+        ],
+    );
+
+    let output = run_with_cleanup(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(tools.step_calls(), support::flatpak_cleanup_transcript());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn flatpak_skips_cleanup_without_cleanup_flag() {
+    let tools = StubTools::new(&["flatpak"]);
+    tools.set_responses(
+        "flatpak",
+        &[StubOutput::new()], // flatpak update -y
+    );
+
+    let output = run(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(tools.step_calls(), vec!["flatpak update -y"]);
+    assert!(
+        stdout(&output).contains("skipped destructive cleanup"),
+        "summary: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn flatpak_skips_cleanup_when_flatpak_is_missing() {
+    let tools = StubTools::new(&[]);
+
+    let output = run_with_cleanup(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(tools.step_calls().is_empty());
+    assert!(
+        stdout(&output).contains("0 ok, 0 planned, 1 skipped, 0 failed"),
+        "summary: {}",
+        stdout(&output)
+    );
 }
 
 #[test]
