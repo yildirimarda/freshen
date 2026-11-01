@@ -83,6 +83,11 @@ pub struct Cli {
     #[arg(long)]
     pub install_macos_updates: bool,
 
+    /// Install the available firmware updates instead of only reporting them
+    /// (Linux only).
+    #[arg(long)]
+    pub install_firmware_updates: bool,
+
     /// Keep this many pre-upgrade snapshot files (0 keeps every snapshot,
     /// default 10).
     #[arg(long, value_name = "COUNT")]
@@ -218,6 +223,7 @@ impl Cli {
             .with_force_kill(self.force_kill)
             .with_cleanup(self.cleanup)
             .with_install_macos_updates(self.install_macos_updates)
+            .with_install_firmware_updates(self.install_firmware_updates)
             .with_step_timeout(timeout(self.step_timeout.or(config.timeouts.step_seconds)))
             .with_global_timeout(timeout(self.timeout.or(config.timeouts.total_seconds)))
             .with_snapshot_retention(
@@ -299,6 +305,7 @@ mod tests {
         assert!(!options.force_kill());
         assert!(!options.cleanup_enabled());
         assert!(!options.install_macos_updates());
+        assert!(!options.install_firmware_updates());
         assert_eq!(
             options.snapshot_retention(),
             freshen_lib::DEFAULT_SNAPSHOT_RETENTION
@@ -342,6 +349,7 @@ mod tests {
             "--force-kill",
             "--cleanup",
             "--install-macos-updates",
+            "--install-firmware-updates",
             "--snapshot-retention",
             "3",
             "--step-timeout",
@@ -375,6 +383,7 @@ mod tests {
         assert!(options.force_kill());
         assert!(options.cleanup_enabled());
         assert!(options.install_macos_updates());
+        assert!(options.install_firmware_updates());
         assert_eq!(options.snapshot_retention(), 3);
         assert_eq!(
             options.step_timeout(),
@@ -579,6 +588,7 @@ mod tests {
             "--force-kill",
             "--cleanup",
             "--install-macos-updates",
+            "--install-firmware-updates",
             "--snapshot-retention",
             "--step-timeout",
             "--timeout",

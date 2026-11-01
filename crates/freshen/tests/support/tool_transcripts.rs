@@ -418,6 +418,40 @@ pub fn flatpak_transcript() -> Vec<&'static str> {
     flatpak_steps().to_vec()
 }
 
+/// Named insertion: the firmware update query.
+pub fn firmware_get_updates() -> &'static [&'static str] {
+    &["fwupdmgr get-updates"]
+}
+
+/// Named insertion: the firmware update installation.
+pub fn firmware_update() -> &'static [&'static str] {
+    &["fwupdmgr update"]
+}
+
+/// Named insertion: firmware check-mode transcript (a single get-updates query).
+pub fn firmware_check_transcript() -> Vec<&'static str> {
+    firmware_get_updates().to_vec()
+}
+
+/// Named insertion: firmware report-mode transcript (the run reuses the
+/// listing captured by the check for the report, but the before/after check
+/// both query, so get-updates runs twice).
+pub fn firmware_report_transcript() -> Vec<&'static str> {
+    let mut t = Vec::new();
+    t.extend_from_slice(firmware_get_updates());
+    t.extend_from_slice(firmware_get_updates());
+    t
+}
+
+/// Named insertion: firmware install-mode transcript (query, install, query).
+pub fn firmware_install_transcript() -> Vec<&'static str> {
+    let mut t = Vec::new();
+    t.extend_from_slice(firmware_get_updates());
+    t.extend_from_slice(firmware_update());
+    t.extend_from_slice(firmware_get_updates());
+    t
+}
+
 /// Named insertion: the Flatpak update step plus the cleanup step (with --cleanup).
 pub fn flatpak_cleanup_steps() -> &'static [&'static str] {
     &["flatpak update -y", "flatpak uninstall --unused"]

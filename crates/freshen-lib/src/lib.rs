@@ -20,6 +20,7 @@ pub mod doctor_warnings;
 pub mod emerge;
 mod executable;
 pub mod exit;
+pub mod firmware;
 pub mod flatpak;
 pub mod homebrew;
 pub mod left_running_apps;
