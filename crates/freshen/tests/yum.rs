@@ -115,13 +115,21 @@ fn yum_reports_restart_needed_when_needs_restarting_says_so() {
     );
     tools.set_responses(
         "needs-restarting",
-        &[StubOutput::new().with_status(1)], // needs-restarting -r: restart needed
+        &[StubOutput::stdout("sshd.service\n")], // needs-restarting lists a service
     );
 
     let output = run(&tools);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert_eq!(tools.step_calls(), support::yum_restart_transcript());
+    assert_eq!(
+        tools.step_calls(),
+        vec!["yum update -y", "needs-restarting"]
+    );
+    assert!(
+        stdout(&output).contains("service needs restart: sshd.service"),
+        "summary: {}",
+        stdout(&output)
+    );
     assert!(
         stdout(&output).contains("restart needed"),
         "summary: {}",
@@ -139,14 +147,23 @@ fn yum_does_not_report_restart_when_needs_restarting_says_no() {
     );
     tools.set_responses(
         "needs-restarting",
-        &[StubOutput::new()], // needs-restarting -r: exit 0, no restart needed
+        &[StubOutput::new()], // needs-restarting: no services, exit 0
     );
 
     let output = run(&tools);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        vec!["yum update -y", "needs-restarting"]
+    );
     assert!(
         !stdout(&output).contains("restart needed"),
+        "summary: {}",
+        stdout(&output)
+    );
+    assert!(
+        !stdout(&output).contains("service needs restart"),
         "summary: {}",
         stdout(&output)
     );

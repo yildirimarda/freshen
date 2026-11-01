@@ -14,6 +14,7 @@ use crate::platform::Platform;
 use crate::process::{CommandSpec, NETWORK_RETRIES};
 use crate::registry::Registry;
 use crate::restart_needed;
+use crate::services_needing_restart;
 use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
 use std::path::Path;
 
@@ -51,6 +52,24 @@ impl AptStep {
             .run()
         {
             failures.push(StepError::run_from_process(APT, &error));
+        }
+    }
+
+    /// After a successful upgrade, records the services that need a restart
+    /// (reported by `needrestart`) and whether a restart is required (reported
+    /// by the reboot marker file or by `needrestart` listing services).
+    fn services_needing_restart(&self) {
+        let mut needed = restart_needed_at(Path::new(REBOOT_REQUIRED));
+        human!("needrestart");
+        if let Ok(output) = CommandSpec::new(NEEDRESTART).run() {
+            let services = parse_needrestart_services(output.stdout());
+            needed = needed || !services.is_empty();
+            for service in services {
+                services_needing_restart::record(service);
+            }
+        }
+        if needed {
+            restart_needed::record();
         }
     }
 }
@@ -109,8 +128,8 @@ impl Step for AptStep {
             failures.push(error);
         }
 
-        if failures.is_empty() && restart_needed() {
-            restart_needed::record();
+        if failures.is_empty() {
+            self.services_needing_restart();
         }
         finish(failures)
     }
@@ -138,35 +157,30 @@ fn detect_apt() -> Detection {
 
 /// Marker file that Debian/Ubuntu creates when an upgrade requires a reboot.
 const REBOOT_REQUIRED: &str = "/var/run/reboot-required";
-/// `needrestart` reports whether running services (or the system) need a
-/// restart after an apt upgrade.
+/// `needrestart` reports which running services need a restart after an apt
+/// upgrade.
 const NEEDRESTART: &str = "needrestart";
 
-/// Whether a restart is needed after an apt upgrade.
-///
-/// `reboot_required` is injected so tests can point it at a temp file instead
-/// of `/var/run/reboot-required`. When the marker file is absent, `needrestart`
-/// is consulted: if it is installed and reports that action is needed, a
-/// restart is required.
-fn restart_needed() -> bool {
-    restart_needed_at(Path::new(REBOOT_REQUIRED))
+/// Whether a restart is required, based on the reboot marker file alone.
+fn restart_needed_at(reboot_required: &Path) -> bool {
+    reboot_required.exists()
 }
 
-/// Whether a restart is needed, checking `reboot_required` first and then
-/// `needrestart`. Returns `true` as soon as either signal says a restart is
-/// required.
-fn restart_needed_at(reboot_required: &Path) -> bool {
-    if reboot_required.exists() {
-        return true;
-    }
-    if !command_exists(NEEDRESTART) {
-        return false;
-    }
-    match CommandSpec::new(NEEDRESTART).args(["-b"]).run() {
-        Ok(_) => false, // exit 0: no restart needed
-        Err(crate::process::ProcessError::Failed { status, .. }) => !status.success(), // non-zero: restart needed
-        Err(_) => false, // could not run: assume no restart
-    }
+/// Parses the output of `needrestart` into the names of services that need a
+/// restart. Each non-empty, non-header line is treated as a service name.
+fn parse_needrestart_services(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter(|line| !line.contains("PID") && !line.contains("Service"))
+        .filter(|line| {
+            !line
+                .chars()
+                .all(|c| c == '-' || c == '+' || c == '|' || c.is_whitespace())
+        })
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 /// Parses the output of `apt-get -s upgrade`.

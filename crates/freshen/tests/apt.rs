@@ -160,7 +160,7 @@ fn apt_reports_restart_needed_when_needrestart_says_so() {
     );
     tools.set_responses(
         "needrestart",
-        &[StubOutput::new().with_status(1)], // needrestart -b: restart needed
+        &[StubOutput::stdout("ssh.service\npostgresql.service\n")], // needrestart lists services
     );
 
     let output = run(&tools, "apt");
@@ -174,8 +174,18 @@ fn apt_reports_restart_needed_when_needrestart_says_so() {
             "apt-get upgrade -y",
             "apt-get autoremove -y",
             "apt-get autoclean",
-            "needrestart -b",
+            "needrestart",
         ]
+    );
+    assert!(
+        stdout(&output).contains("service needs restart: ssh.service"),
+        "summary: {}",
+        stdout(&output)
+    );
+    assert!(
+        stdout(&output).contains("service needs restart: postgresql.service"),
+        "summary: {}",
+        stdout(&output)
     );
     assert!(
         stdout(&output).contains("restart needed"),
@@ -200,17 +210,104 @@ fn apt_does_not_report_restart_when_needrestart_says_no() {
     );
     tools.set_responses(
         "needrestart",
-        &[StubOutput::new()], // needrestart -b: exit 0, no restart needed
+        &[StubOutput::new()], // needrestart: no services, exit 0
     );
 
     let output = run(&tools, "apt");
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        vec![
+            "apt-get -s upgrade",
+            "apt-get update",
+            "apt-get upgrade -y",
+            "apt-get autoremove -y",
+            "apt-get autoclean",
+            "needrestart",
+        ]
+    );
     assert!(
         !stdout(&output).contains("restart needed"),
         "summary: {}",
         stdout(&output)
     );
+    assert!(
+        !stdout(&output).contains("service needs restart"),
+        "summary: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn apt_lists_services_needing_restart_in_the_json_report() {
+    let tools = StubTools::new(&["apt-get", "needrestart"]);
+    tools.set_responses(
+        "apt-get",
+        &[
+            StubOutput::new(), // apt-get -s upgrade (check, up to date)
+            StubOutput::new(), // apt-get update
+            StubOutput::new(), // apt-get upgrade -y
+            StubOutput::new(), // apt-get autoremove -y
+            StubOutput::new(), // apt-get autoclean
+        ],
+    );
+    tools.set_responses(
+        "needrestart",
+        &[StubOutput::stdout("sshd.service\n")], // needrestart lists a service
+    );
+
+    let output = tools
+        .command()
+        .args(["--only", "apt", "--cleanup", "--json"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let report: serde_json::Value = match serde_json::from_str(&stdout(&output)) {
+        Ok(report) => report,
+        Err(error) => panic!("invalid JSON report: {error}"),
+    };
+    let step = &report["steps"][0];
+    assert_eq!(step["id"], "apt");
+    assert_eq!(step["services_needing_restart"][0], "sshd.service");
+    assert!(step["restart_needed"].as_bool().unwrap_or(false));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn apt_lists_services_needing_restart_in_the_markdown_report() {
+    let tools = StubTools::new(&["apt-get", "needrestart"]);
+    tools.set_responses(
+        "apt-get",
+        &[
+            StubOutput::new(), // apt-get -s upgrade (check, up to date)
+            StubOutput::new(), // apt-get update
+            StubOutput::new(), // apt-get upgrade -y
+            StubOutput::new(), // apt-get autoremove -y
+            StubOutput::new(), // apt-get autoclean
+        ],
+    );
+    tools.set_responses(
+        "needrestart",
+        &[StubOutput::stdout("sshd.service\n")], // needrestart lists a service
+    );
+
+    let output = tools
+        .command()
+        .args(["--only", "apt", "--cleanup", "--markdown"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("## Services needing restart"),
+        "report: {text}"
+    );
+    assert!(text.contains("### apt (`apt`)"), "report: {text}");
+    assert!(text.contains("- sshd.service"), "report: {text}");
 }
 
 #[test]

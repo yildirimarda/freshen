@@ -113,13 +113,26 @@ fn dnf_reports_restart_needed_when_needs_restarting_says_so() {
     );
     tools.set_responses(
         "needs-restarting",
-        &[StubOutput::new().with_status(1)], // needs-restarting -r: restart needed
+        &[StubOutput::stdout("sshd.service\npostgresql.service\n")], // needs-restarting lists services
     );
 
     let output = run(&tools);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert_eq!(tools.step_calls(), support::dnf_restart_transcript());
+    assert_eq!(
+        tools.step_calls(),
+        vec!["dnf upgrade -y", "needs-restarting"]
+    );
+    assert!(
+        stdout(&output).contains("service needs restart: sshd.service"),
+        "summary: {}",
+        stdout(&output)
+    );
+    assert!(
+        stdout(&output).contains("service needs restart: postgresql.service"),
+        "summary: {}",
+        stdout(&output)
+    );
     assert!(
         stdout(&output).contains("restart needed"),
         "summary: {}",
@@ -137,17 +150,79 @@ fn dnf_does_not_report_restart_when_needs_restarting_says_no() {
     );
     tools.set_responses(
         "needs-restarting",
-        &[StubOutput::new()], // needs-restarting -r: exit 0, no restart needed
+        &[StubOutput::new()], // needs-restarting: no services, exit 0
     );
 
     let output = run(&tools);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        vec!["dnf upgrade -y", "needs-restarting"]
+    );
     assert!(
         !stdout(&output).contains("restart needed"),
         "summary: {}",
         stdout(&output)
     );
+    assert!(
+        !stdout(&output).contains("service needs restart"),
+        "summary: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn dnf_lists_services_needing_restart_in_the_json_report() {
+    let tools = StubTools::new(&["dnf", "needs-restarting"]);
+    tools.set_responses("dnf", &[StubOutput::new()]); // dnf upgrade -y
+    tools.set_responses(
+        "needs-restarting",
+        &[StubOutput::stdout("sshd.service\n")], // needs-restarting lists a service
+    );
+
+    let output = tools
+        .command()
+        .args(["--only", "dnf", "--json"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let report: serde_json::Value = match serde_json::from_str(&stdout(&output)) {
+        Ok(report) => report,
+        Err(error) => panic!("invalid JSON report: {error}"),
+    };
+    let step = &report["steps"][0];
+    assert_eq!(step["id"], "dnf");
+    assert_eq!(step["services_needing_restart"][0], "sshd.service");
+    assert!(step["restart_needed"].as_bool().unwrap_or(false));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn dnf_lists_services_needing_restart_in_the_markdown_report() {
+    let tools = StubTools::new(&["dnf", "needs-restarting"]);
+    tools.set_responses("dnf", &[StubOutput::new()]); // dnf upgrade -y
+    tools.set_responses(
+        "needs-restarting",
+        &[StubOutput::stdout("sshd.service\n")], // needs-restarting lists a service
+    );
+
+    let output = tools
+        .command()
+        .args(["--only", "dnf", "--markdown"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("## Services needing restart"),
+        "report: {text}"
+    );
+    assert!(text.contains("### dnf (`dnf`)"), "report: {text}");
+    assert!(text.contains("- sshd.service"), "report: {text}");
 }
 
 #[test]
