@@ -214,7 +214,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add `flatpak uninstall --unused` as a cleanup step that runs only with `--cleanup`, covered by recorded transcripts
 - [x] Add Snap (`snap refresh`), skipped when the tool is absent, covered by recorded transcripts
 - [x] Report a held snap refresh window when snapd announces one, instead of showing the pending refresh as a failure, covered by recorded transcripts
-- [ ] Add Nix channel updates (`nix-channel --update`), skipped when the tool is absent, covered by recorded transcripts
+- [x] Add Nix channel updates (`nix-channel --update`), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add Nix profile upgrades (`nix profile upgrade --all`), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add `home-manager switch` as an opt-in step that runs only when a home-manager configuration is detected, covered by tests with injected paths
 - [ ] Add `nix-collect-garbage` as a cleanup step that runs only with `--cleanup` and reports the reclaimed space, covered by recorded transcripts

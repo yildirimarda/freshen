@@ -438,6 +438,16 @@ pub fn snap_transcript() -> Vec<&'static str> {
     snap_steps().to_vec()
 }
 
+/// Named insertion: the Nix channel update step.
+pub fn nix_steps() -> &'static [&'static str] {
+    &["nix channel --update"]
+}
+
+/// Named insertion: full Nix transcript (channel update).
+pub fn nix_transcript() -> Vec<&'static str> {
+    nix_steps().to_vec()
+}
+
 /// Named insertion: probe stub transcript.
 pub fn probe_transcript() -> Vec<&'static str> {
     let mut t = Vec::new();
