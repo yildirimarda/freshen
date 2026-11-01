@@ -39,7 +39,7 @@ fn stderr(output: &Output) -> String {
 }
 
 /// The built-in steps that exist on every platform.
-const COMMON_STEPS: &str = "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-doctor,brew-bundle-cleanup,brew-reopen,colima-stop,colima-start,docker,uv,mise,pacman,aur,zypper";
+const COMMON_STEPS: &str = "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-doctor,brew-bundle-cleanup,brew-reopen,colima-stop,colima-start,docker,uv,mise,pacman,aur,zypper,apk";
 
 /// The built-in steps that only exist on macOS.
 const MACOS_STEPS: &str = "mas,macos-updates";
@@ -102,7 +102,7 @@ fn list_steps_lists_every_builtin_step() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
-    assert!(text.contains("Steps (21):"), "listing: {text}");
+    assert!(text.contains("Steps (22):"), "listing: {text}");
     assert!(text.contains("brew"), "listing: {text}");
     assert!(text.contains("brew-casks"), "listing: {text}");
     assert!(text.contains("brew-doctor"), "listing: {text}");
@@ -118,6 +118,7 @@ fn list_steps_lists_every_builtin_step() {
     assert!(text.contains("pacman"), "listing: {text}");
     assert!(text.contains("aur"), "listing: {text}");
     assert!(text.contains("zypper"), "listing: {text}");
+    assert!(text.contains("apk"), "listing: {text}");
 }
 
 #[test]
