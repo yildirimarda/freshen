@@ -104,6 +104,33 @@ fn a_failing_snap_refresh_fails_the_step() {
 
 #[test]
 #[cfg(target_os = "linux")]
+fn a_held_snap_refresh_window_is_reported_instead_of_a_failure() {
+    let tools = StubTools::new(&["snap"]);
+    tools.set_responses(
+        "snap",
+        &[StubOutput::new()
+            .with_stderr("error: a snap refresh is held until 2026-03-01T00:00:00+01:00")
+            .with_status(1)],
+    );
+
+    let output = run(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(tools.step_calls(), support::snap_transcript());
+    let out = stdout(&output);
+    assert!(out.contains("held"), "stdout: {}", out);
+    let snap_line = out
+        .lines()
+        .find(|line| line.starts_with("  ") && line.contains("snap"))
+        .unwrap_or_default();
+    assert!(
+        snap_line.starts_with("  ok"),
+        "snap step line: {snap_line}\nstdout: {out}"
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
 fn a_missing_snap_is_skipped_without_calling_anything() {
     let tools = StubTools::new(&[]);
 
