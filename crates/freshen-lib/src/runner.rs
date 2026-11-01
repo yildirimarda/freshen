@@ -144,6 +144,7 @@ pub struct StepResult {
     bundle_cleanup_packages: Vec<BundlePackage>,
     skipped_items: Vec<String>,
     restarted_services: Vec<String>,
+    services_needing_restart: Vec<String>,
     left_running_apps: Vec<String>,
     reopened_hidden: Vec<String>,
     restored_windows: Vec<String>,
@@ -166,6 +167,7 @@ impl StepResult {
             bundle_cleanup_packages: Vec::new(),
             skipped_items: Vec::new(),
             restarted_services: Vec::new(),
+            services_needing_restart: Vec::new(),
             left_running_apps: Vec::new(),
             reopened_hidden: Vec::new(),
             restored_windows: Vec::new(),
@@ -203,6 +205,11 @@ impl StepResult {
 
     fn with_restarted_services(mut self, restarted_services: Vec<String>) -> Self {
         self.restarted_services = restarted_services;
+        self
+    }
+
+    fn with_services_needing_restart(mut self, services_needing_restart: Vec<String>) -> Self {
+        self.services_needing_restart = services_needing_restart;
         self
     }
 
@@ -341,6 +348,13 @@ impl StepResult {
     #[must_use]
     pub fn restarted_services(&self) -> &[String] {
         &self.restarted_services
+    }
+
+    /// Services that need a restart after the step, for example services
+    /// reported by `zypper ps -s` after a zypper upgrade, in order.
+    #[must_use]
+    pub fn services_needing_restart(&self) -> &[String] {
+        &self.services_needing_restart
     }
 
     /// Apps left running because they were updating themselves, in order.
@@ -599,6 +613,9 @@ impl fmt::Display for RunSummary {
             }
             for service in result.restarted_services() {
                 writeln!(f, "          - restarted service: {service}")?;
+            }
+            for service in result.services_needing_restart() {
+                writeln!(f, "          - service needs restart: {service}")?;
             }
             for app in result.left_running_apps() {
                 writeln!(f, "          - left running (updating itself): {app}")?;
@@ -1066,6 +1083,7 @@ fn run_step(
             let cleanups = recorder.finish();
             let skipped_items = crate::skipped_items::take();
             let restarted_services = crate::restarted_services::take();
+            let services_needing_restart = crate::services_needing_restart::take();
             let left_running_apps = crate::left_running_apps::take();
             let reopened_hidden = crate::reopened_hidden::take();
             let restored_windows = crate::restored_windows::take();
@@ -1094,6 +1112,7 @@ fn run_step(
                 .with_cleanups(cleanups)
                 .with_skipped_items(skipped_items)
                 .with_restarted_services(restarted_services)
+                .with_services_needing_restart(services_needing_restart)
                 .with_left_running_apps(left_running_apps)
                 .with_reopened_hidden(reopened_hidden)
                 .with_restored_windows(restored_windows)

@@ -37,13 +37,48 @@ fn zypper_refreshes_and_updates() {
         &[
             StubOutput::new(), // zypper refresh
             StubOutput::new(), // zypper update -y
+            StubOutput::new(), // zypper ps -s
         ],
     );
 
     let output = run(&tools);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert_eq!(tools.step_calls(), support::zypper_transcript());
+    assert_eq!(tools.step_calls(), support::zypper_restart_transcript());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn zypper_reports_services_needing_a_restart() {
+    let tools = StubTools::new(&["zypper"]);
+    tools.set_responses(
+        "zypper",
+        &[
+            StubOutput::new(), // zypper refresh
+            StubOutput::new(), // zypper update -y
+            StubOutput::new().with_stdout("ssh.service\npostgresql.service\n"), // zypper ps -s
+        ],
+    );
+
+    let output = run(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(tools.step_calls(), support::zypper_restart_transcript());
+    assert!(
+        stdout(&output).contains("ssh.service"),
+        "stdout: {}",
+        stdout(&output)
+    );
+    assert!(
+        stdout(&output).contains("postgresql.service"),
+        "stdout: {}",
+        stdout(&output)
+    );
+    assert!(
+        stdout(&output).contains("service needs restart"),
+        "stdout: {}",
+        stdout(&output)
+    );
 }
 
 #[test]
