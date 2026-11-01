@@ -1,8 +1,10 @@
-//! The Nix channel step: `nix-channel --update`, skipped when nix is absent.
+//! The Nix steps: `nix channel --update` and `nix profile upgrade --all`,
+//! each skipped when nix is absent.
 //!
-//! The step runs `nix channel --update` whenever `nix` is available. It is
-//! skipped entirely when nix is absent, so it is safe to register on every
-//! machine; on macOS and Windows it is never detected.
+//! The channel step runs `nix channel --update` whenever `nix` is available.
+//! The profile step runs `nix profile upgrade --all` whenever `nix` is
+//! available. Both are skipped entirely when nix is absent, so they are safe
+//! to register on every machine; on macOS and Windows they are never detected.
 
 use crate::executable::command_exists;
 use crate::options::RunOptions;
@@ -12,16 +14,20 @@ use crate::process::{CommandSpec, NETWORK_RETRIES};
 use crate::registry::Registry;
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
 
-/// The Nix package manager step.
+/// The Nix channel step.
 pub const NIX: StepId = "nix";
+/// The Nix profile upgrade step.
+pub const NIX_PROFILE: StepId = "nix-profile";
 
 /// Nix only runs on Linux.
 const NIX_PLATFORMS: [Platform; 1] = [Platform::Linux];
+/// Nix profile upgrades only run on Linux.
+const NIX_PROFILE_PLATFORMS: [Platform; 1] = [Platform::Linux];
 
-/// Registers the nix step.
+/// Registers the nix steps: channel update first, then profile upgrade.
 #[must_use]
 pub fn register(registry: Registry) -> Registry {
-    registry.with(NixStep)
+    registry.with(NixStep).with(NixProfileStep)
 }
 
 struct NixStep;
@@ -69,6 +75,54 @@ impl Step for NixStep {
 
     fn platforms(&self) -> &'static [Platform] {
         &NIX_PLATFORMS
+    }
+}
+
+struct NixProfileStep;
+
+impl NixProfileStep {
+    /// Runs `nix profile upgrade --all`.
+    fn upgrade(&self, failures: &mut Vec<StepError>) {
+        human!("nix profile upgrade --all");
+        if let Err(error) = CommandSpec::new("nix")
+            .args(["profile", "upgrade", "--all"])
+            .retry_transient_network(NETWORK_RETRIES)
+            .run()
+        {
+            failures.push(StepError::run_from_process(NIX_PROFILE, &error));
+        }
+    }
+}
+
+impl Step for NixProfileStep {
+    fn id(&self) -> StepId {
+        NIX_PROFILE
+    }
+
+    fn display_name(&self) -> &str {
+        "nix profile"
+    }
+
+    fn detect(&self) -> Result<Detection, StepError> {
+        Ok(detect_nix())
+    }
+
+    fn check(&self) -> Result<CheckReport, StepError> {
+        Ok(CheckReport::up_to_date())
+    }
+
+    fn run(&self) -> Result<(), StepError> {
+        self.run_with_options(&RunOptions::new())
+    }
+
+    fn run_with_options(&self, _options: &RunOptions) -> Result<(), StepError> {
+        let mut failures = Vec::new();
+        self.upgrade(&mut failures);
+        finish(failures)
+    }
+
+    fn platforms(&self) -> &'static [Platform] {
+        &NIX_PROFILE_PLATFORMS
     }
 }
 
