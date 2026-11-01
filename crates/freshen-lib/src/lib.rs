@@ -17,6 +17,7 @@ pub mod containers;
 pub(crate) mod deadline;
 pub mod dnf;
 pub mod doctor_warnings;
+pub mod emerge;
 mod executable;
 pub mod exit;
 pub mod homebrew;

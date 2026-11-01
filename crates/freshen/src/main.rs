@@ -143,16 +143,19 @@ fn build_registry(runtime: Option<ContainerRuntimeKind>) -> Registry {
         return test_steps::with_probe_steps(Registry::new());
     }
 
-    freshen_lib::appstore::register(freshen_lib::tooling::register(freshen_lib::apt::register(
-        freshen_lib::dnf::register(freshen_lib::pacman::register(
-            freshen_lib::zypper::register(freshen_lib::apk::register(freshen_lib::aur::register(
-                freshen_lib::homebrew::register(freshen_lib::containers::register_for(
-                    Registry::new(),
-                    runtime,
-                )),
-            ))),
-        )),
-    )))
+    let mut registry = Registry::new();
+    registry = freshen_lib::containers::register_for(registry, runtime);
+    registry = freshen_lib::homebrew::register(registry);
+    registry = freshen_lib::aur::register(registry);
+    registry = freshen_lib::emerge::register(registry);
+    registry = freshen_lib::apk::register(registry);
+    registry = freshen_lib::zypper::register(registry);
+    registry = freshen_lib::pacman::register(registry);
+    registry = freshen_lib::dnf::register(registry);
+    registry = freshen_lib::apt::register(registry);
+    registry = freshen_lib::tooling::register(registry);
+    registry = freshen_lib::appstore::register(registry);
+    registry
 }
 
 fn run_preflight(options: &freshen_lib::RunOptions) -> PreflightReport {
