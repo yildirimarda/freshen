@@ -362,6 +362,16 @@ pub fn apk_transcript() -> Vec<&'static str> {
     apk_steps().to_vec()
 }
 
+/// Named insertion: the emerge check, sync and world upgrade steps.
+pub fn emerge_steps() -> &'static [&'static str] {
+    &["emerge -puDN @world", "emerge --sync", "emerge -uDN @world"]
+}
+
+/// Named insertion: full emerge transcript (check, sync and world upgrade).
+pub fn emerge_transcript() -> Vec<&'static str> {
+    emerge_steps().to_vec()
+}
+
 /// Named insertion: the pacman cleanup steps (with `--cleanup`).
 pub fn pacman_cleanup_steps() -> &'static [&'static str] {
     &[
