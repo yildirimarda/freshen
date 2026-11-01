@@ -211,7 +211,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add apk support (`apk update`, `apk upgrade`) for Alpine as an opt-in step, skipped when apk is absent, covered by recorded transcripts
 - [x] Add emerge support (`emerge --sync`, `emerge -uDN @world`) for Gentoo as an opt-in, report-first step, covered by recorded transcripts
 - [x] Add Flatpak (`flatpak update -y`), skipped when the tool is absent, covered by recorded transcripts
-- [ ] Add `flatpak uninstall --unused` as a cleanup step that runs only with `--cleanup`, covered by recorded transcripts
+- [x] Add `flatpak uninstall --unused` as a cleanup step that runs only with `--cleanup`, covered by recorded transcripts
 - [ ] Add Snap (`snap refresh`), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Report a held snap refresh window when snapd announces one, instead of showing the pending refresh as a failure, covered by recorded transcripts
 - [ ] Add Nix channel updates (`nix-channel --update`), skipped when the tool is absent, covered by recorded transcripts
