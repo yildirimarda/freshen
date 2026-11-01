@@ -68,6 +68,11 @@ pub enum SkipReason {
     /// The step needs root privileges but `sudo` credentials could not be
     /// obtained, so it is skipped instead of failing.
     NeedsSudo,
+    /// A user-level step was refused because the effective user is root.
+    ///
+    /// User-level steps manage packages in the user's environment and must not
+    /// run as root, so they are skipped with this reason instead of running.
+    RunningAsRoot,
     /// The configuration file the step works with does not exist.
     ///
     /// The step is skipped with this reason instead of failing, for example
@@ -92,6 +97,7 @@ impl SkipReason {
             Self::RegistryUnreachable => "registry unreachable",
             Self::NotSignedIn => "not signed in",
             Self::NeedsSudo => "needs sudo",
+            Self::RunningAsRoot => "refuses to run user-level steps as root",
             Self::MissingConfiguration => "no configuration file found",
             Self::Interrupted => "interrupted before it started",
         }
@@ -475,6 +481,19 @@ pub trait Step: Sync {
     /// credentials cannot be obtained, reporting [`SkipReason::NeedsSudo`].
     #[must_use]
     fn needs_root(&self) -> bool {
+        false
+    }
+
+    /// Returns `true` when the step manages user-level packages (for example
+    /// uv, mise, npm, gem or pipx) and therefore must not run as root.
+    ///
+    /// Running a user-level step as root installs packages into root's
+    /// environment instead of the user's, which is wrong and potentially
+    /// destructive. The default is `false`; user-level steps override it to
+    /// return `true`. The runner refuses such steps with
+    /// [`SkipReason::RunningAsRoot`] when the effective user is root.
+    #[must_use]
+    fn is_user_level(&self) -> bool {
         false
     }
 }

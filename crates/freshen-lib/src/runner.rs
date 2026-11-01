@@ -26,6 +26,7 @@ use crate::homebrew::{BundlePackage, DoctorFinding};
 use crate::options::RunOptions;
 use crate::snapshot::{RollbackCommand, SnapshotRecorder};
 use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
+use crate::system::Privilege;
 
 pub use crate::step::SkipReason;
 
@@ -726,27 +727,30 @@ impl<'a> Runner<'a> {
     /// Creates a runner that applies `options`, including `--dry-run` and the
     /// `--only`/`--skip` selection.
     ///
-    /// A step the configuration file disables is planned as skipped, with the
-    /// reason [`SkipReason::Disabled`], so the summary names it instead of
-    /// leaving the user wondering where the step went.
-    ///
-    /// `sudo` credentials are assumed available. Use [`Runner::with_options_and_sudo`]
-    /// to validate them once up front and skip steps that need root when they
-    /// are not.
+    /// `sudo` credentials are assumed available and the effective user is
+    /// treated as a standard user, so user-level steps are not refused. Use
+    /// [`Runner::with_options_and_sudo`] to validate `sudo` once up front and
+    /// to supply the real privilege level.
     pub fn with_options(
         steps: impl IntoIterator<Item = &'a dyn Step>,
         options: RunOptions,
     ) -> Self {
-        Self::with_options_and_sudo(steps, options, true)
+        Self::with_options_and_sudo(steps, options, true, Privilege::StandardUser)
     }
 
     /// Like [`Runner::with_options`] but takes an explicit `sudo_available`
     /// flag, validated once up front. Steps that need root are skipped with
     /// [`SkipReason::NeedsSudo`] when `sudo` credentials are not available.
+    ///
+    /// `privilege` is the effective user of the process. When it is elevated
+    /// (root), user-level steps ([`Step::is_user_level`]) are skipped with
+    /// [`SkipReason::RunningAsRoot`] instead of running, so they never install
+    /// packages into root's environment.
     pub fn with_options_and_sudo(
         steps: impl IntoIterator<Item = &'a dyn Step>,
         options: RunOptions,
         sudo_available: bool,
+        privilege: Privilege,
     ) -> Self {
         let selection = options.selection();
         let mut planned = Vec::new();
@@ -777,6 +781,7 @@ impl<'a> Runner<'a> {
             }
 
             let needs_sudo = step.needs_root() && !sudo_available;
+            let refused_as_root = privilege.is_elevated() && step.is_user_level();
             let conflict = planned
                 .iter()
                 .copied()
@@ -795,6 +800,10 @@ impl<'a> Runner<'a> {
                 None if needs_sudo => planned.push(PlannedStep::Skip {
                     step,
                     reason: SkipReason::NeedsSudo,
+                }),
+                None if refused_as_root => planned.push(PlannedStep::Skip {
+                    step,
+                    reason: SkipReason::RunningAsRoot,
                 }),
                 None => planned.push(PlannedStep::Run(step)),
             }
@@ -1221,6 +1230,7 @@ mod tests {
     use crate::options::{RunOptions, StepSelection};
     use crate::platform::Platform;
     use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
+    use crate::system::Privilege;
     use std::collections::BTreeMap;
     use std::process::ExitCode;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -1261,6 +1271,7 @@ mod tests {
         check_sleep: Duration,
         interrupt_on_run: bool,
         needs_root: bool,
+        is_user_level: bool,
         calls: Arc<Calls>,
     }
 
@@ -1283,6 +1294,7 @@ mod tests {
                 check_sleep: Duration::ZERO,
                 interrupt_on_run: false,
                 needs_root: false,
+                is_user_level: false,
                 calls: Arc::new(Calls::default()),
             }
         }
@@ -1361,6 +1373,11 @@ mod tests {
 
         fn needs_root(mut self, value: bool) -> Self {
             self.needs_root = value;
+            self
+        }
+
+        fn user_level(mut self) -> Self {
+            self.is_user_level = true;
             self
         }
 
@@ -1443,6 +1460,10 @@ mod tests {
 
         fn needs_root(&self) -> bool {
             self.needs_root
+        }
+
+        fn is_user_level(&self) -> bool {
+            self.is_user_level
         }
     }
 
@@ -1785,8 +1806,13 @@ mod tests {
         let step = FakeStep::new("apt", "apt").needs_root(true);
         let calls = step.calls();
 
-        let summary =
-            Runner::with_options_and_sudo([&step as &dyn Step], RunOptions::new(), false).run();
+        let summary = Runner::with_options_and_sudo(
+            [&step as &dyn Step],
+            RunOptions::new(),
+            false,
+            Privilege::StandardUser,
+        )
+        .run();
 
         let result = &summary.steps()[0];
         assert_eq!(result.status(), StepStatus::Skipped);
@@ -1808,8 +1834,13 @@ mod tests {
         let step = FakeStep::new("apt", "apt").needs_root(true);
         let calls = step.calls();
 
-        let summary =
-            Runner::with_options_and_sudo([&step as &dyn Step], RunOptions::new(), true).run();
+        let summary = Runner::with_options_and_sudo(
+            [&step as &dyn Step],
+            RunOptions::new(),
+            true,
+            Privilege::StandardUser,
+        )
+        .run();
 
         let result = &summary.steps()[0];
         assert_eq!(result.status(), StepStatus::Ok);
@@ -1828,8 +1859,13 @@ mod tests {
         let step = FakeStep::new("uv", "uv");
         let calls = step.calls();
 
-        let summary =
-            Runner::with_options_and_sudo([&step as &dyn Step], RunOptions::new(), false).run();
+        let summary = Runner::with_options_and_sudo(
+            [&step as &dyn Step],
+            RunOptions::new(),
+            false,
+            Privilege::StandardUser,
+        )
+        .run();
 
         let result = &summary.steps()[0];
         assert_eq!(result.status(), StepStatus::Ok);
@@ -1846,8 +1882,13 @@ mod tests {
         let step = FakeStep::new("apt", "apt").needs_root(true);
         let calls = step.calls();
 
-        let summary =
-            Runner::with_options_and_sudo([&step as &dyn Step], RunOptions::new(), false).check();
+        let summary = Runner::with_options_and_sudo(
+            [&step as &dyn Step],
+            RunOptions::new(),
+            false,
+            Privilege::StandardUser,
+        )
+        .check();
 
         assert_eq!(summary.steps()[0].status(), CheckStatus::Skipped);
         assert_eq!(
@@ -1859,6 +1900,107 @@ mod tests {
 
         assert_eq!(calls.detect.load(Ordering::SeqCst), 0);
         assert_eq!(calls.check.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_user_level_step_is_refused_when_running_as_root() {
+        let step = FakeStep::new("uv", "uv").user_level();
+        let calls = step.calls();
+
+        let summary = Runner::with_options_and_sudo(
+            [&step as &dyn Step],
+            RunOptions::new(),
+            true,
+            Privilege::Elevated,
+        )
+        .run();
+
+        let result = &summary.steps()[0];
+        assert_eq!(result.status(), StepStatus::Skipped);
+        assert_eq!(result.skip_reason(), Some(SkipReason::RunningAsRoot));
+        assert_eq!(result.error(), None);
+        assert_eq!(summary.skipped_count(), 1);
+        assert_eq!(summary.ok_count(), 0);
+        assert_eq!(summary.failed_count(), 0);
+        assert_exit_code(summary.exit_code(), ExitCode::SUCCESS);
+        assert!(summary
+            .to_string()
+            .contains("refuses to run user-level steps as root"));
+
+        assert_eq!(calls.detect.load(Ordering::SeqCst), 0);
+        assert_eq!(calls.run.load(Ordering::SeqCst), 0);
+        assert_eq!(calls.cleanup.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_user_level_step_runs_when_not_running_as_root() {
+        let step = FakeStep::new("uv", "uv").user_level();
+        let calls = step.calls();
+
+        let summary = Runner::with_options_and_sudo(
+            [&step as &dyn Step],
+            RunOptions::new(),
+            true,
+            Privilege::StandardUser,
+        )
+        .run();
+
+        let result = &summary.steps()[0];
+        assert_eq!(result.status(), StepStatus::Ok);
+        assert_eq!(result.skip_reason(), None);
+        assert_eq!(summary.ok_count(), 1);
+
+        assert_eq!(calls.detect.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.run.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.cleanup.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_user_level_step_is_refused_in_check_mode_when_running_as_root() {
+        let step = FakeStep::new("uv", "uv").user_level();
+        let calls = step.calls();
+
+        let summary = Runner::with_options_and_sudo(
+            [&step as &dyn Step],
+            RunOptions::new(),
+            true,
+            Privilege::Elevated,
+        )
+        .check();
+
+        assert_eq!(summary.steps()[0].status(), CheckStatus::Skipped);
+        assert_eq!(
+            summary.steps()[0].skip_reason(),
+            Some(SkipReason::RunningAsRoot)
+        );
+        assert_exit_code(summary.exit_code(), ExitCode::SUCCESS);
+
+        assert_eq!(calls.detect.load(Ordering::SeqCst), 0);
+        assert_eq!(calls.check.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_step_that_needs_root_runs_when_running_as_root() {
+        let step = FakeStep::new("apt", "apt").needs_root(true);
+        let calls = step.calls();
+
+        let summary = Runner::with_options_and_sudo(
+            [&step as &dyn Step],
+            RunOptions::new(),
+            true,
+            Privilege::Elevated,
+        )
+        .run();
+
+        let result = &summary.steps()[0];
+        assert_eq!(result.status(), StepStatus::Ok);
+        assert_eq!(result.skip_reason(), None);
+        assert_eq!(summary.ok_count(), 1);
+        assert_exit_code(summary.exit_code(), ExitCode::SUCCESS);
+
+        assert_eq!(calls.detect.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.run.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.cleanup.load(Ordering::SeqCst), 1);
     }
 
     #[test]

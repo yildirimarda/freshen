@@ -159,6 +159,10 @@ impl Step for UvStep {
     fn platforms(&self) -> &'static [Platform] {
         &TOOLING_PLATFORMS
     }
+
+    fn is_user_level(&self) -> bool {
+        true
+    }
 }
 
 struct MiseStep;
@@ -300,6 +304,10 @@ impl Step for MiseStep {
 
     fn platforms(&self) -> &'static [Platform] {
         &TOOLING_PLATFORMS
+    }
+
+    fn is_user_level(&self) -> bool {
+        true
     }
 }
 
