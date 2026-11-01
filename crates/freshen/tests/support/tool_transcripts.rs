@@ -428,6 +428,16 @@ pub fn flatpak_cleanup_transcript() -> Vec<&'static str> {
     flatpak_cleanup_steps().to_vec()
 }
 
+/// Named insertion: the Snap refresh step.
+pub fn snap_steps() -> &'static [&'static str] {
+    &["snap refresh"]
+}
+
+/// Named insertion: full Snap transcript (refresh).
+pub fn snap_transcript() -> Vec<&'static str> {
+    snap_steps().to_vec()
+}
+
 /// Named insertion: probe stub transcript.
 pub fn probe_transcript() -> Vec<&'static str> {
     let mut t = Vec::new();
