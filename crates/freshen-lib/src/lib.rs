@@ -28,6 +28,7 @@ pub mod locale;
 pub mod lock;
 pub mod macos_updates;
 mod network;
+pub mod nix;
 pub mod options;
 pub mod output;
 pub mod package_manager;
