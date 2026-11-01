@@ -14,6 +14,7 @@ use crate::platform::Platform;
 use crate::process::{CommandSpec, NETWORK_RETRIES};
 use crate::registry::Registry;
 use crate::restart_needed;
+use crate::services_needing_restart;
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
 
 /// The dnf package manager step (falls back to `yum` when dnf is absent).
@@ -79,6 +80,23 @@ impl DnfStep {
             failures.push(StepError::run_from_process(DNF, &error));
         }
     }
+
+    /// After a successful upgrade, records the services that need a restart
+    /// (reported by `needs-restarting`) and whether a restart is required.
+    fn services_needing_restart(&self) {
+        let mut needed = false;
+        human!("needs-restarting");
+        if let Ok(output) = CommandSpec::new(NEEDS_RESTARTING).run() {
+            let services = parse_needs_restarting_services(output.stdout());
+            needed = !services.is_empty();
+            for service in services {
+                services_needing_restart::record(service);
+            }
+        }
+        if needed {
+            restart_needed::record();
+        }
+    }
 }
 
 impl Step for DnfStep {
@@ -119,8 +137,8 @@ impl Step for DnfStep {
             }
         }
 
-        if failures.is_empty() && dnf_restart_needed() {
-            restart_needed::record();
+        if failures.is_empty() {
+            self.services_needing_restart();
         }
         finish(failures)
     }
@@ -145,19 +163,25 @@ fn detect_dnf() -> Detection {
     }
 }
 
-/// Whether a restart is needed after the dnf upgrade.
-///
-/// `needs-restarting -r` (from `dnf-utils`) reports whether running services
-/// or the kernel itself require a reboot. It exits 0 when no restart is
-/// needed and 1 when one is. When the tool is not installed, or cannot be
-/// run, no restart is reported.
-fn dnf_restart_needed() -> bool {
-    if !command_exists("needs-restarting") {
-        return false;
-    }
-    match CommandSpec::new("needs-restarting").args(["-r"]).run() {
-        Ok(_) => false, // exit 0: no restart needed
-        Err(crate::process::ProcessError::Failed { status, .. }) => !status.success(), // non-zero: restart needed
-        Err(_) => false, // could not run: assume no restart
-    }
+/// `needs-restarting` (from `dnf-utils`) reports which running services need a
+/// restart after a dnf/yum upgrade. It lists one service per line when run
+/// without `-r`. When the tool is not installed, or cannot be run, no services
+/// are reported.
+const NEEDS_RESTARTING: &str = "needs-restarting";
+
+/// Parses the output of `needs-restarting` into the names of services that need
+/// a restart. Each non-empty, non-header line is treated as a service name.
+fn parse_needs_restarting_services(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter(|line| !line.contains("PID") && !line.contains("Service"))
+        .filter(|line| {
+            !line
+                .chars()
+                .all(|c| c == '-' || c == '+' || c == '|' || c.is_whitespace())
+        })
+        .map(ToOwned::to_owned)
+        .collect()
 }
