@@ -729,9 +729,24 @@ impl<'a> Runner<'a> {
     /// A step the configuration file disables is planned as skipped, with the
     /// reason [`SkipReason::Disabled`], so the summary names it instead of
     /// leaving the user wondering where the step went.
+    ///
+    /// `sudo` credentials are assumed available. Use [`Runner::with_options_and_sudo`]
+    /// to validate them once up front and skip steps that need root when they
+    /// are not.
     pub fn with_options(
         steps: impl IntoIterator<Item = &'a dyn Step>,
         options: RunOptions,
+    ) -> Self {
+        Self::with_options_and_sudo(steps, options, true)
+    }
+
+    /// Like [`Runner::with_options`] but takes an explicit `sudo_available`
+    /// flag, validated once up front. Steps that need root are skipped with
+    /// [`SkipReason::NeedsSudo`] when `sudo` credentials are not available.
+    pub fn with_options_and_sudo(
+        steps: impl IntoIterator<Item = &'a dyn Step>,
+        options: RunOptions,
+        sudo_available: bool,
     ) -> Self {
         let selection = options.selection();
         let mut planned = Vec::new();
@@ -761,6 +776,7 @@ impl<'a> Runner<'a> {
                 continue;
             }
 
+            let needs_sudo = step.needs_root() && !sudo_available;
             let conflict = planned
                 .iter()
                 .copied()
@@ -775,6 +791,10 @@ impl<'a> Runner<'a> {
                 Some(earlier) => planned.push(PlannedStep::Skip {
                     step,
                     reason: SkipReason::Conflict(earlier),
+                }),
+                None if needs_sudo => planned.push(PlannedStep::Skip {
+                    step,
+                    reason: SkipReason::NeedsSudo,
                 }),
                 None => planned.push(PlannedStep::Run(step)),
             }
@@ -1240,6 +1260,7 @@ mod tests {
         sleep: Duration,
         check_sleep: Duration,
         interrupt_on_run: bool,
+        needs_root: bool,
         calls: Arc<Calls>,
     }
 
@@ -1261,6 +1282,7 @@ mod tests {
                 sleep: Duration::ZERO,
                 check_sleep: Duration::ZERO,
                 interrupt_on_run: false,
+                needs_root: false,
                 calls: Arc::new(Calls::default()),
             }
         }
@@ -1334,6 +1356,11 @@ mod tests {
 
         fn interrupt_on_run(mut self) -> Self {
             self.interrupt_on_run = true;
+            self
+        }
+
+        fn needs_root(mut self, value: bool) -> Self {
+            self.needs_root = value;
             self
         }
 
@@ -1412,6 +1439,10 @@ mod tests {
 
         fn platforms(&self) -> &'static [Platform] {
             &Platform::ALL
+        }
+
+        fn needs_root(&self) -> bool {
+            self.needs_root
         }
     }
 
@@ -1747,6 +1778,87 @@ mod tests {
         assert_eq!(later_calls.detect.load(Ordering::SeqCst), 0);
         assert_eq!(later_calls.run.load(Ordering::SeqCst), 0);
         assert_eq!(later_calls.cleanup.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_step_that_needs_root_is_skipped_without_sudo() {
+        let step = FakeStep::new("apt", "apt").needs_root(true);
+        let calls = step.calls();
+
+        let summary =
+            Runner::with_options_and_sudo([&step as &dyn Step], RunOptions::new(), false).run();
+
+        let result = &summary.steps()[0];
+        assert_eq!(result.status(), StepStatus::Skipped);
+        assert_eq!(result.skip_reason(), Some(SkipReason::NeedsSudo));
+        assert_eq!(result.error(), None);
+        assert_eq!(summary.skipped_count(), 1);
+        assert_eq!(summary.ok_count(), 0);
+        assert_eq!(summary.failed_count(), 0);
+        assert_exit_code(summary.exit_code(), ExitCode::SUCCESS);
+        assert!(summary.to_string().contains("needs sudo"));
+
+        assert_eq!(calls.detect.load(Ordering::SeqCst), 0);
+        assert_eq!(calls.run.load(Ordering::SeqCst), 0);
+        assert_eq!(calls.cleanup.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_step_that_needs_root_runs_when_sudo_is_available() {
+        let step = FakeStep::new("apt", "apt").needs_root(true);
+        let calls = step.calls();
+
+        let summary =
+            Runner::with_options_and_sudo([&step as &dyn Step], RunOptions::new(), true).run();
+
+        let result = &summary.steps()[0];
+        assert_eq!(result.status(), StepStatus::Ok);
+        assert_eq!(result.skip_reason(), None);
+        assert_eq!(summary.ok_count(), 1);
+        assert_eq!(summary.failed_count(), 0);
+        assert_exit_code(summary.exit_code(), ExitCode::SUCCESS);
+
+        assert_eq!(calls.detect.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.run.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.cleanup.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_step_that_does_not_need_root_runs_without_sudo() {
+        let step = FakeStep::new("uv", "uv");
+        let calls = step.calls();
+
+        let summary =
+            Runner::with_options_and_sudo([&step as &dyn Step], RunOptions::new(), false).run();
+
+        let result = &summary.steps()[0];
+        assert_eq!(result.status(), StepStatus::Ok);
+        assert_eq!(result.skip_reason(), None);
+        assert_eq!(summary.ok_count(), 1);
+
+        assert_eq!(calls.detect.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.run.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.cleanup.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn needs_root_steps_are_skipped_in_check_mode_without_sudo() {
+        let step = FakeStep::new("apt", "apt").needs_root(true);
+        let calls = step.calls();
+
+        let summary =
+            Runner::with_options_and_sudo([&step as &dyn Step], RunOptions::new(), false).check();
+
+        assert_eq!(summary.steps()[0].status(), CheckStatus::Skipped);
+        assert_eq!(
+            summary.steps()[0].skip_reason(),
+            Some(SkipReason::NeedsSudo)
+        );
+        assert_eq!(summary.skipped_count(), 1);
+        assert_exit_code(summary.exit_code(), ExitCode::SUCCESS);
+
+        assert_eq!(calls.detect.load(Ordering::SeqCst), 0);
+        assert_eq!(calls.check.load(Ordering::SeqCst), 0);
     }
 
     #[test]

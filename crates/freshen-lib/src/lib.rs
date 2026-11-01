@@ -52,6 +52,7 @@ pub mod skipped_items;
 pub mod snap;
 pub mod snapshot;
 pub mod step;
+pub mod sudo;
 pub mod system;
 pub mod tooling;
 pub mod warnings;

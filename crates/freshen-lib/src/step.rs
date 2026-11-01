@@ -65,6 +65,9 @@ pub enum SkipReason {
     RegistryUnreachable,
     /// The account the step manages is not signed in to its service.
     NotSignedIn,
+    /// The step needs root privileges but `sudo` credentials could not be
+    /// obtained, so it is skipped instead of failing.
+    NeedsSudo,
     /// The configuration file the step works with does not exist.
     ///
     /// The step is skipped with this reason instead of failing, for example
@@ -88,6 +91,7 @@ impl SkipReason {
             Self::PrerequisiteDisabled(_) => "prerequisite disabled",
             Self::RegistryUnreachable => "registry unreachable",
             Self::NotSignedIn => "not signed in",
+            Self::NeedsSudo => "needs sudo",
             Self::MissingConfiguration => "no configuration file found",
             Self::Interrupted => "interrupted before it started",
         }
@@ -461,6 +465,18 @@ pub trait Step: Sync {
     /// The registry filters out steps that do not list the platform of the
     /// current run, so they are never detected, checked or run.
     fn platforms(&self) -> &'static [Platform];
+
+    /// Returns `true` when the step needs root privileges and therefore
+    /// requires `sudo` credentials to run.
+    ///
+    /// The default is `false`; steps that modify the system (for example
+    /// package managers on Linux) override it to return `true`. The runner
+    /// validates `sudo` once up front and skips steps that need root when the
+    /// credentials cannot be obtained, reporting [`SkipReason::NeedsSudo`].
+    #[must_use]
+    fn needs_root(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
@@ -616,6 +632,7 @@ mod tests {
     #[test]
     fn a_skip_reason_names_the_reason_in_one_line() {
         assert_eq!(SkipReason::NotSignedIn.to_string(), "not signed in");
+        assert_eq!(SkipReason::NeedsSudo.to_string(), "needs sudo");
         assert_eq!(
             SkipReason::Conflict("brew").to_string(),
             "conflicts with `brew`"
