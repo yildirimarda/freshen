@@ -4,6 +4,7 @@
 //! Every step of a run lives here; the `freshen` binary crate is a thin CLI
 //! wrapper around this library. One module per step.
 
+pub mod apk;
 pub mod apps;
 pub mod appstore;
 pub mod apt;

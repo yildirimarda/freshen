@@ -352,6 +352,16 @@ pub fn zypper_restart_transcript() -> Vec<&'static str> {
     zypper_restart_steps().to_vec()
 }
 
+/// Named insertion: the apk update and upgrade steps.
+pub fn apk_steps() -> &'static [&'static str] {
+    &["apk update", "apk upgrade"]
+}
+
+/// Named insertion: full apk transcript (update and upgrade).
+pub fn apk_transcript() -> Vec<&'static str> {
+    apk_steps().to_vec()
+}
+
 /// Named insertion: the pacman cleanup steps (with `--cleanup`).
 pub fn pacman_cleanup_steps() -> &'static [&'static str] {
     &[
