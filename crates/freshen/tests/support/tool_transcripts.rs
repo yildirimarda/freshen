@@ -408,6 +408,16 @@ pub fn aur_paru_transcript() -> Vec<&'static str> {
     aur_paru_steps().to_vec()
 }
 
+/// Named insertion: the Flatpak update step.
+pub fn flatpak_steps() -> &'static [&'static str] {
+    &["flatpak update -y"]
+}
+
+/// Named insertion: full Flatpak transcript (update).
+pub fn flatpak_transcript() -> Vec<&'static str> {
+    flatpak_steps().to_vec()
+}
+
 /// Named insertion: probe stub transcript.
 pub fn probe_transcript() -> Vec<&'static str> {
     let mut t = Vec::new();
