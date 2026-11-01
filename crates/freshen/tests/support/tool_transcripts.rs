@@ -448,6 +448,16 @@ pub fn nix_transcript() -> Vec<&'static str> {
     nix_steps().to_vec()
 }
 
+/// Named insertion: the Nix profile upgrade step.
+pub fn nix_profile_steps() -> &'static [&'static str] {
+    &["nix profile upgrade --all"]
+}
+
+/// Named insertion: full Nix transcript (profile upgrade).
+pub fn nix_profile_transcript() -> Vec<&'static str> {
+    nix_profile_steps().to_vec()
+}
+
 /// Named insertion: probe stub transcript.
 pub fn probe_transcript() -> Vec<&'static str> {
     let mut t = Vec::new();
