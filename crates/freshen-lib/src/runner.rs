@@ -743,9 +743,11 @@ impl<'a> Runner<'a> {
     /// [`SkipReason::NeedsSudo`] when `sudo` credentials are not available.
     ///
     /// `privilege` is the effective user of the process. When it is elevated
-    /// (root), user-level steps ([`Step::is_user_level`]) are skipped with
-    /// [`SkipReason::RunningAsRoot`] instead of running, so they never install
-    /// packages into root's environment.
+    /// (root on Unix), user-level steps ([`Step::is_user_level`]) are skipped
+    /// with [`SkipReason::RunningAsRoot`] instead of running, so they never
+    /// install packages into root's environment. On platforms without a root
+    /// user (Windows) an elevated administrator is not root, so user-level
+    /// steps run normally there.
     pub fn with_options_and_sudo(
         steps: impl IntoIterator<Item = &'a dyn Step>,
         options: RunOptions,
@@ -781,7 +783,9 @@ impl<'a> Runner<'a> {
             }
 
             let needs_sudo = step.needs_root() && !sudo_available;
-            let refused_as_root = privilege.is_elevated() && step.is_user_level();
+            // `root` is a Unix concept: on Windows there is no root user, so an
+            // elevated administrator is not refused for user-level steps.
+            let refused_as_root = cfg!(unix) && privilege.is_elevated() && step.is_user_level();
             let conflict = planned
                 .iter()
                 .copied()
@@ -1902,6 +1906,7 @@ mod tests {
         assert_eq!(calls.check.load(Ordering::SeqCst), 0);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_user_level_step_is_refused_when_running_as_root() {
         let step = FakeStep::new("uv", "uv").user_level();
@@ -1955,6 +1960,7 @@ mod tests {
         assert_eq!(calls.cleanup.load(Ordering::SeqCst), 1);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_user_level_step_is_refused_in_check_mode_when_running_as_root() {
         let step = FakeStep::new("uv", "uv").user_level();
