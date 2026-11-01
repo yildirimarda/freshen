@@ -41,6 +41,7 @@ pub mod restart_needed;
 pub mod restarted_services;
 pub mod restored_windows;
 pub mod runner;
+pub mod services_needing_restart;
 pub mod signals;
 pub mod skipped_items;
 pub mod snapshot;

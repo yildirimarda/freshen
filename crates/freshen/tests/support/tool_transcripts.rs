@@ -341,6 +341,17 @@ pub fn zypper_transcript() -> Vec<&'static str> {
     zypper_steps().to_vec()
 }
 
+/// Named insertion: the zypper refresh, update and `ps -s` restart-reporting
+/// steps.
+pub fn zypper_restart_steps() -> &'static [&'static str] {
+    &["zypper refresh", "zypper update -y", "zypper ps -s"]
+}
+
+/// Named insertion: full zypper transcript including service restart reporting.
+pub fn zypper_restart_transcript() -> Vec<&'static str> {
+    zypper_restart_steps().to_vec()
+}
+
 /// Named insertion: the pacman cleanup steps (with `--cleanup`).
 pub fn pacman_cleanup_steps() -> &'static [&'static str] {
     &[
