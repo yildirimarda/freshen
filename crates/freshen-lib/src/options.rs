@@ -213,6 +213,7 @@ pub struct RunOptions {
     force_kill: bool,
     cleanup: bool,
     install_macos_updates: bool,
+    install_firmware_updates: bool,
     selection: StepSelection,
     preflight: PreflightConfig,
     package_manager: PackageManagerConfig,
@@ -267,6 +268,14 @@ impl RunOptions {
     #[must_use]
     pub fn with_install_macos_updates(mut self, install: bool) -> Self {
         self.install_macos_updates = install;
+        self
+    }
+
+    /// Sets `--install-firmware-updates`: install the available firmware
+    /// updates instead of only reporting them.
+    #[must_use]
+    pub fn with_install_firmware_updates(mut self, install: bool) -> Self {
+        self.install_firmware_updates = install;
         self
     }
 
@@ -390,6 +399,16 @@ impl RunOptions {
     #[must_use]
     pub fn install_macos_updates(&self) -> bool {
         self.install_macos_updates
+    }
+
+    /// Returns `true` when `--install-firmware-updates` asks for the available
+    /// firmware updates to be installed.
+    ///
+    /// The firmware updates are only reported without this flag, because
+    /// installing them needs administrator rights and can restart the machine.
+    #[must_use]
+    pub fn install_firmware_updates(&self) -> bool {
+        self.install_firmware_updates
     }
 
     /// The `--only`/`--skip` selection.
