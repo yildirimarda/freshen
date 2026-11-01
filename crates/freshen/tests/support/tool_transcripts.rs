@@ -458,6 +458,16 @@ pub fn nix_profile_transcript() -> Vec<&'static str> {
     nix_profile_steps().to_vec()
 }
 
+/// Named insertion: the home-manager switch step.
+pub fn home_manager_steps() -> &'static [&'static str] {
+    &["home-manager switch"]
+}
+
+/// Named insertion: full home-manager transcript (switch).
+pub fn home_manager_transcript() -> Vec<&'static str> {
+    home_manager_steps().to_vec()
+}
+
 /// Named insertion: probe stub transcript.
 pub fn probe_transcript() -> Vec<&'static str> {
     let mut t = Vec::new();

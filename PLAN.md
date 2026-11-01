@@ -216,7 +216,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Report a held snap refresh window when snapd announces one, instead of showing the pending refresh as a failure, covered by recorded transcripts
 - [x] Add Nix channel updates (`nix-channel --update`), skipped when the tool is absent, covered by recorded transcripts
 - [x] Add Nix profile upgrades (`nix profile upgrade --all`), skipped when the tool is absent, covered by recorded transcripts
-- [ ] Add `home-manager switch` as an opt-in step that runs only when a home-manager configuration is detected, covered by tests with injected paths
+- [x] Add `home-manager switch` as an opt-in step that runs only when a home-manager configuration is detected, covered by tests with injected paths
 - [ ] Add `nix-collect-garbage` as a cleanup step that runs only with `--cleanup` and reports the reclaimed space, covered by recorded transcripts
 - [ ] Add firmware updates through `fwupdmgr`, report-only by default and installable with an explicit flag, covered by recorded transcripts
 - [ ] Validate `sudo` credentials once up front for the steps that need root, and skip those steps with a "needs sudo" reason when the credentials cannot be obtained, covered by tests with an injected privilege state Platform guard: tests that need Unix-only fixtures (executable shell-script stubs, `chmod`, `PermissionsExt`) go in a `#[cfg(unix)]` submodule that also owns every import only they use, never the shared `use` block at the top of `mod tests`; otherwise `windows-latest` fails with `unused_imports` under `-D warnings`, which does not reproduce on Linux
