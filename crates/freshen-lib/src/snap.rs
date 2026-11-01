@@ -8,7 +8,7 @@ use crate::executable::command_exists;
 use crate::options::RunOptions;
 use crate::output::human;
 use crate::platform::Platform;
-use crate::process::{CommandSpec, NETWORK_RETRIES};
+use crate::process::{CommandSpec, ProcessError, NETWORK_RETRIES};
 use crate::registry::Registry;
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
 
@@ -35,6 +35,15 @@ impl SnapStep {
             .retry_transient_network(NETWORK_RETRIES)
             .run()
         {
+            let ProcessError::Failed { output, .. } = &error else {
+                failures.push(StepError::run_from_process(SNAP, &error));
+                return;
+            };
+            let text = format!("{} {}", output.stdout(), output.stderr());
+            if let Some(held) = held_refresh_window(&text) {
+                human!("snap refresh is {held}; skipping the refresh");
+                return;
+            }
             failures.push(StepError::run_from_process(SNAP, &error));
         }
     }
@@ -79,6 +88,18 @@ fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
     }
 }
 
+fn held_refresh_window(text: &str) -> Option<String> {
+    let lowered = text.to_ascii_lowercase();
+    if !lowered.contains("held") {
+        return None;
+    }
+    if let Some((_before, rest)) = lowered.split_once("held until") {
+        let until = rest.split_whitespace().next()?;
+        return Some(format!("held until {until}"));
+    }
+    Some("held".to_string())
+}
+
 /// Whether the `snap` binary is discoverable on `PATH`.
 fn detect_snap() -> Detection {
     if command_exists("snap") {
@@ -90,7 +111,7 @@ fn detect_snap() -> Detection {
 
 #[cfg(test)]
 mod tests {
-    use super::detect_snap;
+    use super::{detect_snap, held_refresh_window};
     use crate::step::Detection;
     use std::env;
     use std::fs;
@@ -159,5 +180,36 @@ mod tests {
     #[test]
     fn not_installed_is_not_installed() {
         assert!(!Detection::NotInstalled.is_installed());
+    }
+
+    #[test]
+    fn held_refresh_window_parses_held_until() {
+        let held =
+            held_refresh_window("error: a snap refresh is held until 2026-03-01T00:00:00+01:00");
+        assert_eq!(
+            held.as_deref(),
+            Some("held until 2026-03-01t00:00:00+01:00")
+        );
+    }
+
+    #[test]
+    fn held_refresh_window_reports_held_without_time() {
+        assert_eq!(
+            held_refresh_window("error: a snap refresh is held"),
+            Some("held".to_string())
+        );
+    }
+
+    #[test]
+    fn held_refresh_window_returns_none_when_not_held() {
+        assert!(held_refresh_window("All snaps up to date.").is_none());
+        assert!(held_refresh_window("error: network is unreachable").is_none());
+        assert!(held_refresh_window("").is_none());
+    }
+
+    #[test]
+    fn held_refresh_window_is_case_insensitive() {
+        let held = held_refresh_window("ERROR: A SNAP REFRESH IS HELD UNTIL 2026-01-01T00:00:00Z");
+        assert_eq!(held.as_deref(), Some("held until 2026-01-01t00:00:00z"));
     }
 }
