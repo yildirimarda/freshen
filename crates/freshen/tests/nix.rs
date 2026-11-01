@@ -247,3 +247,118 @@ fn a_failing_home_manager_switch_fails_the_step() {
         stdout(&output)
     );
 }
+
+fn run_collect_garbage_with_cleanup(tools: &StubTools) -> Output {
+    tools
+        .command()
+        .args(["--only", "nix-collect-garbage", "--cleanup"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
+}
+
+fn run_collect_garbage(tools: &StubTools) -> Output {
+    tools
+        .command()
+        .args(["--only", "nix-collect-garbage"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn nix_collect_garbage_collects_with_cleanup() {
+    let tools = StubTools::new(&["nix", "nix-collect-garbage"]);
+    tools.set_responses(
+        "nix-collect-garbage",
+        &[StubOutput::new()], // nix-collect-garbage
+    );
+
+    let output = run_collect_garbage_with_cleanup(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        support::nix_collect_garbage_transcript(),
+        "calls: {:?}",
+        tools.step_calls()
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn nix_collect_garbage_reports_reclaimed_space() {
+    let tools = StubTools::new(&["nix", "nix-collect-garbage"]);
+    tools.set_responses(
+        "nix-collect-garbage",
+        &[StubOutput::stdout("reclaimed 2.5GB\n")], // nix-collect-garbage
+    );
+
+    let output = run_collect_garbage_with_cleanup(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        support::nix_collect_garbage_transcript(),
+        "calls: {:?}",
+        tools.step_calls()
+    );
+    assert!(
+        stdout(&output).contains("reclaimed space: 2.5GB"),
+        "stdout: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn nix_collect_garbage_skips_without_cleanup_flag() {
+    let tools = StubTools::new(&["nix"]);
+    tools.set_responses("nix-collect-garbage", &[StubOutput::new()]);
+
+    let output = run_collect_garbage(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        Vec::<String>::new(),
+        "calls: {:?}",
+        tools.step_calls()
+    );
+    assert!(
+        stdout(&output).contains("skipped destructive cleanup"),
+        "summary: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn nix_collect_garbage_skips_when_nix_is_missing() {
+    let tools = StubTools::new(&["nix-collect-garbage"]);
+
+    let output = run_collect_garbage_with_cleanup(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(tools.step_calls().is_empty());
+    assert!(
+        stdout(&output).contains("0 ok, 0 planned, 1 skipped, 0 failed"),
+        "summary: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn check_reports_nix_collect_garbage_up_to_date_without_calling_anything() {
+    let tools = StubTools::new(&["nix"]);
+
+    let output = tools
+        .command()
+        .args(["--check", "--only", "nix-collect-garbage"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(tools.step_calls().is_empty());
+    assert_eq!(stdout(&output), "Everything is up to date.\n");
+}
