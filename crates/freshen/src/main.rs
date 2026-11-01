@@ -51,9 +51,8 @@ fn main() -> ExitCode {
 
     // Validate `sudo` credentials once up front so every step that needs root
     // can be skipped with a "needs sudo" reason instead of failing mid-run.
-    let sudo_available =
-        SudoState::from_privilege_and_probe(SystemInfo::detect().privilege(), &HostSudoProbe)
-            .available();
+    let privilege = SystemInfo::detect().privilege();
+    let sudo_available = SudoState::from_privilege_and_probe(privilege, &HostSudoProbe).available();
 
     let registry = build_registry(
         options
@@ -75,7 +74,8 @@ fn main() -> ExitCode {
     }
 
     if cli.check {
-        let summary = Runner::with_options_and_sudo(steps, options, sudo_available).check();
+        let summary =
+            Runner::with_options_and_sudo(steps, options, sudo_available, privilege).check();
         if cli.json {
             println!("{}", summary.to_json());
         } else if cli.markdown {
@@ -112,7 +112,7 @@ fn main() -> ExitCode {
         }
     }
 
-    let summary = Runner::with_options_and_sudo(steps, options, sudo_available).run();
+    let summary = Runner::with_options_and_sudo(steps, options, sudo_available, privilege).run();
     if cli.json {
         println!("{}", summary.to_json());
     } else if cli.markdown {
