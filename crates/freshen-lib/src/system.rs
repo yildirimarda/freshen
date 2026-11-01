@@ -907,6 +907,14 @@ impl SystemInfo {
         let platform = Platform::from_name(&os_name);
         let distro = probe.os_release().as_deref().and_then(Distro::parse);
         let environment = detect_environment(probe);
+        // The process table is only needed on Linux and Windows, where the
+        // terminal is discovered by walking the parent-process chain. On macOS
+        // the terminal is identified through environment markers only, so
+        // running `ps` here would be a wasted (and test-visible) call.
+        let processes = match platform {
+            Some(Platform::Linux | Platform::Windows) => probe.processes(),
+            _ => Vec::new(),
+        };
         let terminal = Terminal {
             stdin_is_terminal: probe.stdin_is_terminal(),
             stdout_is_terminal: probe.stdout_is_terminal(),
@@ -914,7 +922,7 @@ impl SystemInfo {
                 platform,
                 |key| probe.var(key),
                 probe.current_pid(),
-                &probe.processes(),
+                &processes,
             ),
         };
 

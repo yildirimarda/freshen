@@ -4,11 +4,13 @@
 use std::process::ExitCode;
 
 use clap::Parser;
+use freshen_lib::sudo::{HostSudoProbe, SudoState};
 use freshen_lib::{
     detect_active_runtime, exit, install_interrupt_handler, list_steps, wait_for_package_managers,
     ActiveContainerRuntime, AppLists, Config, ConfigEnvironment, ContainerRuntimeKind,
     HostContainerRuntimeProbe, HostPackageManagerProbe, HostPreflightProbe, PackageManagerConfig,
-    PackageManagerProbe, Platform, PreflightReport, Registry, RunLock, Runner, WaitOutcome,
+    PackageManagerProbe, Platform, PreflightReport, Registry, RunLock, Runner, SystemInfo,
+    WaitOutcome,
 };
 
 mod cli;
@@ -46,6 +48,13 @@ fn main() -> ExitCode {
     let options = options
         .with_app_lists(app_lists)
         .with_container_runtime(active_container_runtime(cli.container_runtime));
+
+    // Validate `sudo` credentials once up front so every step that needs root
+    // can be skipped with a "needs sudo" reason instead of failing mid-run.
+    let sudo_available =
+        SudoState::from_privilege_and_probe(SystemInfo::detect().privilege(), &HostSudoProbe)
+            .available();
+
     let registry = build_registry(
         options
             .container_runtime()
@@ -66,7 +75,7 @@ fn main() -> ExitCode {
     }
 
     if cli.check {
-        let summary = Runner::with_options(steps, options).check();
+        let summary = Runner::with_options_and_sudo(steps, options, sudo_available).check();
         if cli.json {
             println!("{}", summary.to_json());
         } else if cli.markdown {
@@ -103,7 +112,7 @@ fn main() -> ExitCode {
         }
     }
 
-    let summary = Runner::with_options(steps, options).run();
+    let summary = Runner::with_options_and_sudo(steps, options, sudo_available).run();
     if cli.json {
         println!("{}", summary.to_json());
     } else if cli.markdown {
