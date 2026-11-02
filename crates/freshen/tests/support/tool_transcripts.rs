@@ -291,6 +291,16 @@ pub fn dnf_cleanup_transcript() -> Vec<&'static str> {
     dnf_cleanup_steps().to_vec()
 }
 
+/// Named insertion: the rpm-ostree staged upgrade step.
+pub fn rpm_ostree_steps() -> &'static [&'static str] {
+    &["rpm-ostree upgrade"]
+}
+
+/// Named insertion: full rpm-ostree transcript (staged upgrade).
+pub fn rpm_ostree_transcript() -> Vec<&'static str> {
+    rpm_ostree_steps().to_vec()
+}
+
 /// Named insertion: the yum upgrade step (the dnf step's fallback when dnf is absent).
 pub fn yum_steps() -> &'static [&'static str] {
     &["yum update -y"]
