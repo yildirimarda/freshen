@@ -6,7 +6,7 @@
 //! after the run, capturing each service's previous enabled/running state
 //! first so it can be restored on error or interrupt.
 
-use crate::process::{CommandSpec, ProcessError};
+use crate::process::ProcessError;
 
 /// The captured enabled/running state of one service.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,6 +16,9 @@ pub(crate) struct ServiceState {
     /// Whether `systemctl is-active` reported the service as active.
     pub(crate) running: bool,
 }
+
+#[cfg(unix)]
+use crate::process::CommandSpec;
 
 #[cfg(unix)]
 impl ServiceState {
