@@ -3004,3 +3004,66 @@ fn updates_both_the_native_and_the_intel_homebrew_installation() {
         "calls: {calls:?}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn homebrew_is_detected_in_the_linuxbrew_prefix_on_list_steps() {
+    use std::fs::Permissions;
+    use std::os::unix::fs::PermissionsExt;
+
+    let tools = StubTools::new(&[]);
+    let linuxbrew = tools.home().join("home/linuxbrew/.linuxbrew");
+    let bin = linuxbrew.join("bin");
+    std::fs::create_dir_all(&bin)
+        .unwrap_or_else(|error| panic!("failed to create {}: {error}", bin.display()));
+    let program = bin.join("brew");
+    std::fs::write(&program, "#!/bin/sh\nexit 0\n")
+        .unwrap_or_else(|error| panic!("failed to write {}: {error}", program.display()));
+    std::fs::set_permissions(&program, Permissions::from_mode(0o755))
+        .unwrap_or_else(|error| panic!("failed to make {} executable: {error}", program.display()));
+
+    let output = tools
+        .command()
+        .env("FRESHEN_BREW_PREFIXES", &linuxbrew)
+        .arg("--list-steps")
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+
+    let text = stdout(&output);
+    let line = text
+        .lines()
+        .find(|line| line.contains("brew "))
+        .unwrap_or_else(|| panic!("step `brew` is not listed: {text}"));
+    assert!(
+        line.contains("installed") && !line.contains("skipped"),
+        "brew at the linuxbrew prefix must be detected: {line}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn homebrew_is_not_detected_when_the_linuxbrew_prefix_has_no_brew() {
+    let tools = StubTools::new(&[]);
+    let linuxbrew = tools.home().join("home/linuxbrew/.linuxbrew");
+
+    let output = tools
+        .command()
+        .env("FRESHEN_BREW_PREFIXES", &linuxbrew)
+        .arg("--list-steps")
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+
+    let text = stdout(&output);
+    let line = text
+        .lines()
+        .find(|line| line.contains("brew "))
+        .unwrap_or_else(|| panic!("step `brew` is not listed: {text}"));
+    assert!(
+        line.contains("not installed") || line.contains("skipped"),
+        "brew must not be detected without a binary in the prefix: {line}"
+    );
+}
