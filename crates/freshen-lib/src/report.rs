@@ -121,6 +121,7 @@ pub(crate) fn run_json(summary: &RunSummary) -> String {
         "was_interrupted": summary.was_interrupted(),
         "restore_failures": summary.restore_failures(),
         "restarted_services": summary.restarted_services(),
+        "restarted_apps": summary.restarted_apps(),
         "total_duration_ms": summary.total_duration().as_millis(),
         "snapshot": summary.snapshot_path().map(|path| path.display().to_string()),
         "rollback": rollback,
@@ -461,6 +462,15 @@ pub(crate) fn run_markdown(summary: &RunSummary) -> String {
         for service in summary.restarted_services() {
             out.push_str("- ");
             out.push_str(service);
+            out.push('\n');
+        }
+    }
+
+    if !summary.restarted_apps().is_empty() {
+        out.push_str("\n## Restarted applications\n\n");
+        for app in summary.restarted_apps() {
+            out.push_str("- ");
+            out.push_str(app);
             out.push('\n');
         }
     }

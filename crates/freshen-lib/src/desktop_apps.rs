@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
+use crate::process::CommandSpec;
+
 #[cfg(target_os = "linux")]
 use nix::sys::signal::{self, Signal};
 #[cfg(target_os = "linux")]
@@ -270,6 +272,45 @@ pub fn take_stopped_apps() -> Vec<DesktopApp> {
     STOPPED_DESKTOP_APPS.with(|apps| apps.borrow_mut().drain(..).collect())
 }
 
+/// The command used to restart a stopped desktop application.
+const GTK_LAUNCH: &str = "gtk-launch";
+
+/// Restarts every desktop application that was recorded as stopped before an
+/// upgrade, reusing the recorded snapshot of what was stopped.
+///
+/// Each application is launched with `gtk-launch <desktop-file-id>`, where the
+/// desktop-file-id is the basename of the `.desktop` file the application was
+/// discovered from. `gtk-launch` detaches the application and returns
+/// immediately, so an application that fails to launch is reported and the
+/// remaining applications are still launched.
+///
+/// Returns the applications that were restarted and the applications that
+/// failed to launch, in the order they were stopped.
+#[must_use]
+pub fn restart_stopped_apps() -> (Vec<DesktopApp>, Vec<String>) {
+    let apps = take_stopped_apps();
+    let mut restarted = Vec::new();
+    let mut failures = Vec::new();
+
+    for app in apps {
+        let id = app
+            .desktop_file()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        if id.is_empty() {
+            failures.push(format!("{}: no desktop file id", app.name()));
+            continue;
+        }
+        match CommandSpec::new(GTK_LAUNCH).args([id]).run() {
+            Ok(_) => restarted.push(app),
+            Err(error) => failures.push(format!("{}: {error}", app.name())),
+        }
+    }
+
+    (restarted, failures)
+}
+
 /// Parses a `.desktop` file into a [`DesktopApp`].
 ///
 /// Only the `Name=` and `Exec=` fields are read; everything else is ignored.
@@ -393,8 +434,9 @@ impl HostDesktopAppSystem {
 #[cfg(test)]
 mod tests {
     use super::{
-        find_running_apps, parse_desktop_file, parse_executable, record_stopped_app, stop_apps,
-        take_stopped_apps, DesktopApp, DesktopAppSystem, HostDesktopAppSystem, Signal, StopPolicy,
+        find_running_apps, parse_desktop_file, parse_executable, record_stopped_app,
+        restart_stopped_apps, stop_apps, take_stopped_apps, DesktopApp, DesktopAppSystem,
+        HostDesktopAppSystem, Signal, StopPolicy,
     };
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -682,6 +724,30 @@ mod tests {
         let stopped = take_stopped_apps();
         assert_eq!(stopped, [app]);
         assert!(take_stopped_apps().is_empty());
+    }
+
+    #[test]
+    fn restart_stopped_apps_with_nothing_recorded_returns_empty() {
+        let (restarted, failures) = restart_stopped_apps();
+        assert!(restarted.is_empty());
+        assert!(failures.is_empty());
+    }
+
+    #[test]
+    fn restart_stopped_apps_reuses_the_recorded_snapshot() {
+        let app = DesktopApp::new("Firefox", "firefox", PathBuf::from("/a/firefox.desktop"));
+        record_stopped_app(app.clone());
+
+        let (restarted, failures) = restart_stopped_apps();
+
+        // The snapshot is drained exactly once.
+        assert!(take_stopped_apps().is_empty());
+
+        // `gtk-launch` is not installed in the test environment, so the
+        // launch fails and the app is reported as a failure rather than
+        // restarted.
+        assert!(restarted.is_empty());
+        assert_eq!(failures.len(), 1);
     }
 
     #[test]
