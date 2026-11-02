@@ -227,7 +227,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Restart the applications that were stopped with `gtk-launch` after the upgrade, reusing the recorded snapshot of what was stopped, covered by stub-based tests Platform guard: tests that need Unix-only fixtures (executable shell-script stubs, `chmod`, `PermissionsExt`) go in a `#[cfg(unix)]` submodule that also owns every import only they use, never the shared `use` block at the top of `mod tests`; otherwise `windows-latest` fails with `unused_imports` under `-D warnings`, which does not reproduce on Linux
 - [x] Add a Linux container integration test matrix (Ubuntu, Fedora, Arch) in CI, proposed under `ci-proposals/` and documented in HUMAN-TASKS.md
 - [x] Detect Homebrew on Linux (`/home/linuxbrew/.linuxbrew`) in addition to the macOS prefixes and show the detection in `--list-steps`, covered by tests with injected paths
-- [ ] Skip cask handling on Linux, where Homebrew has no casks, instead of reporting missing cask support, covered by tests
+- [x] Skip cask handling on Linux, where Homebrew has no casks, instead of reporting missing cask support, covered by tests
 - [ ] Add `rpm-ostree upgrade` (Fedora Silverblue/Kinoite) as a staged upgrade that announces the pending reboot, covered by recorded transcripts
 - [ ] Add `bootc upgrade` as a staged upgrade that announces the pending reboot, covered by recorded transcripts
 - [ ] (Optional, low priority) Detect Termux on Android (`TERMUX_VERSION`, `PREFIX` under `/data/data/com.termux`) and treat it as a Linux variant that upgrades with `pkg update` and `pkg upgrade` without root, covered by tests with injected environment
