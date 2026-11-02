@@ -15,6 +15,8 @@ pub mod cleanup;
 pub mod config;
 pub mod containers;
 pub(crate) mod deadline;
+#[cfg(target_os = "linux")]
+pub mod desktop_apps;
 pub mod dnf;
 pub mod doctor_warnings;
 pub mod emerge;

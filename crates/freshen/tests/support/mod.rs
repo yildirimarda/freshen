@@ -131,6 +131,10 @@ impl StubTools {
             .env("FRESHEN_SKIP_PREFLIGHT", "1")
             .env("HOME", &self.dir)
             .env("FRESHEN_APP_ROOTS", self.dir.join("Applications"))
+            .env(
+                "FRESHEN_DESKTOP_DIRS",
+                self.dir.join("desktop-applications"),
+            )
             .env("FRESHEN_BREW_PREFIXES", self.dir.join("no-brew-prefix"))
             .env("USERPROFILE", &self.dir)
             .env("XDG_CONFIG_HOME", self.config_home())
