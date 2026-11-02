@@ -7,6 +7,8 @@
 //! on every machine; on macOS and Windows it is never detected.
 
 use crate::cleanup;
+#[cfg(target_os = "linux")]
+use crate::containers::{ContainerRuntime, NativeDockerRuntime};
 use crate::executable::command_exists;
 use crate::options::RunOptions;
 use crate::output::human;
@@ -22,6 +24,10 @@ pub const DNF: StepId = "dnf";
 
 /// dnf only runs on Linux.
 const DNF_PLATFORMS: [Platform; 1] = [Platform::Linux];
+
+/// Docker packages whose upgrade requires the Docker Engine to be restarted.
+#[cfg(target_os = "linux")]
+const DOCKER_PACKAGES: [&str; 2] = ["docker.io", "docker-ce"];
 
 /// Registers the dnf step, after the apt step.
 #[must_use]
@@ -121,8 +127,28 @@ impl Step for DnfStep {
     }
 
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
+        #[cfg(target_os = "linux")]
+        let docker_upgrading = {
+            let engine = NativeDockerRuntime::new();
+            engine.detect().is_installed() && docker_packages_are_pending() && engine.is_running()
+        };
+
+        #[cfg(target_os = "linux")]
+        if docker_upgrading {
+            if let Err(error) = NativeDockerRuntime::new().stop() {
+                return Err(StepError::run_from_process(DNF, &error));
+            }
+        }
+
         let mut failures = Vec::new();
         self.upgrade(&mut failures);
+
+        #[cfg(target_os = "linux")]
+        if docker_upgrading {
+            if let Err(error) = NativeDockerRuntime::new().start() {
+                failures.push(StepError::run_from_process(DNF, &error));
+            }
+        }
 
         if let Some(binary) = dnf_binary() {
             if let Err(error) = cleanup::run(
@@ -184,4 +210,22 @@ fn parse_needs_restarting_services(output: &str) -> Vec<String> {
         })
         .map(ToOwned::to_owned)
         .collect()
+}
+
+/// Whether `docker.io` or `docker-ce` has a pending upgrade, as reported by
+/// `dnf list --upgrades`. The package name may carry an architecture suffix
+/// (e.g. `docker-ce.x86_64`), so each line is matched by its prefix.
+#[cfg(target_os = "linux")]
+fn docker_packages_are_pending() -> bool {
+    let Ok(output) = CommandSpec::new("dnf")
+        .args(["list", "--upgrades"])
+        .neutral_locale()
+        .run()
+    else {
+        return false;
+    };
+    output.stdout().lines().any(|line| {
+        let trimmed = line.trim();
+        DOCKER_PACKAGES.iter().any(|pkg| trimmed.starts_with(*pkg))
+    })
 }

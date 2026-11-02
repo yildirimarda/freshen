@@ -8,6 +8,8 @@
 
 use crate::cleanup;
 #[cfg(target_os = "linux")]
+use crate::containers::{ContainerRuntime, NativeDockerRuntime};
+#[cfg(target_os = "linux")]
 use crate::desktop_apps::{self, HostDesktopAppSystem, StopPolicy};
 use crate::executable::command_exists;
 use crate::options::RunOptions;
@@ -19,6 +21,8 @@ use crate::restart_needed;
 use crate::services_needing_restart;
 use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
 use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::sync::Mutex;
 
 /// The apt package manager step.
 pub const APT: StepId = "apt";
@@ -26,15 +30,34 @@ pub const APT: StepId = "apt";
 /// apt only runs on Linux.
 const APT_PLATFORMS: [Platform; 1] = [Platform::Linux];
 
+/// Docker packages whose upgrade requires the Docker Engine to be restarted.
+#[cfg(target_os = "linux")]
+const DOCKER_PACKAGES: [&str; 2] = ["docker.io", "docker-ce"];
+
 /// Registers the apt step, after the Homebrew steps.
 #[must_use]
 pub fn register(registry: Registry) -> Registry {
-    registry.with(AptStep)
+    registry.with(AptStep::new())
 }
 
-struct AptStep;
+struct AptStep {
+    /// Package names reported as outdated by the last `check()` call. Used to
+    /// decide whether the Docker Engine needs to be stopped before the
+    /// upgrade, without running a second `apt-get -s upgrade`.
+    #[cfg(target_os = "linux")]
+    last_check_packages: Mutex<Vec<String>>,
+}
 
 impl AptStep {
+    fn new() -> Self {
+        #[cfg(target_os = "linux")]
+        let last_check_packages = Mutex::new(Vec::new());
+        Self {
+            #[cfg(target_os = "linux")]
+            last_check_packages,
+        }
+    }
+
     /// Runs `apt-get update` and then `apt-get upgrade -y`, collecting the
     /// first failure so both commands are attempted.
     fn upgrade(&self, failures: &mut Vec<StepError>) {
@@ -130,9 +153,17 @@ impl Step for AptStep {
             .neutral_locale()
             .run()
             .map_err(|error| StepError::check_from_process(APT, &error))?;
-        Ok(CheckReport::from_items(parse_apt_simulated_upgrade(
-            output.stdout(),
-        )))
+        let items = parse_apt_simulated_upgrade(output.stdout());
+        #[cfg(target_os = "linux")]
+        {
+            let names: Vec<String> = items.iter().map(|item| item.name().to_owned()).collect();
+            let mut guard = self
+                .last_check_packages
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            *guard = names;
+        }
+        Ok(CheckReport::from_items(items))
     }
 
     fn run(&self) -> Result<(), StepError> {
@@ -142,8 +173,37 @@ impl Step for AptStep {
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
         #[cfg(target_os = "linux")]
         self.stop_desktop_apps(options);
+
+        #[cfg(target_os = "linux")]
+        let docker_upgrading = {
+            let packages = self
+                .last_check_packages
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let engine = NativeDockerRuntime::new();
+            engine.detect().is_installed()
+                && packages
+                    .iter()
+                    .any(|name| DOCKER_PACKAGES.contains(&name.as_str()))
+                && engine.is_running()
+        };
+
+        #[cfg(target_os = "linux")]
+        if docker_upgrading {
+            if let Err(error) = NativeDockerRuntime::new().stop() {
+                return Err(StepError::run_from_process(APT, &error));
+            }
+        }
+
         let mut failures = Vec::new();
         self.upgrade(&mut failures);
+
+        #[cfg(target_os = "linux")]
+        if docker_upgrading {
+            if let Err(error) = NativeDockerRuntime::new().start() {
+                failures.push(StepError::run_from_process(APT, &error));
+            }
+        }
 
         if let Err(error) = cleanup::run(
             APT,
