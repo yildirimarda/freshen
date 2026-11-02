@@ -22,6 +22,8 @@ Pending proposals:
 
 - [ ] `ci-proposals/real-tools.yml` (read-only checks against real Homebrew, Chocolatey, winget and apt), once the agent has proposed it and the apt (Milestone 5) and winget/Chocolatey (Milestone 6) steps exist. The new jobs fail closed on a missing or skipped step, so applying the proposal before those steps land turns the workflow red by design.
 
+- [ ] `ci-proposals/linux-containers.yml` (stub-based integration tests on Ubuntu, Fedora and Arch containers), once the Linux package-manager steps (Milestone 5) exist. Apply with `git mv ci-proposals/linux-containers.yml .github/workflows/linux-containers.yml`, then commit and push.
+
 ## Accounts and credentials for Milestone 11 (distribution)
 
 The agent can prepare workflows and manifests, but only you can create these:

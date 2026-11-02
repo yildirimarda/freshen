@@ -1,0 +1,65 @@
+name: linux-containers
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-containers-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Run the stub-based integration tests inside containers for the three main
+  # Linux distributions freshen supports on Linux (Ubuntu, Fedora, Arch). The
+  # Linux steps (apt, dnf, pacman, ...) are Linux-only, so running them against
+  # stub package managers on each distribution proves the parsers and call
+  # transcripts work on the real distro userland instead of only on the Ubuntu
+  # runner the `rust` job uses. The tests never call the real brew, apt, dnf,
+  # pacman, uv or mise — they use temporary stub executables on PATH.
+  #
+  # The container image does not ship git, so build dependencies (including git
+  # for actions/checkout) are installed before the checkout step, using each
+  # distribution's own package manager.
+  linux-containers:
+    name: linux-containers (${{ matrix.container }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        container: [ubuntu:24.04, fedora:latest, archlinux:latest]
+    container:
+      image: ${{ matrix.container }}
+    steps:
+      - name: Install build dependencies (${{ matrix.container }})
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            apt-get update -y && apt-get install -y --no-install-recommends \
+              git build-essential pkg-config libssl-dev cmake perl curl ca-certificates
+          elif command -v dnf >/dev/null 2>&1; then
+            dnf install -y \
+              git gcc gcc-c++ make cmake perl openssl-devel pkgconfig curl ca-certificates
+          elif command -v pacman >/dev/null 2>&1; then
+            pacman -Sy --needed --noconfirm \
+              git base-devel cmake openssl pkgconf perl curl ca-certificates
+          else
+            echo "::error::no supported package manager found in ${{ matrix.container }}"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins the exact channel (with rustfmt + clippy); the
+      # dtolnay/rust-toolchain action reads it from the checkout.
+      - name: Install toolchain (rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          components: rustfmt, clippy
+
+      # `ring` (via rustls) compiles C code, so a C toolchain and OpenSSL
+      # headers (installed above) are required before the build.
+      - name: Stub-based integration tests
+        run: cargo test --all-features --tests
