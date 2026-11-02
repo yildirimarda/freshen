@@ -412,6 +412,7 @@ pub struct RunSummary {
     interrupted: bool,
     restore_failures: Vec<String>,
     container_runtime: Option<ActiveContainerRuntime>,
+    restarted_services: Vec<String>,
 }
 
 impl RunSummary {
@@ -423,6 +424,7 @@ impl RunSummary {
             interrupted: false,
             restore_failures: Vec::new(),
             container_runtime: None,
+            restarted_services: Vec::new(),
         }
     }
 
@@ -448,6 +450,11 @@ impl RunSummary {
 
     fn with_container_runtime(mut self, runtime: Option<ActiveContainerRuntime>) -> Self {
         self.container_runtime = runtime;
+        self
+    }
+
+    fn with_restarted_services(mut self, services: Vec<String>) -> Self {
+        self.restarted_services = services;
         self
     }
 
@@ -518,6 +525,12 @@ impl RunSummary {
     #[must_use]
     pub fn container_runtime(&self) -> Option<&ActiveContainerRuntime> {
         self.container_runtime.as_ref()
+    }
+
+    /// The services that were restarted by this run, in restart order.
+    #[must_use]
+    pub fn restarted_services(&self) -> &[String] {
+        &self.restarted_services
     }
 
     /// Returns `true` when at least one step failed or timed out.
@@ -594,6 +607,13 @@ impl fmt::Display for RunSummary {
             self.interrupted_count(),
             format_duration(self.total_duration())
         )?;
+        if !self.restarted_services.is_empty() {
+            writeln!(
+                f,
+                "Restarted services: {}",
+                self.restarted_services.join(", ")
+            )?;
+        }
         for result in &self.steps {
             write!(
                 f,
@@ -909,7 +929,23 @@ impl<'a> Runner<'a> {
             results.push(result);
         }
 
+        let mut restarted_services = Vec::new();
         let mut restore_failures = Vec::new();
+        if !interrupted && !timed_out && self.options.restart_services() {
+            let services: Vec<String> = results
+                .iter()
+                .flat_map(|result| result.services_needing_restart().iter().cloned())
+                .collect();
+            if !services.is_empty() {
+                eprintln!("freshen: restarting {} service(s)", services.len());
+                let outcome =
+                    crate::service_restart::restart_detected_services(&services, self.interrupt);
+                interrupted = outcome.interrupted;
+                restore_failures.extend(outcome.failures);
+                restarted_services = outcome.restarted;
+            }
+        }
+
         if interrupted || timed_out {
             if interrupted {
                 eprintln!("freshen: interrupted; restoring everything that was stopped");
@@ -938,6 +974,7 @@ impl<'a> Runner<'a> {
             .with_interrupted(interrupted)
             .with_restore_failures(restore_failures)
             .with_container_runtime(self.options.container_runtime().cloned())
+            .with_restarted_services(restarted_services)
     }
 
     /// Detects every step and asks each installed one what is outdated,
