@@ -162,6 +162,7 @@ fn build_registry(runtime: Option<ContainerRuntimeKind>) -> Registry {
     registry = freshen_lib::pacman::register(registry);
     registry = freshen_lib::dnf::register(registry);
     registry = freshen_lib::apt::register(registry);
+    registry = freshen_lib::termux::register(registry);
     registry = freshen_lib::rpm_ostree::register(registry);
     registry = freshen_lib::bootc::register(registry);
     registry = freshen_lib::flatpak::register(registry);
