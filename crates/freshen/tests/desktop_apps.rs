@@ -14,12 +14,41 @@
 
 mod support;
 
-use std::process::Output;
+use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use support::{StubOutput, StubTools};
+use support::{retry_text_file_busy, StubOutput, StubTools};
+
+/// A unique id for the `sleep` process each test starts, so parallel tests do
+/// not collide when matching processes by executable name in `/proc`.
+static SLEEP_ID: AtomicU64 = AtomicU64::new(0);
+
+/// Locates the system `sleep` binary so it can be copied under a unique name.
+fn locate_sleep_binary() -> PathBuf {
+    if let Ok(path) = env::var("PATH") {
+        for dir in env::split_paths(&path) {
+            let candidate = dir.join("sleep");
+            if is_executable_file(&candidate) {
+                return candidate;
+            }
+        }
+    }
+    PathBuf::from("/usr/bin/sleep")
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path)
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
 
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
@@ -47,11 +76,20 @@ mod unix {
 /// Returns the application process, which the caller reaps while freshen runs
 /// (see [`run_with_stopped_app`]) so freshen observes it as stopped.
 fn stop_a_desktop_application(tools: &StubTools) -> std::process::Child {
-    // A running desktop application whose package is about to be upgraded.
-    let sleep = std::process::Command::new("sleep")
-        .arg("30")
-        .spawn()
-        .unwrap_or_else(|error| panic!("failed to spawn sleep: {error}"));
+    // Copy the system `sleep` binary under a unique name so the process table
+    // entry used to match the desktop application does not collide with other
+    // tests running in parallel.
+    let id = SLEEP_ID.fetch_add(1, Ordering::Relaxed);
+    let unique_name = format!("freshen-sleep-{id}");
+    let sleep_path = tools.home().join(unique_name);
+    fs::copy(locate_sleep_binary(), &sleep_path)
+        .unwrap_or_else(|error| panic!("failed to copy sleep binary to {sleep_path:?}: {error}"));
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&sleep_path, fs::Permissions::from_mode(0o755))
+        .unwrap_or_else(|error| panic!("failed to make {sleep_path:?} executable: {error}"));
+
+    let sleep = retry_text_file_busy(|| Command::new(&sleep_path).arg("30").spawn())
+        .unwrap_or_else(|error| panic!("failed to spawn {sleep_path:?}: {error}"));
     thread::sleep(Duration::from_millis(100));
 
     let desktop_dir = tools.home().join("desktop-applications");
@@ -59,7 +97,7 @@ fn stop_a_desktop_application(tools: &StubTools) -> std::process::Child {
         .unwrap_or_else(|error| panic!("failed to create {desktop_dir:?}: {error}"));
     std::fs::write(
         desktop_dir.join("sleep.desktop"),
-        "Desktop Entry\nName=Sleep\nExec=sleep\n",
+        format!("Desktop Entry\nName=Sleep\nExec={}\n", sleep_path.display()),
     )
     .unwrap_or_else(|error| panic!("failed to write desktop file: {error}"));
 
