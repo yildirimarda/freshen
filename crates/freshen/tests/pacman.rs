@@ -264,3 +264,128 @@ fn pacman_skips_cleanup_without_cleanup_flag() {
         stdout(&output)
     );
 }
+
+fn index_of(calls: &[String], call: &str) -> usize {
+    calls
+        .iter()
+        .position(|recorded| recorded == call)
+        .unwrap_or_else(|| panic!("missing call `{call}` in {calls:?}"))
+}
+
+fn run_docker(tools: &StubTools, live_restore: &str) -> Output {
+    tools
+        .command()
+        .env("FRESHEN_PACMAN_CONFIG_DIR", tools.home().join("etc"))
+        .env("FRESHEN_LIVE_RESTORE", live_restore)
+        .args(["--container-runtime", "docker", "--only", "pacman"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
+}
+
+fn install_docker(tools: &StubTools) {
+    tools.set_script(
+        "docker",
+        r#"case "$*" in
+  "info --format {{.LiveRestoreEnabled}}")
+    printf '%s\n' "$FRESHEN_LIVE_RESTORE"
+    ;;
+esac"#,
+    );
+}
+
+fn install_systemctl(tools: &StubTools) {
+    tools.set_script("systemctl", "exit 0");
+}
+
+fn install_pacman_docker_upgrade(tools: &StubTools) {
+    tools.set_script(
+        "pacman",
+        r#"case "$*" in
+  "-Qu")
+    printf 'docker 27.1.1-1\n'
+    ;;
+  "-Syu --noconfirm")
+    exit 0
+    ;;
+esac"#,
+    );
+}
+
+fn install_pacman_no_docker_upgrade(tools: &StubTools) {
+    tools.set_script(
+        "pacman",
+        r#"case "$*" in
+  "-Qu")
+    printf 'curl 7.81.0-1\n'
+    ;;
+  "-Syu --noconfirm")
+    exit 0
+    ;;
+esac"#,
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn pacman_upgrading_docker_stops_and_restarts_docker_engine() {
+    let tools = StubTools::new(&["pacman", "docker", "systemctl"]);
+    install_pacman_docker_upgrade(&tools);
+    install_docker(&tools);
+    install_systemctl(&tools);
+
+    let output = run_docker(&tools, "false");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    let stop = index_of(&calls, "systemctl stop docker");
+    let upgrade = index_of(&calls, "pacman -Syu --noconfirm");
+    let restart = index_of(&calls, "systemctl restart docker");
+
+    assert!(stop < upgrade, "calls: {calls:?}");
+    assert!(upgrade < restart, "calls: {calls:?}");
+
+    let text = stdout(&output);
+    assert!(
+        text.contains(
+            "warning: Docker live-restore is off; restarting Docker will stop running containers."
+        ),
+        "output: {text}"
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn pacman_not_upgrading_docker_does_not_stop_docker_engine() {
+    let tools = StubTools::new(&["pacman", "docker", "systemctl"]);
+    install_pacman_no_docker_upgrade(&tools);
+    install_docker(&tools);
+    install_systemctl(&tools);
+
+    let output = run_docker(&tools, "false");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(
+        !calls.iter().any(|call| call == "systemctl stop docker"),
+        "calls: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call == "systemctl restart docker"),
+        "calls: {calls:?}"
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn pacman_upgrading_docker_with_live_restore_does_not_warn() {
+    let tools = StubTools::new(&["pacman", "docker", "systemctl"]);
+    install_pacman_docker_upgrade(&tools);
+    install_docker(&tools);
+    install_systemctl(&tools);
+
+    let output = run_docker(&tools, "true");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(!text.contains("live-restore is off"), "output: {text}");
+}

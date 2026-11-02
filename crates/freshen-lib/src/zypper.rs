@@ -6,6 +6,8 @@
 //! It is skipped entirely when zypper is absent, so it is safe to register on
 //! every machine; on macOS and Windows it is never detected.
 
+#[cfg(target_os = "linux")]
+use crate::containers::{ContainerRuntime, NativeDockerRuntime};
 use crate::executable::command_exists;
 use crate::options::RunOptions;
 use crate::output::human;
@@ -20,6 +22,10 @@ pub const ZYPPER: StepId = "zypper";
 
 /// zypper only runs on Linux.
 const ZYPPER_PLATFORMS: [Platform; 1] = [Platform::Linux];
+
+/// Docker packages whose upgrade requires the Docker Engine to be restarted.
+#[cfg(target_os = "linux")]
+const DOCKER_PACKAGES: [&str; 1] = ["docker"];
 
 /// Registers the zypper step.
 #[must_use]
@@ -51,6 +57,24 @@ impl ZypperStep {
             failures.push(StepError::run_from_process(ZYPPER, &error));
         }
     }
+
+    /// Whether `docker` has a pending upgrade, as reported by `zypper
+    /// list-updates`.
+    #[cfg(target_os = "linux")]
+    fn docker_packages_are_pending() -> bool {
+        let Ok(output) = CommandSpec::new("zypper")
+            .args(["list-updates"])
+            .neutral_locale()
+            .run()
+        else {
+            return false;
+        };
+        output.stdout().lines().any(|line| {
+            DOCKER_PACKAGES
+                .iter()
+                .any(|pkg| line.split_whitespace().any(|field| field == *pkg))
+        })
+    }
 }
 
 impl Step for ZypperStep {
@@ -75,8 +99,31 @@ impl Step for ZypperStep {
     }
 
     fn run_with_options(&self, _options: &RunOptions) -> Result<(), StepError> {
+        #[cfg(target_os = "linux")]
+        let docker_upgrading = {
+            let engine = NativeDockerRuntime::new();
+            engine.detect().is_installed()
+                && Self::docker_packages_are_pending()
+                && engine.is_running()
+        };
+
+        #[cfg(target_os = "linux")]
+        if docker_upgrading {
+            if let Err(error) = NativeDockerRuntime::new().stop() {
+                return Err(StepError::run_from_process(ZYPPER, &error));
+            }
+        }
+
         let mut failures = Vec::new();
         self.upgrade(&mut failures);
+
+        #[cfg(target_os = "linux")]
+        if docker_upgrading {
+            if let Err(error) = NativeDockerRuntime::new().start() {
+                failures.push(StepError::run_from_process(ZYPPER, &error));
+            }
+        }
+
         if failures.is_empty() {
             self.services_needing_restart();
         }
