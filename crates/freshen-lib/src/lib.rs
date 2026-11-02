@@ -59,6 +59,7 @@ pub mod snapshot;
 pub mod step;
 pub mod sudo;
 pub mod system;
+pub mod termux;
 pub mod tooling;
 pub mod warnings;
 pub mod xcode;
