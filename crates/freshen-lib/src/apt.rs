@@ -7,6 +7,8 @@
 //! it is never detected.
 
 use crate::cleanup;
+#[cfg(target_os = "linux")]
+use crate::desktop_apps::{self, HostDesktopAppSystem, StopPolicy};
 use crate::executable::command_exists;
 use crate::options::RunOptions;
 use crate::output::human;
@@ -72,6 +74,41 @@ impl AptStep {
             restart_needed::record();
         }
     }
+
+    /// Stops running desktop applications whose packages are about to be
+    /// upgraded, so the package manager does not replace files an app still
+    /// has mapped. Applications that do not quit gracefully are force-killed
+    /// after the stop timeout when `--force-kill` is set.
+    #[cfg(target_os = "linux")]
+    fn stop_desktop_apps(&self, options: &RunOptions) {
+        let system = HostDesktopAppSystem;
+        let apps = desktop_apps::find_running_apps(&system);
+        if apps.is_empty() {
+            return;
+        }
+
+        let policy = StopPolicy::from_env(options.force_kill());
+        let (stopped, still_running) = desktop_apps::stop_apps(&system, &apps, &policy);
+
+        for app in &stopped {
+            desktop_apps::record_stopped_app(app.clone());
+            human!("Stopped desktop application: {}", app.name());
+        }
+
+        for app in &still_running {
+            if policy.force_kill() {
+                human!(
+                    "warning: {} did not stop before the upgrade, even after force-killing",
+                    app.name()
+                );
+            } else {
+                human!(
+                    "warning: {} did not stop before the upgrade (use --force-kill to force)",
+                    app.name()
+                );
+            }
+        }
+    }
 }
 
 impl Step for AptStep {
@@ -103,6 +140,8 @@ impl Step for AptStep {
     }
 
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
+        #[cfg(target_os = "linux")]
+        self.stop_desktop_apps(options);
         let mut failures = Vec::new();
         self.upgrade(&mut failures);
 
