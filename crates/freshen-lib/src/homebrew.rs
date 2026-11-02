@@ -64,6 +64,9 @@ const HOMEBREW_PLATFORMS: [Platform; 2] = [Platform::Macos, Platform::Linux];
 /// Prefixes checked on macOS in addition to the `brew` on `PATH`.
 const MACOS_BREW_PREFIXES: [&str; 2] = ["/opt/homebrew", "/usr/local"];
 
+/// The prefix checked on Linux in addition to the `brew` on `PATH`.
+const LINUX_BREW_PREFIX: &str = "/home/linuxbrew/.linuxbrew";
+
 /// Environment variable that replaces the prefixes searched for Homebrew.
 ///
 /// A PATH-style list of prefixes, used by tests to point at temporary
@@ -171,8 +174,14 @@ fn brew_prefixes() -> Vec<PathBuf> {
     if let Some(value) = env::var_os(BREW_PREFIXES_ENV) {
         return env::split_paths(&value).collect();
     }
-    if Platform::current() == Some(Platform::Macos) {
-        return MACOS_BREW_PREFIXES.iter().map(PathBuf::from).collect();
+    match Platform::current() {
+        Some(Platform::Macos) => {
+            return MACOS_BREW_PREFIXES.iter().map(PathBuf::from).collect();
+        }
+        Some(Platform::Linux) => {
+            return vec![PathBuf::from(LINUX_BREW_PREFIX)];
+        }
+        _ => {}
     }
     Vec::new()
 }
@@ -3800,6 +3809,54 @@ mod tests {
             program.display().to_string()
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_linux_brew_prefix_is_found_without_being_on_path() {
+        let root = discovery_root("linuxbrew");
+        let linuxbrew = root.join("home/linuxbrew/.linuxbrew");
+        let program = executable_brew(&linuxbrew);
+
+        let installs = brew_installs_from(None, std::slice::from_ref(&linuxbrew), &Arch::X86_64);
+
+        assert_eq!(installs.len(), 1, "installs: {installs:?}");
+        assert_eq!(installs[0].program, program);
+        assert_eq!(installs[0].prefix, linuxbrew);
+        assert!(!installs[0].from_path);
+        assert_eq!(installs[0].arch, Arch::X86_64);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linuxbrew_prefix_is_not_added_twice_when_it_is_also_on_path() {
+        let root = discovery_root("linuxbrew-dedupe");
+        let linuxbrew = root.join("home/linuxbrew/.linuxbrew");
+        let program = executable_brew(&linuxbrew);
+
+        let installs = brew_installs_from(
+            Some(program.clone()),
+            std::slice::from_ref(&linuxbrew.clone()),
+            &Arch::X86_64,
+        );
+
+        assert_eq!(installs.len(), 1, "installs: {installs:?}");
+        assert_eq!(installs[0].program, program);
+        assert!(installs[0].from_path);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_linux_brew_prefix_maps_to_the_current_architecture() {
+        assert_eq!(
+            install_arch(Path::new("/home/linuxbrew/.linuxbrew"), &Arch::X86_64),
+            Arch::X86_64
+        );
+        assert_eq!(
+            install_arch(Path::new("/home/linuxbrew/.linuxbrew"), &Arch::Aarch64),
+            Arch::Aarch64
+        );
     }
 
     #[test]
