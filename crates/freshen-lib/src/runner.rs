@@ -413,6 +413,7 @@ pub struct RunSummary {
     restore_failures: Vec<String>,
     container_runtime: Option<ActiveContainerRuntime>,
     restarted_services: Vec<String>,
+    restarted_apps: Vec<String>,
 }
 
 impl RunSummary {
@@ -425,6 +426,7 @@ impl RunSummary {
             restore_failures: Vec::new(),
             container_runtime: None,
             restarted_services: Vec::new(),
+            restarted_apps: Vec::new(),
         }
     }
 
@@ -455,6 +457,11 @@ impl RunSummary {
 
     fn with_restarted_services(mut self, services: Vec<String>) -> Self {
         self.restarted_services = services;
+        self
+    }
+
+    fn with_restarted_apps(mut self, apps: Vec<String>) -> Self {
+        self.restarted_apps = apps;
         self
     }
 
@@ -531,6 +538,13 @@ impl RunSummary {
     #[must_use]
     pub fn restarted_services(&self) -> &[String] {
         &self.restarted_services
+    }
+
+    /// The desktop applications that were restarted by this run, in restart
+    /// order.
+    #[must_use]
+    pub fn restarted_apps(&self) -> &[String] {
+        &self.restarted_apps
     }
 
     /// Returns `true` when at least one step failed or timed out.
@@ -946,6 +960,19 @@ impl<'a> Runner<'a> {
             }
         }
 
+        let mut restarted_apps = Vec::new();
+        #[cfg(target_os = "linux")]
+        if !interrupted && !timed_out && self.options.restart_apps() {
+            let (restarted, failures) = crate::desktop_apps::restart_stopped_apps();
+            for failure in &failures {
+                eprintln!("freshen: warning: {failure}");
+            }
+            restarted_apps = restarted
+                .into_iter()
+                .map(|app| app.name().to_owned())
+                .collect();
+        }
+
         if interrupted || timed_out {
             if interrupted {
                 eprintln!("freshen: interrupted; restoring everything that was stopped");
@@ -975,6 +1002,7 @@ impl<'a> Runner<'a> {
             .with_restore_failures(restore_failures)
             .with_container_runtime(self.options.container_runtime().cloned())
             .with_restarted_services(restarted_services)
+            .with_restarted_apps(restarted_apps)
     }
 
     /// Detects every step and asks each installed one what is outdated,

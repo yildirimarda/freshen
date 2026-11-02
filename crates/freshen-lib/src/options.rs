@@ -226,6 +226,7 @@ pub struct RunOptions {
     app_lists: AppLists,
     container_runtime: Option<ActiveContainerRuntime>,
     restart_services: bool,
+    restart_apps: bool,
 }
 
 impl RunOptions {
@@ -377,6 +378,15 @@ impl RunOptions {
         self
     }
 
+    /// Sets `--restart-apps`: restart the desktop applications that were
+    /// stopped before an upgrade, reusing the recorded snapshot of what was
+    /// stopped.
+    #[must_use]
+    pub fn with_restart_apps(mut self, restart_apps: bool) -> Self {
+        self.restart_apps = restart_apps;
+        self
+    }
+
     /// Returns `true` when `--dry-run` is set.
     #[must_use]
     pub fn is_dry_run(&self) -> bool {
@@ -501,6 +511,13 @@ impl RunOptions {
     #[must_use]
     pub fn restart_services(&self) -> bool {
         self.restart_services
+    }
+
+    /// Returns `true` when `--restart-apps` asks for the desktop applications
+    /// that were stopped before an upgrade to be restarted after the run.
+    #[must_use]
+    pub fn restart_apps(&self) -> bool {
+        self.restart_apps
     }
 
     /// Builds the ordered list of steps this run should execute on `platform`.

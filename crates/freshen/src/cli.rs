@@ -93,6 +93,11 @@ pub struct Cli {
     #[arg(long)]
     pub restart_services: bool,
 
+    /// Restart the desktop applications that were stopped before an upgrade,
+    /// reusing the recorded snapshot of what was stopped (Linux only).
+    #[arg(long)]
+    pub restart_apps: bool,
+
     /// Keep this many pre-upgrade snapshot files (0 keeps every snapshot,
     /// default 10).
     #[arg(long, value_name = "COUNT")]
@@ -230,6 +235,7 @@ impl Cli {
             .with_install_macos_updates(self.install_macos_updates)
             .with_install_firmware_updates(self.install_firmware_updates)
             .with_restart_services(self.restart_services)
+            .with_restart_apps(self.restart_apps)
             .with_step_timeout(timeout(self.step_timeout.or(config.timeouts.step_seconds)))
             .with_global_timeout(timeout(self.timeout.or(config.timeouts.total_seconds)))
             .with_snapshot_retention(
@@ -313,6 +319,7 @@ mod tests {
         assert!(!options.install_macos_updates());
         assert!(!options.install_firmware_updates());
         assert!(!options.restart_services());
+        assert!(!options.restart_apps());
         assert_eq!(
             options.snapshot_retention(),
             freshen_lib::DEFAULT_SNAPSHOT_RETENTION
@@ -358,6 +365,7 @@ mod tests {
             "--install-macos-updates",
             "--install-firmware-updates",
             "--restart-services",
+            "--restart-apps",
             "--snapshot-retention",
             "3",
             "--step-timeout",
@@ -393,6 +401,7 @@ mod tests {
         assert!(options.install_macos_updates());
         assert!(options.install_firmware_updates());
         assert!(options.restart_services());
+        assert!(options.restart_apps());
         assert_eq!(options.snapshot_retention(), 3);
         assert_eq!(
             options.step_timeout(),
@@ -599,6 +608,7 @@ mod tests {
             "--install-macos-updates",
             "--install-firmware-updates",
             "--restart-services",
+            "--restart-apps",
             "--snapshot-retention",
             "--step-timeout",
             "--timeout",
