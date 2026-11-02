@@ -225,6 +225,7 @@ pub struct RunOptions {
     filters: ItemFilters,
     app_lists: AppLists,
     container_runtime: Option<ActiveContainerRuntime>,
+    restart_services: bool,
 }
 
 impl RunOptions {
@@ -367,6 +368,15 @@ impl RunOptions {
         self
     }
 
+    /// Sets `--restart-services`: restart the services that need a restart
+    /// after a step, restoring their previous enabled/running state on error or
+    /// interrupt.
+    #[must_use]
+    pub fn with_restart_services(mut self, restart_services: bool) -> Self {
+        self.restart_services = restart_services;
+        self
+    }
+
     /// Returns `true` when `--dry-run` is set.
     #[must_use]
     pub fn is_dry_run(&self) -> bool {
@@ -486,6 +496,13 @@ impl RunOptions {
         self.container_runtime.as_ref()
     }
 
+    /// Returns `true` when `--restart-services` asks for detected services to
+    /// be restarted after the run.
+    #[must_use]
+    pub fn restart_services(&self) -> bool {
+        self.restart_services
+    }
+
     /// Builds the ordered list of steps this run should execute on `platform`.
     ///
     /// Unknown ids in either flag are an error, and an `--only` id that is not
@@ -601,6 +618,8 @@ mod tests {
         assert!(!options.force_kill());
         assert!(!options.cleanup_enabled());
         assert!(!options.install_macos_updates());
+        assert!(!options.install_firmware_updates());
+        assert!(!options.restart_services());
         assert!(options.selection().is_empty());
         assert_eq!(options.step_timeout(), None);
         assert_eq!(options.global_timeout(), None);
