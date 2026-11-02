@@ -7,6 +7,7 @@
 //! it is never detected.
 
 use crate::cleanup;
+#[cfg(target_os = "linux")]
 use crate::desktop_apps::{self, HostDesktopAppSystem, StopPolicy};
 use crate::executable::command_exists;
 use crate::options::RunOptions;
@@ -78,6 +79,7 @@ impl AptStep {
     /// upgraded, so the package manager does not replace files an app still
     /// has mapped. Applications that do not quit gracefully are force-killed
     /// after the stop timeout when `--force-kill` is set.
+    #[cfg(target_os = "linux")]
     fn stop_desktop_apps(&self, options: &RunOptions) {
         let system = HostDesktopAppSystem;
         let apps = desktop_apps::find_running_apps(&system);
@@ -138,6 +140,7 @@ impl Step for AptStep {
     }
 
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
+        #[cfg(target_os = "linux")]
         self.stop_desktop_apps(options);
         let mut failures = Vec::new();
         self.upgrade(&mut failures);
