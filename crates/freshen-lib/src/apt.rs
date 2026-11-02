@@ -43,13 +43,17 @@ struct AptStep {
     /// Package names reported as outdated by the last `check()` call. Used to
     /// decide whether the Docker Engine needs to be stopped before the
     /// upgrade, without running a second `apt-get -s upgrade`.
+    #[cfg(target_os = "linux")]
     last_check_packages: Mutex<Vec<String>>,
 }
 
 impl AptStep {
     fn new() -> Self {
+        #[cfg(target_os = "linux")]
+        let last_check_packages = Mutex::new(Vec::new());
         Self {
-            last_check_packages: Mutex::new(Vec::new()),
+            #[cfg(target_os = "linux")]
+            last_check_packages,
         }
     }
 
