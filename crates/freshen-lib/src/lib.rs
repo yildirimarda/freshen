@@ -9,6 +9,7 @@ pub mod apps;
 pub mod appstore;
 pub mod apt;
 pub mod aur;
+pub mod bootc;
 pub mod bundle_cleanup_packages;
 pub mod check;
 pub mod cleanup;

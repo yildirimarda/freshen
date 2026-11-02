@@ -301,6 +301,16 @@ pub fn rpm_ostree_transcript() -> Vec<&'static str> {
     rpm_ostree_steps().to_vec()
 }
 
+/// Named insertion: the bootc staged upgrade step.
+pub fn bootc_steps() -> &'static [&'static str] {
+    &["bootc upgrade"]
+}
+
+/// Named insertion: full bootc transcript (staged upgrade).
+pub fn bootc_transcript() -> Vec<&'static str> {
+    bootc_steps().to_vec()
+}
+
 /// Named insertion: the yum upgrade step (the dnf step's fallback when dnf is absent).
 pub fn yum_steps() -> &'static [&'static str] {
     &["yum update -y"]
