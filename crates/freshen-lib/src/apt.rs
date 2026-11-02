@@ -21,6 +21,7 @@ use crate::restart_needed;
 use crate::services_needing_restart;
 use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
 use std::path::Path;
+#[cfg(target_os = "linux")]
 use std::sync::Mutex;
 
 /// The apt package manager step.
