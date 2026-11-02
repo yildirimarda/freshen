@@ -960,7 +960,10 @@ impl<'a> Runner<'a> {
             }
         }
 
+        #[cfg(target_os = "linux")]
         let mut restarted_apps = Vec::new();
+        #[cfg(not(target_os = "linux"))]
+        let restarted_apps = Vec::new();
         #[cfg(target_os = "linux")]
         if !interrupted && !timed_out && self.options.restart_apps() {
             let (restarted, failures) = crate::desktop_apps::restart_stopped_apps();
