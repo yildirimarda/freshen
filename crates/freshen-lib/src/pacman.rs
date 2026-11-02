@@ -7,6 +7,8 @@
 //! every machine; on macOS and Windows it is never detected.
 
 use crate::cleanup;
+#[cfg(target_os = "linux")]
+use crate::containers::{ContainerRuntime, NativeDockerRuntime};
 use crate::executable::command_exists;
 use crate::options::RunOptions;
 use crate::output::human;
@@ -21,6 +23,10 @@ pub const PACMAN: StepId = "pacman";
 
 /// pacman only runs on Linux.
 const PACMAN_PLATFORMS: [Platform; 1] = [Platform::Linux];
+
+/// Docker packages whose upgrade requires the Docker Engine to be restarted.
+#[cfg(target_os = "linux")]
+const DOCKER_PACKAGES: [&str; 1] = ["docker"];
 
 /// Registers the pacman step.
 #[must_use]
@@ -48,6 +54,24 @@ impl PacmanStep {
     fn cleanup(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
         self.clean_package_cache(options, failures);
         self.remove_orphans(options, failures);
+    }
+
+    /// Whether `docker` has a pending upgrade, as reported by `pacman -Qu`.
+    #[cfg(target_os = "linux")]
+    fn docker_packages_are_pending() -> bool {
+        let Ok(output) = CommandSpec::new("pacman")
+            .args(["-Qu"])
+            .neutral_locale()
+            .run()
+        else {
+            return false;
+        };
+        output.stdout().lines().any(|line| {
+            let mut fields = line.split_whitespace();
+            DOCKER_PACKAGES
+                .iter()
+                .any(|pkg| fields.next() == Some(*pkg))
+        })
     }
 
     /// Removes cached packages that are no longer installed and unused sync
@@ -125,8 +149,30 @@ impl Step for PacmanStep {
     }
 
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
+        #[cfg(target_os = "linux")]
+        let docker_upgrading = {
+            let engine = NativeDockerRuntime::new();
+            engine.detect().is_installed()
+                && Self::docker_packages_are_pending()
+                && engine.is_running()
+        };
+
+        #[cfg(target_os = "linux")]
+        if docker_upgrading {
+            if let Err(error) = NativeDockerRuntime::new().stop() {
+                return Err(StepError::run_from_process(PACMAN, &error));
+            }
+        }
+
         let mut failures = Vec::new();
         self.upgrade(&mut failures);
+
+        #[cfg(target_os = "linux")]
+        if docker_upgrading {
+            if let Err(error) = NativeDockerRuntime::new().start() {
+                failures.push(StepError::run_from_process(PACMAN, &error));
+            }
+        }
 
         // Report `.pacnew` and `.pacsave` files left behind by a successful
         // upgrade so the user knows which configuration files need merging.
