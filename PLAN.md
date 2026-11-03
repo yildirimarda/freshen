@@ -247,7 +247,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add `scoop cleanup *` as a cleanup step that runs only with `--cleanup`, covered by recorded transcripts
 - [x] Add `scoop cache rm *` as a cleanup step that runs only with `--cleanup`, covered by recorded transcripts
 - [x] Add Microsoft Store app updates through the Store command line or API where one is available, covered by recorded transcripts
-- [ ] Add Windows Update reporting through the PSWindowsUpdate module when it is installed, covered by recorded transcripts
+- [x] Add Windows Update reporting through the PSWindowsUpdate module when it is installed, covered by recorded transcripts
 - [ ] Fall back to `usoclient` for Windows Update detection when PSWindowsUpdate is missing, covered by recorded transcripts
 - [ ] Detect a pending Windows reboot from Windows Update and report it in the summary and the reports, covered by tests
 - [ ] Add `wsl --update` as an opt-in step, covered by recorded transcripts

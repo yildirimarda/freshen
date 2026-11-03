@@ -390,6 +390,26 @@ pub fn winget_transcript() -> Vec<&'static str> {
     t
 }
 
+/// Named insertion: the Windows Update detect step via PSWindowsUpdate.
+pub fn windows_update_detect() -> &'static [&'static str] {
+    &[
+        "pwsh -NoProfile -Command Get-Module -ListAvailable PSWindowsUpdate | Select-Object -ExpandProperty Name",
+    ]
+}
+
+/// Named insertion: the Windows Update check step via PSWindowsUpdate.
+pub fn windows_update_check() -> &'static [&'static str] {
+    &["pwsh -NoProfile -Command Import-Module PSWindowsUpdate; Get-WindowsUpdate | Select-Object Title, KB, Version | ConvertTo-Json"]
+}
+
+/// Named insertion: full Windows Update transcript (detect then check).
+pub fn windows_update_transcript() -> Vec<&'static str> {
+    let mut t = Vec::new();
+    t.extend_from_slice(windows_update_detect());
+    t.extend_from_slice(windows_update_check());
+    t
+}
+
 /// Named insertion: the Microsoft Store source update step.
 pub fn microsoft_store_source_update() -> &'static [&'static str] {
     &["winget --disable-interactivity source update"]
