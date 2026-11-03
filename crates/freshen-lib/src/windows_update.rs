@@ -218,13 +218,16 @@ mod tests {
                 .unwrap_or_else(|error| panic!("write {}: {error}", detect_file.display()));
             std::fs::write(&check_file, check_output.replace('\n', "\r\n"))
                 .unwrap_or_else(|error| panic!("write {}: {error}", check_file.display()));
+            // `%~3` is the PowerShell script argument (`-NoProfile -Command <script>`).
+            // It contains `|`, so it is only ever read inside quotes.
             let script = "@echo off\r\n\
-                 >>\"%FRESHEN_WINDOWS_UPDATE_LOG%\" echo powershell %*\r\n\
-                 echo \"%*\" | findstr /I /C:\"ListAvailable\" >nul && (\r\n\
+                 setlocal EnableDelayedExpansion\r\n\
+                 set \"script=%~3\"\r\n\
+                 if not \"!script:ListAvailable=!\"==\"!script!\" (\r\n\
                    type \"%~dp0detect-output.txt\"\r\n\
                    exit /b 0\r\n\
                  )\r\n\
-                 echo \"%*\" | findstr /I /C:\"Get-WindowsUpdate\" >nul && (\r\n\
+                 if not \"!script:Get-WindowsUpdate=!\"==\"!script!\" (\r\n\
                    type \"%~dp0check-output.txt\"\r\n\
                    exit /b 0\r\n\
                  )\r\n\
