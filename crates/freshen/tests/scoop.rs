@@ -10,7 +10,6 @@ mod support;
 
 use std::process::Output;
 
-use freshen_lib::scoop::SCOOP;
 use support::{StubOutput, StubTools};
 
 fn stdout(output: &Output) -> String {

@@ -307,9 +307,31 @@ mod tests {
 
     #[test]
     fn detect_reports_not_installed_when_scoop_is_absent() {
+        let dir = std::env::temp_dir().join(format!(
+            "freshen-scoop-absent-{pid}",
+            pid = std::process::id(),
+        ));
+        std::fs::create_dir_all(&dir).unwrap_or_else(|error| {
+            panic!("failed to create stub directory {}: {error}", dir.display())
+        });
+
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = std::env::var("PATH").ok();
+        std::env::set_var("PATH", &dir);
+
         let detection = ScoopStep
             .detect()
             .unwrap_or_else(|error| panic!("detect should succeed: {error}"));
+
+        if let Some(previous) = previous {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
         assert_eq!(detection, Detection::NotInstalled);
     }
 
