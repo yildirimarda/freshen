@@ -450,7 +450,9 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let previous = std::env::var("PATH").ok();
+        let previous_log = std::env::var("FRESHEN_WINGET_LOG").ok();
         std::env::set_var("PATH", &dir);
+        std::env::set_var("FRESHEN_WINGET_LOG", dir.join("calls.log"));
 
         let options = RunOptions::new().with_filters(
             ItemFilters::new().with_packages(NameFilter::new().with_exclude(["Git"])),
@@ -463,6 +465,11 @@ mod tests {
             std::env::set_var("PATH", previous);
         } else {
             std::env::remove_var("PATH");
+        }
+        if let Some(previous) = previous_log {
+            std::env::set_var("FRESHEN_WINGET_LOG", previous);
+        } else {
+            std::env::remove_var("FRESHEN_WINGET_LOG");
         }
         let _ = std::fs::remove_dir_all(&dir);
 
