@@ -316,13 +316,18 @@ pub fn sanitize_output(text: &str) -> String {
     for (index, character) in text.char_indices() {
         match character {
             '\n' => {
-                result.push_str(&strip_escape_sequences(&text[line_start..index]));
+                // A `\r\n` pair is a Windows line ending: the `\r` is not part
+                // of the line content.
+                let line = &text[line_start..index];
+                let line = line.strip_suffix('\r').unwrap_or(line);
+                result.push_str(&strip_escape_sequences(line));
                 result.push('\n');
                 line_start = index + 1;
             }
-            '\r' => {
-                // A carriage return rewrites the line: what came before it is
-                // replaced by what follows.
+            // A lone carriage return rewrites the line: what came before it is
+            // replaced by what follows. Before a `\n` it is a line ending,
+            // which the `\n` arm handles.
+            '\r' if text.as_bytes().get(index + 1) != Some(&b'\n') => {
                 line_start = index + 1;
             }
             _ => {}
@@ -1589,6 +1594,16 @@ mod tests {
         assert_eq!(super::sanitize_output("50%\r75%\r100%"), "100%");
         assert_eq!(super::sanitize_output("first\nsecond\n"), "first\nsecond\n");
         assert_eq!(super::sanitize_output("plain"), "plain");
+    }
+
+    #[test]
+    fn windows_line_endings_keep_the_line_content() {
+        assert_eq!(super::sanitize_output("a\r\nb\r\n"), "a\nb\n");
+        assert_eq!(super::sanitize_output("a\r\nb"), "a\nb");
+        assert_eq!(super::sanitize_output("\r\n"), "\n");
+        assert_eq!(super::sanitize_output("\r\n\r\n"), "\n\n");
+        assert_eq!(super::sanitize_output("5%\r9%\r\nd\r\n"), "9%\nd\n");
+        assert_eq!(super::sanitize_output("\u{1b}[1mA\u{1b}[0m\r\nB"), "A\nB");
     }
 
     #[cfg(unix)]
