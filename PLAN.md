@@ -241,7 +241,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Support `cmd.exe` shims as launching shells, with `cmd`-compatible quoting, covered by tests Platform guard: this code is Windows-only. Put it behind `#[cfg(windows)]` with its tests and imports inside the gated module, and keep parsers and decision logic platform-neutral so they are tested on every OS; otherwise Linux and macOS CI fail with `unused_imports`/`dead_code` under `-D warnings`
 - [x] Add winget detection (`winget --version`) and a read-only `check()` that parses `winget upgrade` output, so `--check` reports pending Windows updates, covered by recorded transcripts
 - [x] Add `winget source update` before the upgrade, so the package index is current, covered by recorded transcripts
-- [ ] Add the `winget upgrade --all --silent --accept-*` step and map its exit codes (`0`, update-not-applicable, other non-zero) to ok/skipped/failed, covered by recorded transcripts
+- [x] Add the `winget upgrade --all --silent --accept-*` step and map its exit codes (`0`, update-not-applicable, other non-zero) to ok/skipped/failed, covered by recorded transcripts
 - [ ] Honour winget pinned packages and the package exclusion list, showing held-back packages in `--list-steps` and the run summary, covered by tests
 - [ ] Add Scoop detection and the `scoop update` + `scoop update *` step, skipped when scoop is absent, covered by recorded transcripts
 - [ ] Add `scoop cleanup *` as a cleanup step that runs only with `--cleanup`, covered by recorded transcripts
