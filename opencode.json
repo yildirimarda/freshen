@@ -74,7 +74,13 @@
                 "cloudflare"
               ],
               "allow_fallbacks": true
+            },
+            "reasoning": {
+              "effort": "medium"
             }
+          },
+          "limit": {
+            "output": 64000
           }
         }
       }
@@ -104,13 +110,19 @@
           "name": "GLM 5.3",
           "tool_call": true,
           "reasoning": true,
-          "limit": { "context": 1000000, "output": 16384 }
+          "limit": {
+            "context": 1000000,
+            "output": 16384
+          }
         },
         "deepseek-ai/deepseek-v4.1-flash": {
           "name": "DeepSeek V4.1 Flash",
           "tool_call": true,
           "reasoning": true,
-          "limit": { "context": 1000000, "output": 16384 }
+          "limit": {
+            "context": 1000000,
+            "output": 16384
+          }
         }
       }
     }
