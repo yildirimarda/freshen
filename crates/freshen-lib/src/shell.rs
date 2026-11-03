@@ -78,25 +78,25 @@ mod windows {
 
         #[test]
         fn prefers_powershell_7_when_it_exists() {
-            let probe = |program| program == "pwsh";
+            let probe = |program: &str| program == "pwsh";
             assert_eq!(powershell_with(probe), Some(PowerShell::Pwsh));
         }
 
         #[test]
         fn falls_back_to_windows_powershell_51_when_pwsh_is_absent() {
-            let probe = |program| program == "powershell";
+            let probe = |program: &str| program == "powershell";
             assert_eq!(powershell_with(probe), Some(PowerShell::Legacy));
         }
 
         #[test]
         fn returns_none_when_neither_power_shell_exists() {
-            let probe = |_| false;
+            let probe = |_: &str| false;
             assert_eq!(powershell_with(probe), None);
         }
 
         #[test]
         fn chooses_powershell_7_when_both_exist() {
-            let probe = |_| true;
+            let probe = |_: &str| true;
             assert_eq!(powershell_with(probe), Some(PowerShell::Pwsh));
         }
     }
