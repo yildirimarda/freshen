@@ -250,6 +250,13 @@ mod tests {
 
         let previous_path = std::env::var("PATH").ok();
         let previous_log = std::env::var("FRESHEN_WINGET_LOG").ok();
+
+        // Serialize with the other tests that replace the global `PATH` (snap
+        // replaces it entirely) so this test's stub `winget` is not shadowed
+        // while `run()` spawns it twice.
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("PATH", &dir);
         std::env::set_var("FRESHEN_WINGET_LOG", &log);
 
