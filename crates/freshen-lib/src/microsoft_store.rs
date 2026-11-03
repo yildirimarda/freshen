@@ -15,6 +15,7 @@ use crate::output::human;
 use crate::platform::Platform;
 use crate::process::{CommandSpec, ProcessError};
 use crate::registry::Registry;
+use crate::skipped_items;
 use crate::step::{CheckReport, Detection, OutdatedItem, SkipReason, Step, StepError, StepId};
 
 /// The Microsoft Store step.
@@ -187,6 +188,7 @@ impl MicrosoftStoreStep {
                 to_upgrade.push(package.id.clone());
             } else {
                 human!("{}: held back (excluded)", package.name);
+                skipped_items::record(package.name.clone());
             }
         }
 

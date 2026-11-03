@@ -1692,7 +1692,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_timeout_kills_the_child_and_is_reported_separately_from_failure() {
-        let spec = shell("sleep 5").timeout(Duration::from_millis(50));
+        let spec = shell("while :; do :; done").timeout(Duration::from_millis(50));
 
         match spec.run() {
             Err(ProcessError::TimedOut {
@@ -1714,7 +1714,7 @@ mod tests {
             std::env::temp_dir().join(format!("freshen-process-grandchild-{}", std::process::id()));
         let _ = std::fs::remove_file(&marker);
         let script = format!(
-            "sleep 30 & child=$!; printf '%s\\n' \"$child\" > '{marker}'; wait",
+            "while :; do :; done & child=$!; printf '%s\\n' \"$child\" > '{marker}'; wait",
             marker = marker.display()
         );
         let started = Instant::now();
@@ -1846,7 +1846,7 @@ mod tests {
             Instant::now(),
             Duration::from_millis(50),
         )));
-        let spec = shell("sleep 5");
+        let spec = shell("while :; do :; done");
 
         match spec.run() {
             Err(ProcessError::TimedOut {
@@ -2089,7 +2089,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_timed_out_attempt_is_retried() {
-        let spec = shell("sleep 5")
+        let spec = shell("while :; do :; done")
             .timeout(Duration::from_millis(30))
             .retries(1)
             .backoff(Backoff::new(
