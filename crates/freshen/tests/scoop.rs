@@ -96,6 +96,7 @@ fn scoop_runs_cleanup_star_with_cleanup_flag() {
             StubOutput::new(), // run: scoop update
             StubOutput::new(), // run: scoop update *
             StubOutput::new(), // cleanup: scoop cleanup *
+            StubOutput::new(), // cleanup: scoop cache rm *
         ],
     );
     let output = tools
@@ -113,6 +114,7 @@ fn scoop_runs_cleanup_star_with_cleanup_flag() {
             "scoop update",
             "scoop update *",
             "scoop cleanup *",
+            "scoop cache rm *",
         ],
         "calls: {:?}",
         tools.step_calls()
