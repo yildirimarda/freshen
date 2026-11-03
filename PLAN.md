@@ -245,7 +245,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Honour winget pinned packages and the package exclusion list, showing held-back packages in `--list-steps` and the run summary, covered by tests
 - [x] Add Scoop detection and the `scoop update` + `scoop update *` step, skipped when scoop is absent, covered by recorded transcripts
 - [x] Add `scoop cleanup *` as a cleanup step that runs only with `--cleanup`, covered by recorded transcripts
-- [ ] Add `scoop cache rm *` as a cleanup step that runs only with `--cleanup`, covered by recorded transcripts
+- [x] Add `scoop cache rm *` as a cleanup step that runs only with `--cleanup`, covered by recorded transcripts
 - [ ] Add Microsoft Store app updates through the Store command line or API where one is available, covered by recorded transcripts
 - [ ] Add Windows Update reporting through the PSWindowsUpdate module when it is installed, covered by recorded transcripts
 - [ ] Fall back to `usoclient` for Windows Update detection when PSWindowsUpdate is missing, covered by recorded transcripts
