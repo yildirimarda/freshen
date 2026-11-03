@@ -51,12 +51,36 @@ fn run(tools: &StubTools) -> Output {
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
 }
 
-/// The commands the Windows Update step issues, in order: detection of the
-/// PSWindowsUpdate module and the `Get-WindowsUpdate` query.
-const WINDOWS_UPDATE_CALLS: &[&str] = &[
-    "pwsh -NoProfile -Command Get-Module -ListAvailable PSWindowsUpdate | Select-Object -ExpandProperty Name",
-    "pwsh -NoProfile -Command Import-Module PSWindowsUpdate; Get-WindowsUpdate | Select-Object Title, KB, Version | ConvertTo-Json",
-];
+/// Detection of the PSWindowsUpdate module.
+const WINDOWS_UPDATE_DETECT: &str = "pwsh -NoProfile -Command Get-Module -ListAvailable PSWindowsUpdate | Select-Object -ExpandProperty Name";
+
+/// The `Get-WindowsUpdate` query.
+const WINDOWS_UPDATE_CHECK: &str = "pwsh -NoProfile -Command Import-Module PSWindowsUpdate; Get-WindowsUpdate | Select-Object Title, KB, Version | ConvertTo-Json";
+
+/// The PowerShell invocations of the run, without the quotes the Windows `.cmd`
+/// stub logs around an argument that contains spaces.
+fn pwsh_calls(tools: &StubTools) -> Vec<String> {
+    tools
+        .step_calls()
+        .iter()
+        .map(|call| call.replace('"', ""))
+        .collect()
+}
+
+/// Detection comes first and every later call is the `Get-WindowsUpdate` query:
+/// the runner checks before and after the step and the step reports through a
+/// check of its own, so the query runs more than once. Nothing is ever installed.
+fn assert_windows_update_calls(calls: &[String]) {
+    assert_eq!(
+        calls.first().map(String::as_str),
+        Some(WINDOWS_UPDATE_DETECT),
+        "calls: {calls:?}"
+    );
+    assert!(calls.len() >= 2, "the query must run: {calls:?}");
+    for call in &calls[1..] {
+        assert_eq!(call, WINDOWS_UPDATE_CHECK, "calls: {calls:?}");
+    }
+}
 
 #[test]
 fn windows_update_reports_available_updates() {
@@ -64,12 +88,7 @@ fn windows_update_reports_available_updates() {
     let output = run(&tools);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert_eq!(
-        tools.step_calls(),
-        WINDOWS_UPDATE_CALLS,
-        "calls: {:?}",
-        tools.step_calls()
-    );
+    assert_windows_update_calls(&pwsh_calls(&tools));
     let text = stdout(&output);
     assert!(
         text.contains("Security Update for Windows"),
@@ -98,12 +117,7 @@ fn windows_update_reports_none_when_no_updates_available() {
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert_eq!(
-        tools.step_calls(),
-        WINDOWS_UPDATE_CALLS,
-        "calls: {:?}",
-        tools.step_calls()
-    );
+    assert_windows_update_calls(&pwsh_calls(&tools));
     let text = stdout(&output);
     assert!(
         text.contains("no Windows Updates available"),
