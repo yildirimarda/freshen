@@ -81,7 +81,9 @@ impl Step for WingetStep {
             failures.push(StepError::run_from_process(WINGET, &error));
         }
 
-        human!("winget upgrade --all --silent --accept-package-agreements --accept-source-agreements");
+        human!(
+            "winget upgrade --all --silent --accept-package-agreements --accept-source-agreements"
+        );
         if let Err(error) = CommandSpec::new("winget")
             .args([
                 "upgrade",
@@ -216,10 +218,7 @@ mod tests {
             id = id
         ));
         std::fs::create_dir_all(&dir).unwrap_or_else(|error| {
-            panic!(
-                "failed to create stub directory {}: {error}",
-                dir.display()
-            )
+            panic!("failed to create stub directory {}: {error}", dir.display())
         });
         let log = dir.join("calls.log");
 
@@ -235,9 +234,8 @@ mod tests {
                  } >> \"$FRESHEN_WINGET_LOG\"\n\
                  exit 0\n";
             let stub = dir.join("winget");
-            std::fs::write(&stub, script).unwrap_or_else(|error| {
-                panic!("failed to write stub {}: {error}", stub.display())
-            });
+            std::fs::write(&stub, script)
+                .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
             std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
                 .unwrap_or_else(|error| panic!("failed to make stub executable: {error}"));
         }
@@ -246,9 +244,8 @@ mod tests {
         {
             let script = "@echo off\r\n>>\"%FRESHEN_WINGET_LOG%\" echo winget %*\r\nexit /b 0\r\n";
             let stub = dir.join("winget.cmd");
-            std::fs::write(&stub, script).unwrap_or_else(|error| {
-                panic!("failed to write stub {}: {error}", stub.display())
-            });
+            std::fs::write(&stub, script)
+                .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
         }
 
         let previous_path = std::env::var("PATH").ok();
