@@ -383,11 +383,12 @@ fn ps_parent_name(pid: u32) -> String {
 fn windows_processes() -> Vec<ProcessEntry> {
     let script = "Get-CimInstance Win32_Process | ForEach-Object { \
                   \"$($_.ProcessId)$([char]31)$($_.ParentProcessId)$([char]31)$($_.CommandLine)\" }";
-    let Ok(output) = CommandSpec::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", script])
-        .neutral_locale()
-        .run()
-    else {
+    let Ok(output) = CommandSpec::new(
+        crate::shell::windows::powershell().map_or("powershell", |shell| shell.command()),
+    )
+    .args(["-NoProfile", "-NonInteractive", "-Command", script])
+    .neutral_locale()
+    .run() else {
         return Vec::new();
     };
     parse_windows_process_table(output.stdout())

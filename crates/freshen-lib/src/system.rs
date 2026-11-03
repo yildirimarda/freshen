@@ -1211,7 +1211,8 @@ fn parse_ps_processes(table: &str) -> Vec<ProcessInfo> {
 fn windows_processes() -> Vec<ProcessInfo> {
     let script = "Get-CimInstance Win32_Process | ForEach-Object { \
                   \"$($_.ProcessId) $($_.ParentProcessId) $($_.Name)\" }";
-    let mut command = Command::new("powershell");
+    let powershell = crate::shell::windows::powershell();
+    let mut command = Command::new(powershell.map_or("powershell", |shell| shell.command()));
     command.args(["-NoProfile", "-NonInteractive", "-Command", script]);
     crate::locale::with_neutral_locale(&mut command);
     let Ok(output) = command.stdin(Stdio::null()).stderr(Stdio::null()).output() else {

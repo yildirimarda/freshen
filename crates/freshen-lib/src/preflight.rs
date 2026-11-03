@@ -507,7 +507,8 @@ fn parse_windows_battery(output: &str) -> Option<BatteryStatus> {
 
 #[cfg(windows)]
 fn windows_battery() -> Option<BatteryStatus> {
-    let mut command = Command::new("powershell");
+    let powershell = crate::shell::windows::powershell();
+    let mut command = Command::new(powershell.map_or("powershell", |shell| shell.command()));
     command.args([
         "-NoProfile",
         "-Command",
@@ -613,7 +614,8 @@ fn parse_windows_network_cost(output: &str) -> Option<bool> {
 
 #[cfg(windows)]
 fn windows_metered() -> Option<bool> {
-    let mut command = Command::new("powershell");
+    let powershell = crate::shell::windows::powershell();
+    let mut command = Command::new(powershell.map_or("powershell", |shell| shell.command()));
     command.args([
         "-NoProfile",
         "-Command",

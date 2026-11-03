@@ -49,7 +49,7 @@ pub fn choose(pwsh_exists: bool, powershell_exists: bool) -> Option<PowerShell> 
 }
 
 #[cfg(windows)]
-mod windows {
+pub mod windows {
     use super::{choose, PowerShell};
 
     /// Probes whether `program` exists on `PATH`/`PATHEXT`.
