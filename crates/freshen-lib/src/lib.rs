@@ -52,6 +52,7 @@ pub mod rpm_ostree;
 pub mod runner;
 pub mod service_restart;
 pub mod services_needing_restart;
+pub mod shell;
 pub mod signals;
 pub mod skipped_items;
 pub mod snap;
