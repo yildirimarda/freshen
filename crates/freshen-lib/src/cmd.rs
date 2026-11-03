@@ -74,7 +74,7 @@ pub fn is_shim(command: &str) -> bool {
 
 #[cfg(windows)]
 pub mod windows {
-    use super::{quote, CmdShell};
+    use super::CmdShell;
 
     /// Probes whether `program` exists on `PATH`/`PATHEXT`.
     ///
