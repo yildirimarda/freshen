@@ -1174,12 +1174,19 @@ fn run_step(
                     Err(error) => StepResult::failed(step, started.elapsed(), error),
                 },
                 Err(_error) if interrupt() => StepResult::interrupted(step, started.elapsed()),
-                Err(error) if error.is_registry_unreachable() => StepResult::skipped_because(
-                    step,
-                    SkipReason::RegistryUnreachable,
-                    started.elapsed(),
-                ),
-                Err(error) => StepResult::failed(step, started.elapsed(), error),
+                Err(error) => {
+                    if let Some(reason) = error.skip_reason() {
+                        StepResult::skipped_because(step, reason, started.elapsed())
+                    } else if error.is_registry_unreachable() {
+                        StepResult::skipped_because(
+                            step,
+                            SkipReason::RegistryUnreachable,
+                            started.elapsed(),
+                        )
+                    } else {
+                        StepResult::failed(step, started.elapsed(), error)
+                    }
+                }
             };
             let cleanups = recorder.finish();
             let skipped_items = crate::skipped_items::take();
