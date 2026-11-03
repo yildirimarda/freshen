@@ -372,6 +372,24 @@ pub fn zypper_restart_transcript() -> Vec<&'static str> {
     zypper_restart_steps().to_vec()
 }
 
+/// Named insertion: the winget source update step.
+pub fn winget_source_update() -> &'static [&'static str] {
+    &["winget --disable-interactivity source update"]
+}
+
+/// Named insertion: the winget upgrade step.
+pub fn winget_upgrade_steps() -> &'static [&'static str] {
+    &["winget --disable-interactivity upgrade --all --silent --accept-package-agreements --accept-source-agreements"]
+}
+
+/// Named insertion: full winget transcript (source update before the upgrade).
+pub fn winget_transcript() -> Vec<&'static str> {
+    let mut t = Vec::new();
+    t.extend_from_slice(winget_source_update());
+    t.extend_from_slice(winget_upgrade_steps());
+    t
+}
+
 /// Named insertion: the apk update and upgrade steps.
 pub fn apk_steps() -> &'static [&'static str] {
     &["apk update", "apk upgrade"]

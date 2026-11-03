@@ -1,10 +1,16 @@
-//! The winget step: detection and a read-only check for Windows package updates.
+//! The winget step: detection, a read-only check and the upgrade for Windows
+//! package updates.
 //!
 //! `winget` is the Windows Package Manager. Detection runs `winget --version`;
 //! `check()` runs `winget upgrade` and parses the table of packages with
-//! updates available. Neither command changes anything, so the step is safe in
-//! `--check` mode. The step is only available on Windows.
+//! updates available. `run()` refreshes the package index with `winget source
+//! update` and then upgrades every package with
+//! `winget upgrade --all --silent --accept-package-agreements
+//! --accept-source-agreements`. Neither `detect` nor `check` changes anything,
+//! so the step is safe in `--check` mode. The step is only available on
+//! Windows.
 
+use crate::output::human;
 use crate::platform::Platform;
 use crate::process::CommandSpec;
 use crate::registry::Registry;
@@ -58,11 +64,44 @@ impl Step for WingetStep {
         self.check()
     }
 
+    /// Refreshes the package index with `winget source update` and then
+    /// upgrades every package with `winget upgrade --all --silent
+    /// --accept-package-agreements --accept-source-agreements`. The first
+    /// failure is returned so a failed source update is reported even when the
+    /// upgrade also fails.
     fn run(&self) -> Result<(), StepError> {
-        Err(StepError::run(
-            WINGET,
-            "winget upgrades are not yet implemented; use --check to report pending updates",
-        ))
+        let mut failures = Vec::new();
+
+        human!("winget source update");
+        if let Err(error) = CommandSpec::new("winget")
+            .args(["source", "update"])
+            .neutral_locale()
+            .run()
+        {
+            failures.push(StepError::run_from_process(WINGET, &error));
+        }
+
+        human!(
+            "winget upgrade --all --silent --accept-package-agreements --accept-source-agreements"
+        );
+        if let Err(error) = CommandSpec::new("winget")
+            .args([
+                "upgrade",
+                "--all",
+                "--silent",
+                "--accept-package-agreements",
+                "--accept-source-agreements",
+            ])
+            .neutral_locale()
+            .run()
+        {
+            failures.push(StepError::run_from_process(WINGET, &error));
+        }
+
+        match failures.into_iter().next() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     fn platforms(&self) -> &'static [Platform] {
@@ -121,7 +160,8 @@ fn parse_winget_upgrade(output: &str) -> Vec<OutdatedItem> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_winget_upgrade;
+    use super::{parse_winget_upgrade, WingetStep};
+    use crate::step::Step;
 
     #[test]
     fn parses_the_upgrade_table() {
@@ -164,5 +204,88 @@ mod tests {
     fn ignores_short_lines_that_do_not_form_a_row() {
         let items = parse_winget_upgrade("7zip\nwinget\n");
         assert!(items.is_empty());
+    }
+
+    /// Runs `winget source update` before `winget upgrade`, recording each
+    /// invocation against a stub `winget` placed on `PATH`.
+    #[test]
+    fn run_updates_the_source_before_upgrading() {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "freshen-winget-run-{pid}-{id}",
+            pid = std::process::id(),
+            id = id
+        ));
+        std::fs::create_dir_all(&dir).unwrap_or_else(|error| {
+            panic!("failed to create stub directory {}: {error}", dir.display())
+        });
+        let log = dir.join("calls.log");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let script = "#!/bin/sh\n\
+                 {\n\
+                   printf '%s' winget\n\
+                   for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
+                   printf '\\n'\n\
+                 } >> \"$FRESHEN_WINGET_LOG\"\n\
+                 exit 0\n";
+            let stub = dir.join("winget");
+            std::fs::write(&stub, script)
+                .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+                .unwrap_or_else(|error| panic!("failed to make stub executable: {error}"));
+        }
+
+        #[cfg(windows)]
+        {
+            let script = "@echo off\r\n>>\"%FRESHEN_WINGET_LOG%\" echo winget %*\r\nexit /b 0\r\n";
+            let stub = dir.join("winget.cmd");
+            std::fs::write(&stub, script)
+                .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
+        }
+
+        let previous_path = std::env::var("PATH").ok();
+        let previous_log = std::env::var("FRESHEN_WINGET_LOG").ok();
+
+        // Serialize with the other tests that replace the global `PATH` (snap
+        // replaces it entirely) so this test's stub `winget` is not shadowed
+        // while `run()` spawns it twice.
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("PATH", &dir);
+        std::env::set_var("FRESHEN_WINGET_LOG", &log);
+
+        let result = WingetStep.run();
+
+        if let Some(previous) = previous_path {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(previous) = previous_log {
+            std::env::set_var("FRESHEN_WINGET_LOG", previous);
+        } else {
+            std::env::remove_var("FRESHEN_WINGET_LOG");
+        }
+
+        assert!(result.is_ok(), "winget run should succeed");
+
+        let calls = std::fs::read_to_string(&log).unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let calls: Vec<&str> = calls.lines().map(str::trim).collect();
+        assert_eq!(
+            calls,
+            vec![
+                "winget --disable-interactivity source update",
+                "winget --disable-interactivity upgrade --all --silent --accept-package-agreements --accept-source-agreements",
+            ],
+            "calls: {calls:?}"
+        );
     }
 }

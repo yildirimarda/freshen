@@ -27,6 +27,8 @@ use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
+#[cfg(test)]
+use std::sync::Mutex;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -37,6 +39,12 @@ use crate::{deadline, signals};
 /// This bounds how quickly a timeout is noticed and how quickly buffered
 /// output is delivered when the child produces no new lines.
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+/// Serializes mutation of the global `PATH` env var across tests so that a
+/// stub placed on `PATH` by one test is not shadowed by another test replacing
+/// `PATH` while cargo runs tests in parallel.
+#[cfg(test)]
+pub(crate) static PATH_GUARD: Mutex<()> = Mutex::new(());
 
 /// How long to wait for reader threads after the child has been reaped.
 ///
