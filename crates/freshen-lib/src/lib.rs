@@ -13,6 +13,7 @@ pub mod bootc;
 pub mod bundle_cleanup_packages;
 pub mod check;
 pub mod cleanup;
+pub mod cmd;
 pub mod config;
 pub mod containers;
 pub(crate) mod deadline;
