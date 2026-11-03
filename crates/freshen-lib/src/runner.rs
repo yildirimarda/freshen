@@ -1174,6 +1174,9 @@ fn run_step(
                     Err(error) => StepResult::failed(step, started.elapsed(), error),
                 },
                 Err(_error) if interrupt() => StepResult::interrupted(step, started.elapsed()),
+                Err(error) if let Some(reason) = error.skip_reason() => {
+                    StepResult::skipped_because(step, reason, started.elapsed())
+                }
                 Err(error) if error.is_registry_unreachable() => StepResult::skipped_because(
                     step,
                     SkipReason::RegistryUnreachable,

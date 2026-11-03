@@ -78,6 +78,10 @@ pub enum SkipReason {
     /// The step is skipped with this reason instead of failing, for example
     /// because there is no Brewfile for the Homebrew bundle step.
     MissingConfiguration,
+    /// The step ran but found nothing to apply (for example no package
+    /// upgrades were applicable), so it is skipped instead of reported as
+    /// failed or ok.
+    NothingToDo,
     /// The run was interrupted before the step started.
     Interrupted,
 }
@@ -99,6 +103,7 @@ impl SkipReason {
             Self::NeedsSudo => "needs sudo",
             Self::RunningAsRoot => "refuses to run user-level steps as root",
             Self::MissingConfiguration => "no configuration file found",
+            Self::NothingToDo => "nothing to do",
             Self::Interrupted => "interrupted before it started",
         }
     }
@@ -298,6 +303,10 @@ pub struct StepError {
     operation: Operation,
     message: String,
     registry_unreachable: bool,
+    /// When set, the runner reports the step as skipped with this reason
+    /// instead of failed, for example when a command completed but found
+    /// nothing to apply.
+    skip_reason: Option<SkipReason>,
 }
 
 impl StepError {
@@ -311,6 +320,7 @@ impl StepError {
             operation,
             message,
             registry_unreachable,
+            skip_reason: None,
         }
     }
 
@@ -323,6 +333,7 @@ impl StepError {
             operation,
             message: error.to_string(),
             registry_unreachable: error.is_network_failure(),
+            skip_reason: None,
         }
     }
 
@@ -385,6 +396,21 @@ impl StepError {
     #[must_use]
     pub fn is_registry_unreachable(&self) -> bool {
         self.registry_unreachable
+    }
+
+    /// Returns the skip reason the runner should use instead of failing the
+    /// step, when one was attached.
+    #[must_use]
+    pub fn skip_reason(&self) -> Option<SkipReason> {
+        self.skip_reason
+    }
+
+    /// Attaches a skip reason so the runner reports the step as skipped with
+    /// this reason instead of failed.
+    #[must_use]
+    pub fn with_skip_reason(mut self, reason: SkipReason) -> Self {
+        self.skip_reason = Some(reason);
+        self
     }
 }
 
