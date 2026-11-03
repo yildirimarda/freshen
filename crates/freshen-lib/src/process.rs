@@ -321,9 +321,16 @@ pub fn sanitize_output(text: &str) -> String {
                 line_start = index + 1;
             }
             '\r' => {
-                // A carriage return rewrites the line: what came before it is
-                // replaced by what follows.
-                line_start = index + 1;
+                // A lone carriage return rewrites the line: what came before it
+                // is replaced by what follows. A `\r\n` pair is a Windows line
+                // ending and keeps the line content.
+                if text.as_bytes().get(index + 1) == Some(&b'\n') {
+                    result.push_str(&strip_escape_sequences(&text[line_start..index]));
+                    result.push('\n');
+                    line_start = index + 2;
+                } else {
+                    line_start = index + 1;
+                }
             }
             _ => {}
         }

@@ -355,7 +355,7 @@ mod tests {
                 "@echo off\r\n\
                  >>\"%FRESHEN_WINGET_LOG%\" echo winget %*\r\n\
                  if \"%~1\"==\"--version\" (exit /b 0) else (\n\
-                   if \"%~1\"==\"upgrade\" (\n\
+                    if \"%~2\"==\"upgrade\" (\n\
                      echo {}\r\n\
                      exit /b 0\n                   ) else (\n                     exit /b 0\n                   )\n                 )\r\n",
                 output
