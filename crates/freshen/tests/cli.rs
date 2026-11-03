@@ -145,7 +145,7 @@ fn dry_run_with_every_builtin_step_excluded_plans_nothing() {
     let output = run(&[
         "--dry-run",
         "--skip",
-        &format!("{COMMON_STEPS},{MACOS_STEPS},apt,dnf"),
+        &format!("{COMMON_STEPS},{MACOS_STEPS},apt,dnf,winget"),
     ]);
 
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
@@ -164,7 +164,7 @@ fn check_with_every_builtin_step_excluded_reports_up_to_date() {
     let output = run(&[
         "--check",
         "--skip",
-        &format!("{COMMON_STEPS},{MACOS_STEPS},apt,dnf"),
+        &format!("{COMMON_STEPS},{MACOS_STEPS},apt,dnf,winget"),
     ]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
