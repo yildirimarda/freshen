@@ -4,10 +4,12 @@
 //! `scoop` is a command-line installer for Windows. Detection runs `scoop
 //! --version`; `check()` runs `scoop status` and parses the apps that have an
 //! update available; `run()` runs `scoop update` (Scoop itself) followed by
-//! `scoop update *` (every app). None of these changes the machine until
-//! `run()` is invoked, so the step is safe in `--check` mode. The step is only
-//! available on Windows and is skipped entirely when Scoop is absent.
+//! `scoop update *` (every app) and, when `--cleanup` is set, `scoop cleanup *`.
+//! None of these changes the machine until `run()` is invoked, so the step is
+//! safe in `--check` mode. The step is only available on Windows and is skipped
+//! entirely when Scoop is absent.
 
+use crate::cleanup;
 use crate::options::RunOptions;
 use crate::output::human;
 use crate::platform::Platform;
@@ -80,7 +82,6 @@ impl Step for ScoopStep {
     }
 
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
-        let _ = options;
         let mut failures = Vec::new();
 
         human!("scoop update");
@@ -91,6 +92,15 @@ impl Step for ScoopStep {
         human!("scoop update *");
         if let Err(error) = CommandSpec::new("scoop").args(["update", "*"]).run() {
             failures.push(StepError::run_from_process(SCOOP, &error));
+        }
+
+        if let Err(error) = cleanup::run(
+            SCOOP,
+            "scoop: cleanup",
+            CommandSpec::new("scoop").args(["cleanup", "*"]),
+            options,
+        ) {
+            failures.push(error);
         }
 
         match failures.into_iter().next() {
@@ -492,6 +502,129 @@ mod tests {
         assert_eq!(error.step(), SCOOP);
         assert_eq!(error.operation(), crate::step::Operation::Run);
         assert_eq!(error.skip_reason(), None);
+        let calls: Vec<&str> = calls.lines().map(str::trim).collect();
+        assert_eq!(
+            calls,
+            &["scoop update", "scoop update *"],
+            "calls: {calls:?}"
+        );
+    }
+
+    /// Creates a stub `scoop` that logs every invocation to
+    /// `$FRESHEN_SCOOP_LOG` and always succeeds, returning the stub directory
+    /// and the log path.
+    fn stub_scoop_logging_calls() -> (std::path::PathBuf, std::path::PathBuf) {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "freshen-scoop-calls-{pid}-{id}",
+            pid = std::process::id(),
+            id = id
+        ));
+        std::fs::create_dir_all(&dir).unwrap_or_else(|error| {
+            panic!("failed to create stub directory {}: {error}", dir.display())
+        });
+        let log = dir.join("calls.log");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let script = "#!/bin/sh\n\
+                 {\n\
+                   printf '%s' scoop\n\
+                   for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
+                   printf '\\n'\n\
+                 } >> \"$FRESHEN_SCOOP_LOG\"\n\
+                 exit 0\n";
+            let stub = dir.join("scoop");
+            std::fs::write(&stub, script)
+                .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+                .unwrap_or_else(|error| panic!("failed to make stub executable: {error}"));
+        }
+
+        #[cfg(windows)]
+        {
+            let script = "@echo off\r\n>>\"%FRESHEN_SCOOP_LOG%\" echo scoop %*\r\nexit /b 0\r\n";
+            let stub = dir.join("scoop.cmd");
+            std::fs::write(&stub, script)
+                .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
+        }
+
+        (dir, log)
+    }
+
+    /// With `--cleanup` enabled, `run_with_options` runs `scoop cleanup *`
+    /// after `scoop update *`.
+    #[test]
+    fn run_with_cleanup_runs_scoop_cleanup_star() {
+        let (dir, log) = stub_scoop_logging_calls();
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous_path = std::env::var("PATH").ok();
+        let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
+        std::env::set_var("PATH", &dir);
+        std::env::set_var("FRESHEN_SCOOP_LOG", &log);
+
+        let options = RunOptions::new().with_cleanup(true);
+        let result = ScoopStep.run_with_options(&options);
+
+        if let Some(previous) = previous_path {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(previous) = previous_log {
+            std::env::set_var("FRESHEN_SCOOP_LOG", previous);
+        } else {
+            std::env::remove_var("FRESHEN_SCOOP_LOG");
+        }
+
+        assert!(result.is_ok(), "scoop run with cleanup should succeed");
+
+        let calls = std::fs::read_to_string(&log).unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&dir);
+        let calls: Vec<&str> = calls.lines().map(str::trim).collect();
+        assert_eq!(
+            calls,
+            &["scoop update", "scoop update *", "scoop cleanup *"],
+            "calls: {calls:?}"
+        );
+    }
+
+    /// Without `--cleanup`, `run_with_options` runs `scoop update` and
+    /// `scoop update *` but not `scoop cleanup *`.
+    #[test]
+    fn run_without_cleanup_skips_scoop_cleanup_star() {
+        let (dir, log) = stub_scoop_logging_calls();
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous_path = std::env::var("PATH").ok();
+        let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
+        std::env::set_var("PATH", &dir);
+        std::env::set_var("FRESHEN_SCOOP_LOG", &log);
+
+        let options = RunOptions::new();
+        let result = ScoopStep.run_with_options(&options);
+
+        if let Some(previous) = previous_path {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(previous) = previous_log {
+            std::env::set_var("FRESHEN_SCOOP_LOG", previous);
+        } else {
+            std::env::remove_var("FRESHEN_SCOOP_LOG");
+        }
+
+        assert!(result.is_ok(), "scoop run without cleanup should succeed");
+
+        let calls = std::fs::read_to_string(&log).unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&dir);
         let calls: Vec<&str> = calls.lines().map(str::trim).collect();
         assert_eq!(
             calls,

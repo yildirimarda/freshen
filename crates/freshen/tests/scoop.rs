@@ -84,6 +84,80 @@ fn scoop_reports_failed_when_the_app_update_fails() {
     );
 }
 
+/// With `--cleanup`, `scoop cleanup *` runs after `scoop update *`.
+#[test]
+fn scoop_runs_cleanup_star_with_cleanup_flag() {
+    let tools = StubTools::new(&["scoop"]);
+    tools.set_responses(
+        "scoop",
+        &[
+            StubOutput::new(), // detect: scoop --version
+            StubOutput::new(), // check: scoop status
+            StubOutput::new(), // run: scoop update
+            StubOutput::new(), // run: scoop update *
+            StubOutput::new(), // cleanup: scoop cleanup *
+        ],
+    );
+    let output = tools
+        .command()
+        .args(["--only", "scoop", "--cleanup"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        &[
+            "scoop --version",
+            "scoop status",
+            "scoop update",
+            "scoop update *",
+            "scoop cleanup *",
+        ],
+        "calls: {:?}",
+        tools.step_calls()
+    );
+}
+
+/// Without `--cleanup`, `scoop cleanup *` is not invoked and the run reports
+/// that destructive cleanup was skipped.
+#[test]
+fn scoop_skips_cleanup_star_without_cleanup_flag() {
+    let tools = StubTools::new(&["scoop"]);
+    tools.set_responses(
+        "scoop",
+        &[
+            StubOutput::new(), // detect: scoop --version
+            StubOutput::new(), // check: scoop status
+            StubOutput::new(), // run: scoop update
+            StubOutput::new(), // run: scoop update *
+        ],
+    );
+    let output = tools
+        .command()
+        .args(["--only", "scoop"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        &[
+            "scoop --version",
+            "scoop status",
+            "scoop update",
+            "scoop update *",
+        ],
+        "calls: {:?}",
+        tools.step_calls()
+    );
+    assert!(
+        stdout(&output).contains("skipped destructive cleanup"),
+        "summary: {}",
+        stdout(&output)
+    );
+}
+
 /// `--list-steps` lists the scoop step with its detection state.
 #[test]
 fn scoop_list_steps_lists_scoop() {
