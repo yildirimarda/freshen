@@ -119,15 +119,11 @@ impl Step for WindowsUpdateStep {
 
 /// Returns the PowerShell executable to use: `pwsh` (PowerShell 7) when it
 /// exists, otherwise `powershell` (Windows PowerShell 5.1). Returns `None`
-/// when neither is on `PATH`.
-fn powershell_command() -> Option<&'static str> {
-    if crate::executable::command_exists("pwsh") {
-        return Some("pwsh");
-    }
-    if crate::executable::command_exists("powershell") {
-        return Some("powershell");
-    }
-    None
+/// when neither is on `PATH`. The resolved absolute path is returned so the
+/// exact executable found is what runs, without a second `PATH` lookup that
+/// could land on a different (e.g. system-installed) PowerShell.
+fn powershell_command() -> Option<std::path::PathBuf> {
+    crate::executable::resolve("pwsh").or_else(|| crate::executable::resolve("powershell"))
 }
 
 /// Parses the JSON output of `Get-WindowsUpdate | ... | ConvertTo-Json` into
