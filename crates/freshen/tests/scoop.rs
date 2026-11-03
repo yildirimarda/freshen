@@ -96,6 +96,7 @@ fn scoop_runs_cleanup_star_with_cleanup_flag() {
             StubOutput::new(), // run: scoop update
             StubOutput::new(), // run: scoop update *
             StubOutput::new(), // cleanup: scoop cleanup *
+            StubOutput::new(), // cleanup: scoop cache rm *
         ],
     );
     let output = tools
@@ -113,6 +114,7 @@ fn scoop_runs_cleanup_star_with_cleanup_flag() {
             "scoop update",
             "scoop update *",
             "scoop cleanup *",
+            "scoop cache rm *",
         ],
         "calls: {:?}",
         tools.step_calls()
@@ -155,6 +157,76 @@ fn scoop_skips_cleanup_star_without_cleanup_flag() {
         stdout(&output).contains("skipped destructive cleanup"),
         "summary: {}",
         stdout(&output)
+    );
+}
+
+/// With `--cleanup`, `scoop cache rm *` runs after `scoop cleanup *`.
+#[test]
+fn scoop_runs_cache_rm_star_with_cleanup_flag() {
+    let tools = StubTools::new(&["scoop"]);
+    tools.set_responses(
+        "scoop",
+        &[
+            StubOutput::new(), // detect: scoop --version
+            StubOutput::new(), // check: scoop status
+            StubOutput::new(), // run: scoop update
+            StubOutput::new(), // run: scoop update *
+            StubOutput::new(), // cleanup: scoop cleanup *
+            StubOutput::new(), // cleanup: scoop cache rm *
+        ],
+    );
+    let output = tools
+        .command()
+        .args(["--only", "scoop", "--cleanup"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        &[
+            "scoop --version",
+            "scoop status",
+            "scoop update",
+            "scoop update *",
+            "scoop cleanup *",
+            "scoop cache rm *",
+        ],
+        "calls: {:?}",
+        tools.step_calls()
+    );
+}
+
+/// Without `--cleanup`, `scoop cache rm *` is not invoked.
+#[test]
+fn scoop_skips_cache_rm_star_without_cleanup_flag() {
+    let tools = StubTools::new(&["scoop"]);
+    tools.set_responses(
+        "scoop",
+        &[
+            StubOutput::new(), // detect: scoop --version
+            StubOutput::new(), // check: scoop status
+            StubOutput::new(), // run: scoop update
+            StubOutput::new(), // run: scoop update *
+        ],
+    );
+    let output = tools
+        .command()
+        .args(["--only", "scoop"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        &[
+            "scoop --version",
+            "scoop status",
+            "scoop update",
+            "scoop update *",
+        ],
+        "calls: {:?}",
+        tools.step_calls()
     );
 }
 
