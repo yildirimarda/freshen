@@ -351,15 +351,15 @@ mod tests {
 
         #[cfg(windows)]
         {
-            let script = format!(
-                "@echo off\r\n\
-                 >>\"%FRESHEN_WINGET_LOG%\" echo winget %*\r\n\
-                 if \"%~1\"==\"--version\" (exit /b 0) else (\n\
-                    if \"%~2\"==\"upgrade\" (\n\
-                     echo {}\r\n\
-                     exit /b 0\n                   ) else (\n                     exit /b 0\n                   )\n                 )\r\n",
-                output
-            );
+            // The table is printed from a file: a multi-line `echo` would turn
+            // every line after the first into a separate `cmd` command.
+            let output_file = dir.join("upgrade-output.txt");
+            let table = output.replace('\n', "\r\n");
+            std::fs::write(&output_file, table)
+                .unwrap_or_else(|error| panic!("write {}: {error}", output_file.display()));
+            let script = "@echo off\r\n\
+                 if \"%~2\"==\"upgrade\" type \"%~dp0upgrade-output.txt\"\r\n\
+                 exit /b 0\r\n";
             let stub = dir.join("winget.cmd");
             std::fs::write(&stub, script)
                 .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
