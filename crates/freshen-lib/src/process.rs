@@ -324,13 +324,11 @@ pub fn sanitize_output(text: &str) -> String {
                 result.push('\n');
                 line_start = index + 1;
             }
-            '\r' => {
-                // A lone carriage return rewrites the line: what came before it
-                // is replaced by what follows. Before a `\n` it is a line
-                // ending, which the `\n` arm handles.
-                if text.as_bytes().get(index + 1) != Some(&b'\n') {
-                    line_start = index + 1;
-                }
+            // A lone carriage return rewrites the line: what came before it is
+            // replaced by what follows. Before a `\n` it is a line ending,
+            // which the `\n` arm handles.
+            '\r' if text.as_bytes().get(index + 1) != Some(&b'\n') => {
+                line_start = index + 1;
             }
             _ => {}
         }
