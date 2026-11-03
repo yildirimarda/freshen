@@ -102,7 +102,7 @@ fn list_steps_lists_every_builtin_step() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
-    assert!(text.contains("Steps (34):"), "listing: {text}");
+    assert!(text.contains("Steps (35):"), "listing: {text}");
     assert!(text.contains("brew"), "listing: {text}");
     assert!(text.contains("brew-casks"), "listing: {text}");
     assert!(text.contains("brew-doctor"), "listing: {text}");
@@ -130,6 +130,7 @@ fn list_steps_lists_every_builtin_step() {
     assert!(text.contains("home-manager"), "listing: {text}");
     assert!(text.contains("rpm-ostree"), "listing: {text}");
     assert!(text.contains("winget"), "listing: {text}");
+    assert!(text.contains("scoop"), "listing: {text}");
 }
 
 #[test]
@@ -145,7 +146,7 @@ fn dry_run_with_every_builtin_step_excluded_plans_nothing() {
     let output = run(&[
         "--dry-run",
         "--skip",
-        &format!("{COMMON_STEPS},{MACOS_STEPS},apt,dnf,winget"),
+        &format!("{COMMON_STEPS},{MACOS_STEPS},apt,dnf,winget,scoop"),
     ]);
 
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
@@ -164,7 +165,7 @@ fn check_with_every_builtin_step_excluded_reports_up_to_date() {
     let output = run(&[
         "--check",
         "--skip",
-        &format!("{COMMON_STEPS},{MACOS_STEPS},apt,dnf,winget"),
+        &format!("{COMMON_STEPS},{MACOS_STEPS},apt,dnf,winget,scoop"),
     ]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
