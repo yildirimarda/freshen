@@ -224,12 +224,13 @@ mod tests {
                 .unwrap_or_else(|error| panic!("write {}: {error}", check_file.display()));
             let script = "@echo off\r\n\
                  >>\"%FRESHEN_WINDOWS_UPDATE_LOG%\" echo powershell %*\r\n\
-                 if /I \"%~1\"==\"-NoProfile\" (\r\n\
-                   if /I \"%~3\"==\"ListAvailable\" (\r\n\
-                     type \"%~dp0detect-output.txt\"\r\n\
-                   ) else if /I \"%~3\"==\"Get-WindowsUpdate\" (\r\n\
-                     type \"%~dp0check-output.txt\"\r\n\
-                   )\r\n\
+                 echo \"%*\" | findstr /I /C:\"ListAvailable\" >nul && (\r\n\
+                   type \"%~dp0detect-output.txt\"\r\n\
+                   exit /b 0\r\n\
+                 )\r\n\
+                 echo \"%*\" | findstr /I /C:\"Get-WindowsUpdate\" >nul && (\r\n\
+                   type \"%~dp0check-output.txt\"\r\n\
+                   exit /b 0\r\n\
                  )\r\n\
                  exit /b 0\r\n";
             let stub = dir.join("pwsh.cmd");
