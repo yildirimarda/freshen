@@ -132,7 +132,10 @@ fn winget_holds_back_excluded_packages() {
 
     let output = tools
         .command()
-        .args(["--only", "winget", "--config", &config_path])
+        .arg("--only")
+        .arg("winget")
+        .arg("--config")
+        .arg(&config_path)
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
 
