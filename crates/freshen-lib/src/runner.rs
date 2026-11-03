@@ -682,6 +682,9 @@ impl fmt::Display for RunSummary {
                     package.name, package.kind
                 )?;
             }
+            for item in result.skipped_items() {
+                writeln!(f, "          - held back: {item}")?;
+            }
         }
 
         if let Some(path) = &self.snapshot {

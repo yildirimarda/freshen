@@ -104,3 +104,72 @@ fn winget_reports_failed_when_the_upgrade_fails() {
         stdout(&output)
     );
 }
+
+/// With a package exclude list, held-back packages are not upgraded and are
+/// reported in the run summary.
+#[test]
+fn winget_holds_back_excluded_packages() {
+    let tools = StubTools::new(&["winget"]);
+
+    let package_list =
+        "Name Id Version Source\n------ -- -- ------- ------\n7zip 7zip.7zip 24.08 winget\nGit Git.Git 2.45.2 winget\n";
+
+    tools.set_responses(
+        "winget",
+        &[
+            StubOutput::new(),                // detect: winget --version
+            StubOutput::stdout(package_list), // check before: winget upgrade
+            StubOutput::new(),                // run: winget source update
+            StubOutput::stdout(package_list), // run: winget upgrade (package list)
+            StubOutput::new(),                // run: winget upgrade --id 7zip.7zip ...
+            StubOutput::stdout(package_list), // check after: winget upgrade (diff)
+        ],
+    );
+
+    let config_path = tools.home().join("winget-config.toml");
+    std::fs::write(&config_path, "[exclude]\npackages = [\"Git\"]\n")
+        .unwrap_or_else(|error| panic!("failed to write config: {error}"));
+
+    let output = tools
+        .command()
+        .args(["--only", "winget", "--config", &config_path])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(
+        calls.iter().any(|call| {
+            call == "winget --disable-interactivity upgrade --id 7zip.7zip --silent --accept-package-agreements --accept-source-agreements"
+        }),
+        "7zip should be upgraded by id: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call.contains("Git.Git")),
+        "Git should not be upgraded: {calls:?}"
+    );
+    let text = stdout(&output);
+    assert!(
+        text.contains("held back: Git"),
+        "held back Git in summary: {text}"
+    );
+}
+
+/// `--list-steps` lists the winget step with its detection state.
+#[test]
+fn winget_list_steps_lists_winget() {
+    let tools = StubTools::new(&["winget"]);
+    tools.set_responses(
+        "winget",
+        &[StubOutput::new()], // detect: winget --version
+    );
+    let output = tools
+        .command()
+        .args(["--list-steps"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("winget"), "listing: {text}");
+    assert!(text.contains("installed"), "listing: {text}");
+}
