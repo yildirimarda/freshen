@@ -4,10 +4,10 @@
 //! `scoop` is a command-line installer for Windows. Detection runs `scoop
 //! --version`; `check()` runs `scoop status` and parses the apps that have an
 //! update available; `run()` runs `scoop update` (Scoop itself) followed by
-//! `scoop update *` (every app) and, when `--cleanup` is set, `scoop cleanup *`.
-//! None of these changes the machine until `run()` is invoked, so the step is
-//! safe in `--check` mode. The step is only available on Windows and is skipped
-//! entirely when Scoop is absent.
+//! `scoop update *` (every app) and, when `--cleanup` is set, `scoop cleanup *`
+//! and `scoop cache rm *`. None of these changes the machine until `run()` is
+//! invoked, so the step is safe in `--check` mode. The step is only available
+//! on Windows and is skipped entirely when Scoop is absent.
 
 use crate::cleanup;
 use crate::options::RunOptions;
@@ -98,6 +98,15 @@ impl Step for ScoopStep {
             SCOOP,
             "scoop: cleanup",
             CommandSpec::new("scoop").args(["cleanup", "*"]),
+            options,
+        ) {
+            failures.push(error);
+        }
+
+        if let Err(error) = cleanup::run(
+            SCOOP,
+            "scoop: cache rm",
+            CommandSpec::new("scoop").args(["cache", "rm", "*"]),
             options,
         ) {
             failures.push(error);
@@ -589,7 +598,12 @@ mod tests {
         let calls: Vec<&str> = calls.lines().map(str::trim).collect();
         assert_eq!(
             calls,
-            &["scoop update", "scoop update *", "scoop cleanup *"],
+            &[
+                "scoop update",
+                "scoop update *",
+                "scoop cleanup *",
+                "scoop cache rm *",
+            ],
             "calls: {calls:?}"
         );
     }
@@ -598,6 +612,89 @@ mod tests {
     /// `scoop update *` but not `scoop cleanup *`.
     #[test]
     fn run_without_cleanup_skips_scoop_cleanup_star() {
+        let (dir, log) = stub_scoop_logging_calls();
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous_path = std::env::var("PATH").ok();
+        let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
+        std::env::set_var("PATH", &dir);
+        std::env::set_var("FRESHEN_SCOOP_LOG", &log);
+
+        let options = RunOptions::new();
+        let result = ScoopStep.run_with_options(&options);
+
+        if let Some(previous) = previous_path {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(previous) = previous_log {
+            std::env::set_var("FRESHEN_SCOOP_LOG", previous);
+        } else {
+            std::env::remove_var("FRESHEN_SCOOP_LOG");
+        }
+
+        assert!(result.is_ok(), "scoop run without cleanup should succeed");
+
+        let calls = std::fs::read_to_string(&log).unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&dir);
+        let calls: Vec<&str> = calls.lines().map(str::trim).collect();
+        assert_eq!(
+            calls,
+            &["scoop update", "scoop update *"],
+            "calls: {calls:?}"
+        );
+    }
+
+    /// With `--cleanup` enabled, `run_with_options` runs `scoop cache rm *`
+    /// after `scoop cleanup *`.
+    #[test]
+    fn run_with_cleanup_runs_scoop_cache_rm_star() {
+        let (dir, log) = stub_scoop_logging_calls();
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous_path = std::env::var("PATH").ok();
+        let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
+        std::env::set_var("PATH", &dir);
+        std::env::set_var("FRESHEN_SCOOP_LOG", &log);
+
+        let options = RunOptions::new().with_cleanup(true);
+        let result = ScoopStep.run_with_options(&options);
+
+        if let Some(previous) = previous_path {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(previous) = previous_log {
+            std::env::set_var("FRESHEN_SCOOP_LOG", previous);
+        } else {
+            std::env::remove_var("FRESHEN_SCOOP_LOG");
+        }
+
+        assert!(result.is_ok(), "scoop run with cleanup should succeed");
+
+        let calls = std::fs::read_to_string(&log).unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&dir);
+        let calls: Vec<&str> = calls.lines().map(str::trim).collect();
+        assert_eq!(
+            calls,
+            &[
+                "scoop update",
+                "scoop update *",
+                "scoop cleanup *",
+                "scoop cache rm *",
+            ],
+            "calls: {calls:?}"
+        );
+    }
+
+    /// Without `--cleanup`, `run_with_options` runs `scoop update` and
+    /// `scoop update *` but not `scoop cleanup *` nor `scoop cache rm *`.
+    #[test]
+    fn run_without_cleanup_skips_scoop_cache_rm_star() {
         let (dir, log) = stub_scoop_logging_calls();
         let _guard = crate::process::PATH_GUARD
             .lock()
