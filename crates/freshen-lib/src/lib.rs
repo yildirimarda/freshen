@@ -32,6 +32,7 @@ pub mod listing;
 pub mod locale;
 pub mod lock;
 pub mod macos_updates;
+pub mod microsoft_store;
 mod network;
 pub mod nix;
 pub mod options;

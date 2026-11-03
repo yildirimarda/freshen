@@ -390,6 +390,24 @@ pub fn winget_transcript() -> Vec<&'static str> {
     t
 }
 
+/// Named insertion: the Microsoft Store source update step.
+pub fn microsoft_store_source_update() -> &'static [&'static str] {
+    &["winget --disable-interactivity source update"]
+}
+
+/// Named insertion: the Microsoft Store upgrade step.
+pub fn microsoft_store_upgrade_steps() -> &'static [&'static str] {
+    &["winget --disable-interactivity upgrade --all --source msstore --silent --accept-package-agreements --accept-source-agreements"]
+}
+
+/// Named insertion: full Microsoft Store transcript (source update before the upgrade).
+pub fn microsoft_store_transcript() -> Vec<&'static str> {
+    let mut t = Vec::new();
+    t.extend_from_slice(microsoft_store_source_update());
+    t.extend_from_slice(microsoft_store_upgrade_steps());
+    t
+}
+
 /// Named insertion: the apk update and upgrade steps.
 pub fn apk_steps() -> &'static [&'static str] {
     &["apk update", "apk upgrade"]
