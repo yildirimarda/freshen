@@ -66,6 +66,7 @@ pub mod system;
 pub mod termux;
 pub mod tooling;
 pub mod warnings;
+pub mod windows_update;
 pub mod winget;
 pub mod xcode;
 pub mod zypper;
