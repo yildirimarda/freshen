@@ -1350,9 +1350,9 @@ mod win32 {
 
     use std::sync::atomic::{AtomicIsize, Ordering};
 
-    use windows_sys::Win32::Foundation::{CloseHandle, HWND, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Foundation::{CloseHandle, HWND, INVALID_HANDLE_VALUE, STILL_ACTIVE};
     use windows_sys::Win32::System::Threading::{
-        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, STILL_ACTIVE,
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetWindow, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, GW_OWNER,
@@ -1378,7 +1378,7 @@ mod win32 {
         if window_pid != context.pid {
             return 1;
         }
-        if !unsafe { IsWindowVisible(hwnd) }.as_bool() {
+        if (unsafe { IsWindowVisible(hwnd) }) == 0 {
             return 1;
         }
         if unsafe { GetWindow(hwnd, GW_OWNER) }.is_null() {
@@ -1392,7 +1392,7 @@ mod win32 {
     ///
     /// Returns `true` when a main window was found and the close message was
     /// posted.
-    fn close_main_window(pid: u32) -> bool {
+    pub(super) fn close_main_window(pid: u32) -> bool {
         let context = Box::leak(Box::new(Match {
             pid,
             hwnd: AtomicIsize::new(0),
@@ -1400,7 +1400,7 @@ mod win32 {
         let _ = unsafe { EnumWindows(Some(enum_windows_proc), context as *mut Match as isize) };
         let hwnd = unsafe { (*context).hwnd.load(Ordering::Relaxed) };
         let posted = if hwnd != 0 {
-            unsafe { PostMessageW(hwnd as HWND, WM_CLOSE, 0, 0) }.as_bool()
+            (unsafe { PostMessageW(hwnd as HWND, WM_CLOSE, 0, 0) }) != 0
         } else {
             false
         };
@@ -1409,13 +1409,13 @@ mod win32 {
     }
 
     /// Returns `true` when `pid` is still running.
-    fn is_process_running(pid: u32) -> bool {
+    pub(super) fn is_process_running(pid: u32) -> bool {
         let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
         if handle.is_null() || handle == INVALID_HANDLE_VALUE {
             return false;
         }
         let mut exit_code = 0;
-        let running = unsafe { GetExitCodeProcess(handle, &mut exit_code) }.as_bool()
+        let running = (unsafe { GetExitCodeProcess(handle, &mut exit_code) }) != 0
             && exit_code == STILL_ACTIVE;
         let _ = unsafe { CloseHandle(handle) };
         running
