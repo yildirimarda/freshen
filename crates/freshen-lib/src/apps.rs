@@ -2175,12 +2175,14 @@ mod tests {
         }
 
         /// The process cannot be ended, so the app has to be asked to quit.
+        #[cfg(not(windows))]
         fn cannot_terminate(mut self) -> Self {
             self.terminate_succeeds = false;
             self
         }
 
         /// The process does not end when it is asked to.
+        #[cfg(not(windows))]
         fn ignores_termination(mut self) -> Self {
             self.terminate_stops_apps = false;
             self
@@ -2482,6 +2484,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn a_bundle_id_only_app_is_quit_and_reopened_by_its_bundle_id() {
         let system = FakeSystem {
             quit_stops_apps: true,
@@ -2556,6 +2559,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn a_graceful_quit_waits_until_the_app_exits_without_killing() {
         let system = FakeSystem::new().with_app("/Applications/Firefox.app", "com.firefox", &[10]);
         let system = FakeSystem {
@@ -2600,6 +2604,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn a_timeout_with_force_kill_kills_the_main_executable_pids() {
         let system =
             FakeSystem::new().with_app("/Applications/Firefox.app", "com.firefox", &[10, 11]);
@@ -2617,6 +2622,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn a_denied_automation_request_is_not_treated_as_an_app_that_cannot_quit() {
         let system = FakeSystem::new()
             .with_app("/Applications/Firefox.app", "com.firefox", &[10])
@@ -2667,6 +2673,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn a_denied_automation_request_is_force_killed_when_the_policy_allows_it() {
         let system = FakeSystem::new()
             .with_app("/Applications/Firefox.app", "com.firefox", &[10])
@@ -2935,6 +2942,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn an_app_that_did_not_quit_keeps_its_own_state() {
         let system = FakeSystem::new()
             .with_app("/Applications/Firefox.app", "com.firefox", &[10])
@@ -2993,6 +3001,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn an_app_that_updates_itself_is_waited_for_before_it_is_quit() {
         let system = FakeSystem {
             quit_stops_apps: true,
@@ -3046,6 +3055,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn an_app_that_does_not_update_itself_is_quit_without_waiting() {
         let system = FakeSystem {
             quit_stops_apps: true,
@@ -3459,6 +3469,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn a_menu_bar_app_is_ended_instead_of_being_quit_through_an_apple_event() {
         let system = FakeSystem::new()
             .with_app("/Applications/MenuBar.app", "com.example.menubar", &[10])
@@ -3482,6 +3493,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn a_background_only_app_is_ended_instead_of_being_quit_through_an_apple_event() {
         let system = FakeSystem::new()
             .with_app("/Applications/Agent.app", "com.example.agent", &[10])
@@ -3530,6 +3542,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn a_menu_bar_app_that_cannot_be_ended_is_asked_to_quit_after_all() {
         let system = FakeSystem::new()
             .with_app("/Applications/MenuBar.app", "com.example.menubar", &[10])
@@ -3552,6 +3565,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn a_menu_bar_app_that_ignores_the_end_is_force_killed() {
         let system = FakeSystem::new()
             .with_app("/Applications/MenuBar.app", "com.example.menubar", &[10])
@@ -3608,6 +3622,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn a_login_item_is_ended_and_reopened_by_its_path() {
         let system = FakeSystem::new()
             .with_app("/Applications/Dropbox.app", "com.example.dropbox", &[10])
