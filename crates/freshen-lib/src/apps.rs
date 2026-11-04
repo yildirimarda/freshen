@@ -2145,6 +2145,7 @@ mod tests {
         }
 
         /// The app runs without any Dock icon (`LSBackgroundOnly`).
+        #[cfg(not(windows))]
         fn with_background_only_app(self, app: &str) -> Self {
             lock(&self.menu_bar_apps).insert(PathBuf::from(app), ());
             self
