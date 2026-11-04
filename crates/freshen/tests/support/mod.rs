@@ -28,7 +28,7 @@ pub use tool_transcripts::*;
 
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(unix)]
@@ -234,6 +234,17 @@ impl StubTools {
             .into_iter()
             .filter(|call| !is_snapshot_capture(call))
             .collect()
+    }
+
+    /// The directory containing the stub executables.
+    ///
+    /// Useful when a test needs to restrict `PATH` to the stubs so that a tool
+    /// is genuinely absent (on Windows `command()` also adds `System32` so
+    /// `.cmd` stubs can run via `cmd.exe`, which would otherwise leak real
+    /// system executables into the stub-only environment).
+    #[allow(dead_code)]
+    pub fn stub_dir(&self) -> &Path {
+        &self.dir
     }
 
     /// The temporary home directory the binary runs with.

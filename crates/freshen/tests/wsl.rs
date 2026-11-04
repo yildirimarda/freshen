@@ -116,8 +116,13 @@ fn wsl_reports_failed_when_the_update_fails() {
 #[test]
 fn wsl_is_skipped_when_wsl_is_absent() {
     let tools = StubTools::new(&[]);
-    let output = tools
-        .command()
+    // On Windows the stub harness puts System32 on PATH so `.cmd` stubs can
+    // run via `cmd.exe`, which would leak a real `wsl.exe` into the stub-only
+    // environment. Restrict PATH to the stub directory so `wsl` is genuinely
+    // absent and the step is skipped.
+    let mut command = tools.command();
+    command.env("PATH", tools.stub_dir());
+    let output = command
         .args(["--only", "wsl", "--install-wsl-updates"])
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
