@@ -1204,6 +1204,18 @@ pub fn reopen_apps<S: AppSystem + ?Sized>(system: &S, apps: &[Reopen]) {
     }
 }
 
+/// Quits a single application gracefully.
+///
+/// On Windows the app is asked to close through `CloseMainWindow` and freshen
+/// waits for it to exit. On other platforms the app is asked through an Apple
+/// event or by terminating its process, depending on whether it has a Dock
+/// icon.
+#[cfg(windows)]
+fn quit_one<S: AppSystem + ?Sized>(system: &S, app: &RunningApp, policy: &QuitPolicy) -> bool {
+    quit_windows_app(system, app, policy)
+}
+
+#[cfg(not(windows))]
 fn quit_one<S: AppSystem + ?Sized>(system: &S, app: &RunningApp, policy: &QuitPolicy) -> bool {
     if app.kind().has_dock_icon() {
         quit_with_apple_event(system, app, policy)
@@ -1212,7 +1224,29 @@ fn quit_one<S: AppSystem + ?Sized>(system: &S, app: &RunningApp, policy: &QuitPo
     }
 }
 
+/// Quits a Windows application gracefully: sends `CloseMainWindow` to each of
+/// its processes and waits for the policy's timeout for them to exit, then
+/// force-kills stragglers when the policy allows.
+#[cfg(windows)]
+fn quit_windows_app<S: AppSystem + ?Sized>(
+    system: &S,
+    app: &RunningApp,
+    policy: &QuitPolicy,
+) -> bool {
+    let closer = WinAppCloser::host();
+    let mut stopped = true;
+    for pid in app.pids(system) {
+        stopped &= closer.close(pid, policy);
+    }
+    if !stopped && policy.force_kill {
+        kill_app(system, app, policy);
+        return true;
+    }
+    stopped
+}
+
 /// Quits an app through an Apple event.
+#[cfg(not(windows))]
 fn quit_with_apple_event<S: AppSystem + ?Sized>(
     system: &S,
     app: &RunningApp,
@@ -1251,6 +1285,7 @@ fn quit_with_apple_event<S: AppSystem + ?Sized>(
 /// macOS does not address a menu-bar app or a login item with an Apple
 /// event, so the process is ended instead. That needs no permission at all,
 /// which matters for the apps that are not scriptable.
+#[cfg(not(windows))]
 fn quit_by_terminating<S: AppSystem + ?Sized>(
     system: &S,
     app: &RunningApp,
@@ -1267,6 +1302,7 @@ fn quit_by_terminating<S: AppSystem + ?Sized>(
 }
 
 /// Waits for the app to end, and kills it when it does not.
+#[cfg(not(windows))]
 fn wait_until_stopped<S: AppSystem + ?Sized>(
     system: &S,
     app: &RunningApp,
