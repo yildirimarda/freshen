@@ -23,6 +23,7 @@ use crate::output::human;
 use crate::platform::Platform;
 use crate::process::CommandSpec;
 use crate::registry::Registry;
+use crate::restart_needed;
 use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
 
 /// The Windows Update reporting step.
@@ -49,14 +50,22 @@ enum UpdateBackend {
 }
 
 struct WindowsUpdateStep {
-    /// The pending updates from the last scan, so a run only scans Windows
-    /// Update once: the check before the step fetches and caches them here,
-    /// and the step's own report (plus the runner's after-run check) reuse
-    /// them instead of scanning again.
-    last_items: Mutex<Option<Vec<OutdatedItem>>>,
+    /// The result of the last Windows Update scan, so a run only scans
+    /// Windows Update once: the check before the step fetches and caches it
+    /// here, and the step's own report (plus the runner's after-run check)
+    /// reuse it instead of scanning again.
+    last_items: Mutex<Option<WindowsUpdateListing>>,
     /// Which backend produced `last_items`, so the check reuses the same
     /// backend instead of re-detecting it.
     backend: Mutex<Option<UpdateBackend>>,
+}
+
+/// The result of one Windows Update scan: the pending updates and whether
+/// installing them requires the machine to reboot.
+#[derive(Clone, Default)]
+struct WindowsUpdateListing {
+    items: Vec<OutdatedItem>,
+    reboot_pending: bool,
 }
 
 impl WindowsUpdateStep {
@@ -105,50 +114,58 @@ impl WindowsUpdateStep {
     }
 
     /// The pending Windows Updates, fetched once and cached for the run.
-    fn listing(&self) -> Result<Vec<OutdatedItem>, StepError> {
+    fn listing(&self) -> Result<WindowsUpdateListing, StepError> {
         let cached = self.last_items.lock().ok().and_then(|last| last.clone());
         match cached {
-            Some(items) => Ok(items),
+            Some(listing) => Ok(listing),
             None => {
-                let items = self.fetch_listing()?;
+                let listing = self.fetch_listing()?;
                 if let Ok(mut last) = self.last_items.lock() {
-                    *last = Some(items.clone());
+                    *last = Some(listing.clone());
                 }
-                Ok(items)
+                Ok(listing)
             }
         }
     }
 
     /// Fetches the pending Windows Updates through the detected backend.
-    fn fetch_listing(&self) -> Result<Vec<OutdatedItem>, StepError> {
+    fn fetch_listing(&self) -> Result<WindowsUpdateListing, StepError> {
         match self.backend()? {
             UpdateBackend::PsWindowsUpdate => {
                 let Some(powershell) = powershell_command() else {
-                    return Ok(Vec::new());
+                    return Ok(WindowsUpdateListing::default());
                 };
                 let output = CommandSpec::new(powershell)
                     .args([
                         "-NoProfile",
                         "-Command",
-                        "Import-Module PSWindowsUpdate; Get-WindowsUpdate | Select-Object Title, KB, Version | ConvertTo-Json",
+                        "Import-Module PSWindowsUpdate; Get-WindowsUpdate | Select-Object Title, KB, Version, RebootRequired | ConvertTo-Json",
                     ])
                     .neutral_locale()
                     .run()
                     .map_err(|error| StepError::check_from_process(WINDOWS_UPDATE, &error))?;
-                Ok(parse_windows_update(output.stdout()))
+                let items = parse_windows_update(output.stdout());
+                Ok(WindowsUpdateListing {
+                    items,
+                    reboot_pending: reboot_pending(output.stdout()),
+                })
             }
             UpdateBackend::Usoclient => {
                 let Some(usoclient) = usoclient_command() else {
-                    return Ok(Vec::new());
+                    return Ok(WindowsUpdateListing::default());
                 };
                 let output = CommandSpec::new(usoclient)
                     .args(["StartScan"])
                     .neutral_locale()
                     .run()
                     .map_err(|error| StepError::check_from_process(WINDOWS_UPDATE, &error))?;
-                Ok(parse_usoclient_scan(output.stdout()))
+                let items = parse_usoclient_scan(output.stdout());
+                Ok(WindowsUpdateListing {
+                    items,
+                    reboot_pending: false,
+                })
             }
-            UpdateBackend::None => Ok(Vec::new()),
+            UpdateBackend::None => Ok(WindowsUpdateListing::default()),
         }
     }
 
@@ -156,10 +173,11 @@ impl WindowsUpdateStep {
     /// include/exclude list. Reuses the cached listing so `check` does not
     /// scan Windows Update a second time.
     fn check_with_options(&self, options: &RunOptions) -> Result<CheckReport, StepError> {
-        let items = self.listing()?;
+        let listing = self.listing()?;
         let filter = options.filters().packages();
         let report = CheckReport::from_items(
-            items
+            listing
+                .items
                 .into_iter()
                 .filter(|item| filter.includes(item.name())),
         );
@@ -169,7 +187,8 @@ impl WindowsUpdateStep {
     /// Reports the available updates without installing them. Reuses the
     /// cached listing so `run` does not scan Windows Update a second time.
     fn report(&self) -> Result<(), StepError> {
-        let items = self.listing()?;
+        let listing = self.listing()?;
+        let items = listing.items;
         if items.is_empty() {
             human!("windows-update: no Windows Updates available");
         } else {
@@ -214,7 +233,12 @@ impl Step for WindowsUpdateStep {
     }
 
     fn run_with_options(&self, _options: &RunOptions) -> Result<(), StepError> {
-        self.report()
+        self.report()?;
+        if self.listing()?.reboot_pending {
+            restart_needed::record();
+            human!("windows-update: installing these updates requires a reboot");
+        }
+        Ok(())
     }
 
     fn platforms(&self) -> &'static [Platform] {
@@ -294,12 +318,35 @@ fn parse_windows_update(output: &str) -> Vec<OutdatedItem> {
         .collect()
 }
 
+/// Whether the `Get-WindowsUpdate` output says that installing the listed
+/// updates requires the machine to reboot. Each update object may carry a
+/// `RebootRequired` flag; when any of them is `true`, a reboot is pending.
+fn reboot_pending(output: &str) -> bool {
+    let value: serde_json::Value = match serde_json::from_str(output) {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    let updates = match value {
+        serde_json::Value::Array(items) => items,
+        serde_json::Value::Object(_) => vec![value],
+        _ => return false,
+    };
+    updates
+        .into_iter()
+        .any(|update| update.get("RebootRequired").and_then(|v| v.as_bool()) == Some(true))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_usoclient_scan, parse_windows_update, WindowsUpdateStep, WINDOWS_UPDATE};
+    use super::{
+        parse_usoclient_scan, parse_windows_update, reboot_pending, WindowsUpdateStep,
+        WINDOWS_UPDATE,
+    };
     use crate::options::RunOptions;
     use crate::platform::Platform;
+    use crate::runner::{Runner, StepStatus};
     use crate::step::{Detection, OutdatedItem, Step};
+    use serde_json::Value;
 
     /// Creates a stub PowerShell on a temp dir that responds to invocations
     /// based on their arguments. Returns the stub directory; the caller must
@@ -509,6 +556,44 @@ mod tests {
         assert_eq!(items[0].current(), None);
         assert_eq!(items[0].latest(), None);
         assert_eq!(items[0].reason(), None);
+    }
+
+    #[test]
+    fn reboot_pending_is_true_when_any_update_requires_reboot() {
+        assert!(reboot_pending(
+            r#"[
+  {"Title":"Security Update","KB":"KB1","RebootRequired":true},
+  {"Title":"Cumulative Update","KB":"KB2","RebootRequired":false}
+]"#
+        ));
+        assert!(reboot_pending(
+            r#"{"Title":"Feature Update","RebootRequired":true}"#
+        ));
+    }
+
+    #[test]
+    fn reboot_pending_is_false_when_no_update_requires_reboot() {
+        assert!(!reboot_pending(
+            r#"[
+  {"Title":"Security Update","KB":"KB1","RebootRequired":false},
+  {"Title":"Cumulative Update","KB":"KB2"}
+]"#
+        ));
+        assert!(!reboot_pending(
+            r#"{"Title":"Feature Update","RebootRequired":false}"#
+        ));
+        assert!(!reboot_pending("[]"));
+        assert!(!reboot_pending("{}"));
+    }
+
+    #[test]
+    fn reboot_pending_is_false_for_invalid_output() {
+        assert!(!reboot_pending("not json"));
+        assert!(!reboot_pending(
+            "Get-WindowsUpdate : The term is not recognized"
+        ));
+        assert!(!reboot_pending(""));
+        assert!(!reboot_pending("   \n"));
     }
 
     #[test]
@@ -917,5 +1002,71 @@ mod tests {
             std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Runs the Windows Update step against a stubbed PowerShell and returns
+    /// the run summary, restoring PATH and removing the stub directory
+    /// afterwards.
+    fn run_with_stub(check_output: &str) -> crate::runner::RunSummary {
+        let dir = stub_powershell("PSWindowsUpdate", check_output);
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = std::env::var("PATH").ok();
+        std::env::set_var("PATH", &dir);
+
+        let step = WindowsUpdateStep::new();
+        let summary = Runner::with_options([&step as &dyn Step], RunOptions::new()).run();
+
+        if let Some(previous) = previous {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        summary
+    }
+
+    /// A pending reboot reported by Windows Update is recorded for the step
+    /// and shows up in the human summary, the JSON report and the Markdown
+    /// report.
+    #[test]
+    fn a_pending_reboot_is_recorded_and_shown_in_the_summary_and_reports() {
+        let summary = run_with_stub(
+            r#"[{"Title":"Security Update","KB":"KB5012345","Version":"10.0.19041.1234","RebootRequired":true}]"#,
+        );
+        let result = &summary.steps()[0];
+        assert_eq!(result.status(), StepStatus::Ok);
+        assert!(result.restart_needed());
+
+        let json = summary.to_json();
+        let value: Value = serde_json::from_str(&json)
+            .unwrap_or_else(|error| panic!("invalid JSON report: {error}: {json}"));
+        assert_eq!(value["steps"][0]["restart_needed"], true);
+
+        let markdown = summary.to_markdown();
+        assert!(markdown.contains("## Restart needed"));
+        assert!(markdown.contains("A restart is required after this step."));
+    }
+
+    /// When no update requires a reboot, `restart_needed` stays false and no
+    /// restart section is emitted.
+    #[test]
+    fn no_pending_reboot_means_restart_is_not_recorded() {
+        let summary = run_with_stub(
+            r#"[{"Title":"Security Update","KB":"KB5012345","Version":"10.0.19041.1234"}]"#,
+        );
+        let result = &summary.steps()[0];
+        assert_eq!(result.status(), StepStatus::Ok);
+        assert!(!result.restart_needed());
+
+        let json = summary.to_json();
+        let value: Value = serde_json::from_str(&json)
+            .unwrap_or_else(|error| panic!("invalid JSON report: {error}: {json}"));
+        assert_eq!(value["steps"][0]["restart_needed"], false);
+
+        let markdown = summary.to_markdown();
+        assert!(!markdown.contains("## Restart needed"));
     }
 }
