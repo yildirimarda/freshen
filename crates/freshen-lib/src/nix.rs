@@ -350,7 +350,6 @@ impl Step for HomeManagerStep {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
     match failures.into_iter().next() {
         Some(error) => Err(error),

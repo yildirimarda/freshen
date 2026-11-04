@@ -161,9 +161,9 @@ fn detect_wsl() -> Detection {
 
 #[cfg(test)]
 mod tests {
-    use super::held_refresh_window;
     #[cfg(target_os = "linux")]
     use super::detect_snap;
+    use super::held_refresh_window;
     use crate::step::Detection;
     use std::env;
     use std::fs;

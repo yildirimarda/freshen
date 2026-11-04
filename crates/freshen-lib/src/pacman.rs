@@ -15,9 +15,9 @@ use crate::executable::command_exists;
 use crate::options::RunOptions;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::output::human;
-use crate::platform::Platform;
 #[cfg(target_os = "linux")]
 use crate::pacman_findings;
+use crate::platform::Platform;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::process::{CommandSpec, NETWORK_RETRIES};
 use crate::registry::Registry;
