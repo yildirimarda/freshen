@@ -29,9 +29,10 @@ fn run(tools: &StubTools, opt_in: bool) -> Output {
             StubOutput::new(), // run: wsl --update (only when opted in)
         ],
     );
-    let mut command = tools.command().args(["--only", "wsl"]);
+    let mut command = tools.command();
+    command.args(["--only", "wsl"]);
     if opt_in {
-        command = command.arg("--install-wsl-updates");
+        command.arg("--install-wsl-updates");
     }
     command
         .output()
