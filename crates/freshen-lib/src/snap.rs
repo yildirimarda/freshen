@@ -166,8 +166,11 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     use super::held_refresh_window;
     use crate::step::Detection;
+    #[cfg(target_os = "linux")]
     use std::env;
+    #[cfg(target_os = "linux")]
     use std::fs;
+    #[cfg(target_os = "linux")]
     use std::path::{Path, PathBuf};
 
     /// Runs `f` with `PATH` replaced by `dir`, restoring the previous `PATH`
