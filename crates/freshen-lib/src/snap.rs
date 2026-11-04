@@ -163,6 +163,7 @@ fn detect_wsl() -> Detection {
 mod tests {
     #[cfg(target_os = "linux")]
     use super::detect_snap;
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     use super::held_refresh_window;
     use crate::step::Detection;
     use std::env;
@@ -172,6 +173,7 @@ mod tests {
     /// Runs `f` with `PATH` replaced by `dir`, restoring the previous `PATH`
     /// afterwards so the test does not depend on what happens to be installed
     /// on the host machine.
+    #[cfg(target_os = "linux")]
     fn with_path<F>(dir: &Path, f: F)
     where
         F: FnOnce(),
@@ -188,6 +190,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     fn temp_dir(name: &str) -> PathBuf {
         let dir = env::temp_dir().join(format!(
             "freshen-snap-{}-{}-{name}",

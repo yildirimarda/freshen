@@ -109,22 +109,22 @@ impl Step for NixStep {
         self.run_with_options(&RunOptions::new())
     }
 
-    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
+    fn run_with_options(&self, _options: &RunOptions) -> Result<(), StepError> {
         #[cfg(target_os = "windows")]
         {
-            let Some(_distro) = crate::wsl::selected_distro(options) else {
+            let Some(_distro) = crate::wsl::selected_distro(_options) else {
                 human!("nix: no WSL distribution selected; pass --wsl-distro <distro>");
                 return Ok(());
             };
             let mut failures = Vec::new();
-            self.upgrade(options, &mut failures);
+            self.upgrade(_options, &mut failures);
             finish(failures)
         }
 
         #[cfg(target_os = "linux")]
         {
             let mut failures = Vec::new();
-            self.upgrade(options, &mut failures);
+            self.upgrade(_options, &mut failures);
             finish(failures)
         }
 
@@ -188,22 +188,22 @@ impl Step for NixProfileStep {
     }
 
     #[allow(unused_variables)]
-    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
+    fn run_with_options(&self, _options: &RunOptions) -> Result<(), StepError> {
         #[cfg(target_os = "windows")]
         {
-            let Some(_distro) = crate::wsl::selected_distro(options) else {
+            let Some(_distro) = crate::wsl::selected_distro(_options) else {
                 human!("nix: no WSL distribution selected; pass --wsl-distro <distro>");
                 return Ok(());
             };
             let mut failures = Vec::new();
-            self.upgrade(options, &mut failures);
+            self.upgrade(_options, &mut failures);
             finish(failures)
         }
 
         #[cfg(target_os = "linux")]
         {
             let mut failures = Vec::new();
-            self.upgrade(options, &mut failures);
+            self.upgrade(_options, &mut failures);
             finish(failures)
         }
 
@@ -268,24 +268,24 @@ impl Step for NixCollectGarbageStep {
     }
 
     #[allow(unused_variables)]
-    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
+    fn run_with_options(&self, _options: &RunOptions) -> Result<(), StepError> {
         #[cfg(target_os = "windows")]
         {
-            let Some(_distro) = crate::wsl::selected_distro(options) else {
+            let Some(_distro) = crate::wsl::selected_distro(_options) else {
                 human!(
                     "nix-collect-garbage: no WSL distribution selected; pass --wsl-distro <distro>"
                 );
                 return Ok(());
             };
             let mut failures = Vec::new();
-            self.cleanup(&mut failures, options);
+            self.cleanup(&mut failures, _options);
             finish(failures)
         }
 
         #[cfg(target_os = "linux")]
         {
             let mut failures = Vec::new();
-            self.cleanup(&mut failures, options);
+            self.cleanup(&mut failures, _options);
             finish(failures)
         }
 
