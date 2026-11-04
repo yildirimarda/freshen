@@ -151,6 +151,7 @@ impl RunningApp {
         self.kind
     }
 
+    #[cfg(not(windows))]
     fn is_running<S: AppSystem + ?Sized>(&self, system: &S) -> bool {
         match self.path() {
             Some(path) => system.is_running(path),
@@ -1470,7 +1471,7 @@ pub(crate) struct WinAppCloser {
 
 /// The operating-system operations a graceful Windows close needs.
 #[cfg(windows)]
-trait Win32: Send + Sync {
+pub(crate) trait Win32: Send + Sync {
     /// Posts `CloseMainWindow` to the main window of `pid`.
     fn close_main_window(&self, pid: u32) -> bool;
 
@@ -1504,6 +1505,7 @@ impl WinAppCloser {
 
     /// A closer that delegates to `win32`, for tests.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn with(win32: Box<dyn Win32>) -> Self {
         Self { win32 }
     }

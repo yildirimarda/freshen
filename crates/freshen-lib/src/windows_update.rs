@@ -344,8 +344,11 @@ mod tests {
     };
     use crate::options::RunOptions;
     use crate::platform::Platform;
+    #[cfg(windows)]
     use crate::runner::{Runner, StepStatus};
     use crate::step::{Detection, OutdatedItem, Step};
+
+    #[cfg(windows)]
     use serde_json::Value;
 
     /// Creates a stub PowerShell on a temp dir that responds to invocations
@@ -1007,6 +1010,7 @@ mod tests {
     /// Runs the Windows Update step against a stubbed PowerShell and returns
     /// the run summary, restoring PATH and removing the stub directory
     /// afterwards.
+    #[cfg(windows)]
     fn run_with_stub(check_output: &str) -> crate::runner::RunSummary {
         let dir = stub_powershell("PSWindowsUpdate", check_output);
         let _guard = crate::process::PATH_GUARD
@@ -1031,6 +1035,7 @@ mod tests {
     /// A pending reboot reported by Windows Update is recorded for the step
     /// and shows up in the human summary, the JSON report and the Markdown
     /// report.
+    #[cfg(windows)]
     #[test]
     fn a_pending_reboot_is_recorded_and_shown_in_the_summary_and_reports() {
         let summary = run_with_stub(
@@ -1052,6 +1057,7 @@ mod tests {
 
     /// When no update requires a reboot, `restart_needed` stays false and no
     /// restart section is emitted.
+    #[cfg(windows)]
     #[test]
     fn no_pending_reboot_means_restart_is_not_recorded() {
         let summary = run_with_stub(
