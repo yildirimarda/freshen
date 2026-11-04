@@ -348,8 +348,19 @@ fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
 }
 
 /// Whether the `nix` binary is discoverable on `PATH`.
+#[cfg(target_os = "linux")]
 fn detect_nix() -> Detection {
     if command_exists("nix") {
+        Detection::Installed
+    } else {
+        Detection::NotInstalled
+    }
+}
+
+/// Whether the `wsl` binary is discoverable on `PATH` (Windows only).
+#[cfg(target_os = "windows")]
+fn detect_wsl() -> Detection {
+    if command_exists("wsl") {
         Detection::Installed
     } else {
         Detection::NotInstalled
@@ -392,11 +403,14 @@ fn detect_home_manager(path: &Path) -> Detection {
 
 #[cfg(test)]
 mod tests {
-    use super::{detect_home_manager, detect_nix, home_manager_config_exists};
+    #[cfg(target_os = "linux")]
+    use super::detect_nix;
+    use super::{detect_home_manager, home_manager_config_exists};
     use crate::step::Detection;
     use std::fs;
     use std::path::PathBuf;
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn detect_nix_reports_not_installed_when_absent_from_path() {
         // `nix` is not expected on the test machine; this just exercises the

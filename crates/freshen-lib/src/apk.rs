@@ -34,6 +34,7 @@ impl ApkStep {
     /// Runs `apk update` and then `apk upgrade`, collecting the first failure
     /// so both commands are attempted even when update fails. On Windows the
     /// commands run inside the selected WSL distribution via `wsl -d <distro>`.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn upgrade(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
         human!("apk update");
         if let Err(error) = inside_command(
@@ -118,6 +119,7 @@ impl Step for ApkStep {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
     match failures.into_iter().next() {
         Some(error) => Err(error),
@@ -126,6 +128,7 @@ fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
 }
 
 /// Whether the `apk` binary is discoverable on `PATH`.
+#[cfg(target_os = "linux")]
 fn detect_apk() -> Detection {
     if command_exists("apk") {
         Detection::Installed

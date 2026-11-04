@@ -12,6 +12,7 @@ use crate::containers::{ContainerRuntime, NativeDockerRuntime};
 use crate::executable::command_exists;
 use crate::options::RunOptions;
 use crate::output::human;
+#[cfg(target_os = "linux")]
 use crate::pacman_findings;
 use crate::platform::Platform;
 use crate::process::{CommandSpec, NETWORK_RETRIES};
@@ -40,7 +41,8 @@ struct PacmanStep;
 
 impl PacmanStep {
     /// Runs `pacman -Syu --noconfirm`. On Windows the command runs inside the
-    /// selected WSL distribution via `wsl -d <distro>`.
+    /// selected WSL distribution via `wsl -d <distro> pacman ...`.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn upgrade(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
         human!("pacman -Syu --noconfirm");
         if let Err(error) = inside_command(
@@ -57,6 +59,7 @@ impl PacmanStep {
 
     /// Cleans the package cache and removes orphaned packages, running only
     /// when `--cleanup` is enabled.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn cleanup(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
         self.clean_package_cache(options, failures);
         self.remove_orphans(options, failures);
@@ -82,6 +85,7 @@ impl PacmanStep {
 
     /// Removes cached packages that are no longer installed and unused sync
     /// databases.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn clean_package_cache(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
         if let Err(error) = cleanup::run(
             PACMAN,
@@ -99,6 +103,7 @@ impl PacmanStep {
     }
 
     /// Removes orphaned packages (packages no longer required by anything).
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn remove_orphans(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
         if !options.cleanup_enabled() {
             human!(
@@ -228,6 +233,7 @@ impl Step for PacmanStep {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
     match failures.into_iter().next() {
         Some(error) => Err(error),
@@ -236,6 +242,7 @@ fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
 }
 
 /// Whether the `pacman` binary is discoverable on `PATH`.
+#[cfg(target_os = "linux")]
 fn detect_pacman() -> Detection {
     if command_exists("pacman") {
         Detection::Installed

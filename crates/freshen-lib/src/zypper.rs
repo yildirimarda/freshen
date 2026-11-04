@@ -42,6 +42,7 @@ impl ZypperStep {
     /// first failure so both commands are attempted even when refresh fails.
     /// On Windows the commands run inside the selected WSL distribution via
     /// `wsl -d <distro>`.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn upgrade(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
         human!("zypper refresh");
         if let Err(error) = inside_command(
@@ -174,6 +175,7 @@ impl ZypperStep {
     /// Runs `zypper ps -s` after a successful upgrade and records the services
     /// that need a restart. A failure to list services does not fail the step:
     /// the upgrade itself succeeded.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn services_needing_restart(&self) {
         human!("zypper ps -s");
         let output = match CommandSpec::new("zypper").args(["ps", "-s"]).run() {
@@ -190,6 +192,7 @@ impl ZypperStep {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
     match failures.into_iter().next() {
         Some(error) => Err(error),
@@ -198,6 +201,7 @@ fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
 }
 
 /// Whether the `zypper` binary is discoverable on `PATH`.
+#[cfg(target_os = "linux")]
 fn detect_zypper() -> Detection {
     if command_exists("zypper") {
         Detection::Installed
@@ -222,6 +226,7 @@ fn detect_wsl() -> Detection {
 /// `zypper ps -s` prints one service per line (a systemd unit name such as
 /// `ssh.service`). Header and separator lines are ignored; every remaining
 /// non-empty line is treated as a service name.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn parse_zypper_ps_services(output: &str) -> Vec<String> {
     output
         .lines()

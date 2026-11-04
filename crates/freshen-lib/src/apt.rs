@@ -306,6 +306,7 @@ fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
 }
 
 /// Whether the `apt-get` binary is discoverable on `PATH`.
+#[cfg(target_os = "linux")]
 fn detect_apt() -> Detection {
     if command_exists("apt-get") {
         Detection::Installed
@@ -400,6 +401,7 @@ fn parenthesized(text: &str) -> Option<&str> {
 #[cfg(test)]
 /// A unique temp path for the reboot-required marker, so parallel tests do not
 /// collide and never touch the real `/var/run/reboot-required`.
+#[cfg(target_os = "linux")]
 fn temp_marker_path() -> std::path::PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -451,6 +453,7 @@ mod tests {
         assert!(items.is_empty());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn restart_needed_at_reports_restart_when_marker_file_exists() {
         let marker = temp_marker_path();

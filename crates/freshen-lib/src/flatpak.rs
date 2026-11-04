@@ -33,6 +33,7 @@ struct FlatpakStep;
 impl FlatpakStep {
     /// Runs `flatpak update -y`. On Windows the command runs inside the
     /// selected WSL distribution via `wsl -d <distro>`.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn upgrade(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
         human!("flatpak update -y");
         if let Err(error) = inside_command(
@@ -49,6 +50,7 @@ impl FlatpakStep {
 
     /// Runs `flatpak uninstall --unused`, gated on `--cleanup`. On Windows the
     /// command runs inside the selected WSL distribution via `wsl -d <distro>`.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn cleanup(&self, failures: &mut Vec<StepError>, options: &RunOptions) {
         if let Err(error) = cleanup::run(
             FLATPAK,
@@ -125,6 +127,7 @@ impl Step for FlatpakStep {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
     match failures.into_iter().next() {
         Some(error) => Err(error),
@@ -133,6 +136,7 @@ fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
 }
 
 /// Whether the `flatpak` binary is discoverable on `PATH`.
+#[cfg(target_os = "linux")]
 fn detect_flatpak() -> Detection {
     if command_exists("flatpak") {
         Detection::Installed
@@ -153,9 +157,11 @@ fn detect_wsl() -> Detection {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
     use super::detect_flatpak;
     use crate::step::Detection;
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn detect_flatpak_reports_installed_when_on_path() {
         // `flatpak` is not expected on the test machine; this just exercises

@@ -40,11 +40,13 @@ pub fn register(registry: Registry) -> Registry {
 struct DnfStep;
 
 /// Which package manager binary the step uses.
+#[cfg(target_os = "linux")]
 enum DnfBinary {
     Dnf,
     Yum,
 }
 
+#[cfg(target_os = "linux")]
 impl DnfBinary {
     fn name(&self) -> &'static str {
         match self {
@@ -63,6 +65,7 @@ impl DnfBinary {
 }
 
 /// The binary to run: `dnf` when present, otherwise `yum`.
+#[cfg(target_os = "linux")]
 fn dnf_binary() -> Option<DnfBinary> {
     if command_exists("dnf") {
         Some(DnfBinary::Dnf)
@@ -77,6 +80,7 @@ impl DnfStep {
     /// Runs `dnf upgrade -y`, or `yum update -y` when dnf is absent.
     /// Runs `dnf upgrade -y` (or `yum update -y` when dnf is absent), or
     /// `dnf upgrade -y` inside the selected WSL distribution on Windows.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn upgrade(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
         #[cfg(target_os = "windows")]
         {
@@ -115,6 +119,7 @@ impl DnfStep {
 
     /// After a successful upgrade, records the services that need a restart
     /// (reported by `needs-restarting`) and whether a restart is required.
+    #[cfg(target_os = "linux")]
     fn services_needing_restart(&self) {
         let mut needed = false;
         human!("needs-restarting");
@@ -238,6 +243,7 @@ impl Step for DnfStep {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
     match failures.into_iter().next() {
         Some(error) => Err(error),
@@ -246,6 +252,7 @@ fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
 }
 
 /// Whether `dnf` or `yum` is discoverable on `PATH`.
+#[cfg(target_os = "linux")]
 fn detect_dnf() -> Detection {
     match dnf_binary() {
         Some(_) => Detection::Installed,
@@ -271,6 +278,7 @@ const NEEDS_RESTARTING: &str = "needs-restarting";
 
 /// Parses the output of `needs-restarting` into the names of services that need
 /// a restart. Each non-empty, non-header line is treated as a service name.
+#[cfg(target_os = "linux")]
 fn parse_needs_restarting_services(output: &str) -> Vec<String> {
     output
         .lines()

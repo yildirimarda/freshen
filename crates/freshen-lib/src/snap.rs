@@ -31,6 +31,7 @@ struct SnapStep;
 impl SnapStep {
     /// Runs `snap refresh`. On Windows the command runs inside the selected
     /// WSL distribution via `wsl -d <distro>`.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn upgrade(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
         human!("snap refresh");
         if let Err(error) = inside_command(
@@ -112,6 +113,7 @@ impl Step for SnapStep {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
     match failures.into_iter().next() {
         Some(error) => Err(error),
@@ -119,6 +121,7 @@ fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn held_refresh_window(text: &str) -> Option<String> {
     let lowered = text.to_ascii_lowercase();
     if !lowered.contains("held") {
@@ -132,6 +135,7 @@ fn held_refresh_window(text: &str) -> Option<String> {
 }
 
 /// Whether the `snap` binary is discoverable on `PATH`.
+#[cfg(target_os = "linux")]
 fn detect_snap() -> Detection {
     if command_exists("snap") {
         Detection::Installed
@@ -192,6 +196,7 @@ mod tests {
         dir
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn detect_snap_reports_not_installed_when_absent_from_path() {
         let dir = temp_dir("absent");
@@ -201,7 +206,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn detect_snap_reports_installed_when_on_path() {
         use std::fs::Permissions;
@@ -226,6 +231,7 @@ mod tests {
         assert!(!Detection::NotInstalled.is_installed());
     }
 
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[test]
     fn held_refresh_window_parses_held_until() {
         let held =
@@ -236,6 +242,7 @@ mod tests {
         );
     }
 
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[test]
     fn held_refresh_window_reports_held_without_time() {
         assert_eq!(
@@ -244,6 +251,7 @@ mod tests {
         );
     }
 
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[test]
     fn held_refresh_window_returns_none_when_not_held() {
         assert!(held_refresh_window("All snaps up to date.").is_none());
@@ -251,6 +259,7 @@ mod tests {
         assert!(held_refresh_window("").is_none());
     }
 
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[test]
     fn held_refresh_window_is_case_insensitive() {
         let held = held_refresh_window("ERROR: A SNAP REFRESH IS HELD UNTIL 2026-01-01T00:00:00Z");
