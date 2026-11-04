@@ -447,5 +447,6 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [ ] Report the native trust store load errors from the network preflight even when only some certificates were loaded, so a partly broken system trust store is not silently ignored, covered by tests with an injected trust store result
 - [ ] Parse the winget output as JSON (`winget --output json`), because winget translates its table with the Windows UI language and no locale variable can change that
 - [ ] Add the `brew-doctor` and `brew-bundle-cleanup` steps to the real-tools workflow, so their parsers are verified against the real Homebrew output, and write a `Brewfile` in the job so the bundle cleanup step is not skipped
+- [ ] Make `windows_update::tests::check_filter_applies_include_exclude_lists` deterministic on macOS: it failed once there with `pending() == 0` and passed on a rerun, while Linux and Windows pass. Find the platform difference (the `/bin/sh` `printf` stub, the multi-line JSON, an unset `FRESHEN_WINDOWS_UPDATE_LOG`, test ordering around `PATH_GUARD`) and remove it, so no CI rerun is needed, covered by running the test repeatedly in a loop on the macOS runner
 
 <!-- The agent appends newly found work here. -->

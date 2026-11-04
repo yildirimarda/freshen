@@ -149,6 +149,38 @@ their imports, shell/path assumptions, `chmod`) and its tests must carry an
 explicit platform guard (e.g. `#[cfg(unix)]`, `sys.platform` checks). A green
 local run does not prove the other platforms are green.
 
+Imports that only a `#[cfg(unix)]` or `#[cfg(windows)]` test uses belong inside
+that gated module, never in the shared `use` block at the top of `mod tests`:
+`-D warnings` turns an import that is unused on one platform into a CI failure
+that does not reproduce on Linux. Put platform-independent logic (a command
+rewrite, a parser, a cache) in a plain function and unit-test it on every OS.
+
+### Windows test stubs
+
+- A `.cmd` stub must never echo `%*`: the PowerShell script argument contains
+  `|` and quotes, and re-quoting it makes `cmd.exe` fail with a syntax error
+  (exit code 255). Read the argument you need with `%~N` through delayed
+  expansion (`setlocal EnableDelayedExpansion`, `!var:text=!`).
+- A multi-line `echo` in a `.cmd` file turns every line after the first into a
+  separate command. Write canned output to a file and print it with `type`.
+- The harness logs an argument that contains spaces WITH its quotes on Windows.
+  Assert the shape of the calls (first call, later calls, nothing installed)
+  or strip the quotes, instead of comparing an exact list that was written on
+  Linux. The runner also checks before and after a step, so a query can run
+  more than once.
+- `neutral_locale` prepends `--disable-interactivity` to winget, so a stub
+  reads the subcommand from `%~2`, not `%~1`.
+- Windows output ends its lines with `\r\n`. Parsers and `sanitize_output` must
+  keep the line content; add a test with `\r\n` input that runs on every OS.
+
+### Adding a built-in step
+
+A new step changes more than its own module. Update, in the same pull request:
+the step count and the name check in `list_steps_lists_every_builtin_step`
+(`crates/freshen/tests/cli.rs`), and every `--skip` list in the "every built-in
+step excluded" tests there (`dry_run_…` and `check_with_…`) that must exclude
+the new step on the platforms where it is detected.
+
 ## When you get stuck
 
 If you cannot finish the item in 3 attempts, stop pushing on it. Commit what
