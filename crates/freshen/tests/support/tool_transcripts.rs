@@ -410,6 +410,18 @@ pub fn windows_update_transcript() -> Vec<&'static str> {
     t
 }
 
+/// Named insertion: the Windows Update check step via `usoclient`, used when
+/// PSWindowsUpdate is missing. Detection itself runs no subprocess (it only
+/// checks whether `usoclient` exists), so there is no separate detect entry.
+pub fn usoclient_check() -> &'static [&'static str] {
+    &["usoclient StartScan"]
+}
+
+/// Named insertion: full Windows Update transcript via the `usoclient` fallback.
+pub fn usoclient_transcript() -> Vec<&'static str> {
+    usoclient_check().to_vec()
+}
+
 /// Named insertion: the Microsoft Store source update step.
 pub fn microsoft_store_source_update() -> &'static [&'static str] {
     &["winget --disable-interactivity source update"]
