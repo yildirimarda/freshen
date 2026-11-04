@@ -20,6 +20,7 @@ use crate::registry::Registry;
 use crate::restart_needed;
 use crate::services_needing_restart;
 use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
+use crate::wsl::inside_command;
 use std::path::Path;
 #[cfg(target_os = "linux")]
 use std::sync::Mutex;
@@ -27,8 +28,9 @@ use std::sync::Mutex;
 /// The apt package manager step.
 pub const APT: StepId = "apt";
 
-/// apt only runs on Linux.
-const APT_PLATFORMS: [Platform; 1] = [Platform::Linux];
+/// apt runs on Linux natively and, on Windows, inside a selected WSL
+/// distribution via `wsl -d <distro> apt-get ...`.
+const APT_PLATFORMS: [Platform; 2] = [Platform::Linux, Platform::Windows];
 
 /// Docker packages whose upgrade requires the Docker Engine to be restarted.
 #[cfg(target_os = "linux")]
@@ -59,22 +61,31 @@ impl AptStep {
     }
 
     /// Runs `apt-get update` and then `apt-get upgrade -y`, collecting the
-    /// first failure so both commands are attempted.
-    fn upgrade(&self, failures: &mut Vec<StepError>) {
+    /// first failure so both commands are attempted. On Windows the commands
+    /// run inside the selected WSL distribution via `wsl -d <distro>`.
+    fn upgrade(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
         human!("apt-get update");
-        if let Err(error) = CommandSpec::new("apt-get")
-            .args(["update"])
-            .retry_transient_network(NETWORK_RETRIES)
-            .run()
+        if let Err(error) = inside_command(
+            options,
+            CommandSpec::new("apt-get")
+                .args(["update"])
+                .neutral_locale()
+                .retry_transient_network(NETWORK_RETRIES),
+        )
+        .run()
         {
             failures.push(StepError::run_from_process(APT, &error));
         }
 
         human!("apt-get upgrade -y");
-        if let Err(error) = CommandSpec::new("apt-get")
-            .args(["upgrade", "-y"])
-            .retry_transient_network(NETWORK_RETRIES)
-            .run()
+        if let Err(error) = inside_command(
+            options,
+            CommandSpec::new("apt-get")
+                .args(["upgrade", "-y"])
+                .neutral_locale()
+                .retry_transient_network(NETWORK_RETRIES),
+        )
+        .run()
         {
             failures.push(StepError::run_from_process(APT, &error));
         }
@@ -144,7 +155,12 @@ impl Step for AptStep {
     }
 
     fn detect(&self) -> Result<Detection, StepError> {
-        Ok(detect_apt())
+        #[cfg(target_os = "linux")]
+        return Ok(detect_apt());
+        #[cfg(target_os = "windows")]
+        return Ok(detect_wsl());
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        return Ok(Detection::NotInstalled);
     }
 
     fn check(&self) -> Result<CheckReport, StepError> {
@@ -166,11 +182,47 @@ impl Step for AptStep {
         Ok(CheckReport::from_items(items))
     }
 
+    /// Reports what is outdated inside the selected WSL distribution on
+    /// Windows. Without a selected distribution the step reports up to date.
+    fn check_with_options(&self, options: &RunOptions) -> Result<CheckReport, StepError> {
+        #[cfg(target_os = "windows")]
+        {
+            if crate::wsl::selected_distro(options).is_none() {
+                return Ok(CheckReport::up_to_date());
+            }
+            let output = inside_command(
+                options,
+                CommandSpec::new("apt-get")
+                    .args(["-s", "upgrade"])
+                    .neutral_locale(),
+            )
+            .run()
+            .map_err(|error| StepError::check_from_process(APT, &error))?;
+            let items = parse_apt_simulated_upgrade(output.stdout());
+            Ok(CheckReport::from_items(items))
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            // `check()` is read-only and runs natively on Linux; the run
+            // options only affect the WSL-wrapped path on Windows.
+            let _ = options;
+            self.check()
+        }
+    }
+
     fn run(&self) -> Result<(), StepError> {
         self.run_with_options(&RunOptions::new())
     }
 
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
+        #[cfg(target_os = "windows")]
+        {
+            let Some(_distro) = crate::wsl::selected_distro(options) else {
+                human!("apt: no WSL distribution selected; pass --wsl-distro <distro>");
+                return Ok(());
+            };
+        }
+
         #[cfg(target_os = "linux")]
         self.stop_desktop_apps(options);
 
@@ -196,7 +248,7 @@ impl Step for AptStep {
         }
 
         let mut failures = Vec::new();
-        self.upgrade(&mut failures);
+        self.upgrade(options, &mut failures);
 
         #[cfg(target_os = "linux")]
         if docker_upgrading {
@@ -208,9 +260,13 @@ impl Step for AptStep {
         if let Err(error) = cleanup::run(
             APT,
             "apt: autoremove",
-            CommandSpec::new("apt-get")
-                .args(["autoremove", "-y"])
-                .retry_transient_network(NETWORK_RETRIES),
+            inside_command(
+                options,
+                CommandSpec::new("apt-get")
+                    .args(["autoremove", "-y"])
+                    .neutral_locale()
+                    .retry_transient_network(NETWORK_RETRIES),
+            ),
             options,
         ) {
             failures.push(error);
@@ -219,9 +275,13 @@ impl Step for AptStep {
         if let Err(error) = cleanup::run(
             APT,
             "apt: autoclean",
-            CommandSpec::new("apt-get")
-                .args(["autoclean"])
-                .retry_transient_network(NETWORK_RETRIES),
+            inside_command(
+                options,
+                CommandSpec::new("apt-get")
+                    .args(["autoclean"])
+                    .neutral_locale()
+                    .retry_transient_network(NETWORK_RETRIES),
+            ),
             options,
         ) {
             failures.push(error);
@@ -248,6 +308,19 @@ fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
 /// Whether the `apt-get` binary is discoverable on `PATH`.
 fn detect_apt() -> Detection {
     if command_exists("apt-get") {
+        Detection::Installed
+    } else {
+        Detection::NotInstalled
+    }
+}
+
+/// Whether the `wsl` binary is discoverable on `PATH` (Windows only).
+///
+/// apt is considered available on Windows whenever WSL is present; the actual
+/// upgrade then runs inside the distribution selected with `--wsl-distro`.
+#[cfg(target_os = "windows")]
+fn detect_wsl() -> Detection {
+    if command_exists("wsl") {
         Detection::Installed
     } else {
         Detection::NotInstalled

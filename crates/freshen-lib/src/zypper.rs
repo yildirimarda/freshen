@@ -16,12 +16,14 @@ use crate::process::{CommandSpec, NETWORK_RETRIES};
 use crate::registry::Registry;
 use crate::services_needing_restart;
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
+use crate::wsl::inside_command;
 
 /// The zypper package manager step.
 pub const ZYPPER: StepId = "zypper";
 
-/// zypper only runs on Linux.
-const ZYPPER_PLATFORMS: [Platform; 1] = [Platform::Linux];
+/// zypper runs on Linux natively and, on Windows, inside a selected WSL
+/// distribution via `wsl -d <distro> zypper ...`.
+const ZYPPER_PLATFORMS: [Platform; 2] = [Platform::Linux, Platform::Windows];
 
 /// Docker packages whose upgrade requires the Docker Engine to be restarted.
 #[cfg(target_os = "linux")]
@@ -38,21 +40,29 @@ struct ZypperStep;
 impl ZypperStep {
     /// Runs `zypper refresh` and then `zypper update -y`, collecting the
     /// first failure so both commands are attempted even when refresh fails.
-    fn upgrade(&self, failures: &mut Vec<StepError>) {
+    /// On Windows the commands run inside the selected WSL distribution via
+    /// `wsl -d <distro>`.
+    fn upgrade(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
         human!("zypper refresh");
-        if let Err(error) = CommandSpec::new("zypper")
-            .args(["refresh"])
-            .retry_transient_network(NETWORK_RETRIES)
-            .run()
+        if let Err(error) = inside_command(
+            options,
+            CommandSpec::new("zypper")
+                .args(["refresh"])
+                .retry_transient_network(NETWORK_RETRIES),
+        )
+        .run()
         {
             failures.push(StepError::run_from_process(ZYPPER, &error));
         }
 
         human!("zypper update -y");
-        if let Err(error) = CommandSpec::new("zypper")
-            .args(["update", "-y"])
-            .retry_transient_network(NETWORK_RETRIES)
-            .run()
+        if let Err(error) = inside_command(
+            options,
+            CommandSpec::new("zypper")
+                .args(["update", "-y"])
+                .retry_transient_network(NETWORK_RETRIES),
+        )
+        .run()
         {
             failures.push(StepError::run_from_process(ZYPPER, &error));
         }
@@ -87,7 +97,12 @@ impl Step for ZypperStep {
     }
 
     fn detect(&self) -> Result<Detection, StepError> {
-        Ok(detect_zypper())
+        #[cfg(target_os = "linux")]
+        return Ok(detect_zypper());
+        #[cfg(target_os = "windows")]
+        return Ok(detect_wsl());
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        return Ok(Detection::NotInstalled);
     }
 
     fn check(&self) -> Result<CheckReport, StepError> {
@@ -98,36 +113,56 @@ impl Step for ZypperStep {
         self.run_with_options(&RunOptions::new())
     }
 
-    fn run_with_options(&self, _options: &RunOptions) -> Result<(), StepError> {
-        #[cfg(target_os = "linux")]
-        let docker_upgrading = {
-            let engine = NativeDockerRuntime::new();
-            engine.detect().is_installed()
-                && Self::docker_packages_are_pending()
-                && engine.is_running()
-        };
-
-        #[cfg(target_os = "linux")]
-        if docker_upgrading {
-            if let Err(error) = NativeDockerRuntime::new().stop() {
-                return Err(StepError::run_from_process(ZYPPER, &error));
+    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
+        #[cfg(target_os = "windows")]
+        {
+            let Some(_distro) = crate::wsl::selected_distro(options) else {
+                human!("zypper: no WSL distribution selected; pass --wsl-distro <distro>");
+                return Ok(());
+            };
+            let mut failures = Vec::new();
+            self.upgrade(options, &mut failures);
+            if failures.is_empty() {
+                self.services_needing_restart();
             }
+            finish(failures)
         }
-
-        let mut failures = Vec::new();
-        self.upgrade(&mut failures);
 
         #[cfg(target_os = "linux")]
-        if docker_upgrading {
-            if let Err(error) = NativeDockerRuntime::new().start() {
-                failures.push(StepError::run_from_process(ZYPPER, &error));
+        {
+            let docker_upgrading = {
+                let engine = NativeDockerRuntime::new();
+                engine.detect().is_installed()
+                    && Self::docker_packages_are_pending()
+                    && engine.is_running()
+            };
+
+            if docker_upgrading {
+                if let Err(error) = NativeDockerRuntime::new().stop() {
+                    return Err(StepError::run_from_process(ZYPPER, &error));
+                }
             }
+
+            let mut failures = Vec::new();
+            self.upgrade(options, &mut failures);
+
+            if docker_upgrading {
+                if let Err(error) = NativeDockerRuntime::new().start() {
+                    failures.push(StepError::run_from_process(ZYPPER, &error));
+                }
+            }
+
+            if failures.is_empty() {
+                self.services_needing_restart();
+            }
+            finish(failures)
         }
 
-        if failures.is_empty() {
-            self.services_needing_restart();
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        {
+            // zypper is not available on macOS; nothing to run.
+            Ok(())
         }
-        finish(failures)
     }
 
     fn platforms(&self) -> &'static [Platform] {
@@ -165,6 +200,16 @@ fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
 /// Whether the `zypper` binary is discoverable on `PATH`.
 fn detect_zypper() -> Detection {
     if command_exists("zypper") {
+        Detection::Installed
+    } else {
+        Detection::NotInstalled
+    }
+}
+
+/// Whether the `wsl` binary is discoverable on `PATH` (Windows only).
+#[cfg(target_os = "windows")]
+fn detect_wsl() -> Detection {
+    if command_exists("wsl") {
         Detection::Installed
     } else {
         Detection::NotInstalled

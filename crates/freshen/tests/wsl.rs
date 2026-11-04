@@ -155,3 +155,84 @@ fn wsl_list_steps_lists_wsl() {
     assert!(text.contains("wsl"), "listing: {text}");
     assert!(text.contains("installed"), "listing: {text}");
 }
+
+/// apt runs inside the selected WSL distribution via `wsl -d <distro>`.
+#[test]
+fn apt_runs_inside_the_selected_wsl_distribution() {
+    let tools = StubTools::new(&["wsl"]);
+    tools.set_responses(
+        "wsl",
+        &[
+            StubOutput::new(), // run: wsl -d Ubuntu apt-get update
+            StubOutput::new(), // run: wsl -d Ubuntu apt-get upgrade -y
+        ],
+    );
+    let output = tools
+        .command()
+        .args(["--only", "apt", "--wsl-distro", "Ubuntu"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        &[
+            "wsl -d Ubuntu apt-get update",
+            "wsl -d Ubuntu apt-get upgrade -y",
+        ],
+        "calls: {:?}",
+        tools.step_calls()
+    );
+    assert!(
+        stdout(&output).contains("1 ok, 0 planned, 0 skipped, 0 failed"),
+        "summary: {}",
+        stdout(&output)
+    );
+}
+
+/// apt is a no-op on Windows when no WSL distribution is selected.
+#[test]
+fn apt_is_a_noop_without_a_selected_wsl_distribution() {
+    let tools = StubTools::new(&["wsl"]);
+    let output = tools
+        .command()
+        .args(["--only", "apt"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        tools.step_calls().is_empty(),
+        "calls: {:?}",
+        tools.step_calls()
+    );
+    assert!(
+        stdout(&output).contains("1 ok, 0 planned, 0 skipped, 0 failed"),
+        "summary: {}",
+        stdout(&output)
+    );
+}
+
+/// apt is skipped on Windows when WSL itself is absent.
+#[test]
+fn apt_is_skipped_when_wsl_is_absent() {
+    let tools = StubTools::new(&[]);
+    let mut command = tools.command();
+    command.env("PATH", tools.stub_dir());
+    let output = command
+        .args(["--only", "apt", "--wsl-distro", "Ubuntu"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        tools.step_calls().is_empty(),
+        "calls: {:?}",
+        tools.step_calls()
+    );
+    assert!(
+        stdout(&output).contains("0 ok, 0 planned, 1 skipped, 0 failed"),
+        "summary: {}",
+        stdout(&output)
+    );
+}

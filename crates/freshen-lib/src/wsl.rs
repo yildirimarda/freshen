@@ -89,11 +89,50 @@ impl Step for WslStep {
     }
 }
 
+/// The WSL distribution selected with `--wsl-distro`, when running on Windows.
+///
+/// On non-Windows platforms this is always `None`, so Linux steps run natively
+/// there and the `--wsl-distro` flag has no effect.
+#[must_use]
+pub fn selected_distro(options: &RunOptions) -> Option<&str> {
+    if cfg!(target_os = "windows") {
+        options.wsl_distro()
+    } else {
+        None
+    }
+}
+
+/// Rewrites `spec` to run `wsl -d <distro> <spec>` inside the selected WSL
+/// distribution on Windows.
+///
+/// On non-Windows platforms, or when no distribution has been selected, `spec`
+/// is returned unchanged so Linux steps keep running natively. The timeout,
+/// retry count and neutral-locale settings of `spec` are preserved.
+#[must_use]
+pub fn inside_command(options: &RunOptions, spec: CommandSpec) -> CommandSpec {
+    let Some(distro) = selected_distro(options) else {
+        return spec;
+    };
+    let mut command = CommandSpec::new("wsl");
+    command = command.arg("-d").arg(distro);
+    for argument in spec.arguments() {
+        command = command.arg(argument);
+    }
+    if let Some(timeout) = spec.timeout_limit() {
+        command = command.timeout(timeout);
+    }
+    command = command.retries(spec.retry_count());
+    if spec.uses_neutral_locale() {
+        command = command.neutral_locale();
+    }
+    command
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{WslStep, WSL};
+    use super::{inside_command, selected_distro, WslStep, WSL};
     use crate::options::RunOptions;
-    use crate::process::PATH_GUARD;
+    use crate::process::{CommandSpec, PATH_GUARD};
     use crate::step::{Detection, Step};
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -278,5 +317,31 @@ mod tests {
                 .collect();
             assert!(!ids.contains(&WSL), "{platform}");
         }
+    }
+
+    /// `selected_distro` reports no distribution on non-Windows platforms, so
+    /// Linux steps run natively there even when `--wsl-distro` is given.
+    #[test]
+    fn selected_distro_returns_none_on_non_windows_platforms() {
+        let options = RunOptions::new().with_wsl_distro(Some("Ubuntu".to_owned()));
+
+        assert_eq!(selected_distro(&options), None);
+        assert_eq!(selected_distro(&RunOptions::new()), None);
+    }
+
+    /// `inside_command` returns the spec unchanged on non-Windows platforms so
+    /// Linux steps keep running natively there.
+    #[test]
+    fn inside_command_returns_spec_unchanged_on_non_windows_platforms() {
+        let options = RunOptions::new().with_wsl_distro(Some("Ubuntu".to_owned()));
+        let spec = CommandSpec::new("apt-get")
+            .args(["update"])
+            .neutral_locale()
+            .retries(2)
+            .timeout(std::time::Duration::from_secs(60));
+
+        let rewritten = inside_command(&options, spec.clone());
+
+        assert_eq!(rewritten, spec);
     }
 }

@@ -11,12 +11,14 @@ use crate::platform::Platform;
 use crate::process::{CommandSpec, ProcessError, NETWORK_RETRIES};
 use crate::registry::Registry;
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
+use crate::wsl::inside_command;
 
 /// The Snap package manager step.
 pub const SNAP: StepId = "snap";
 
-/// Snap only runs on Linux.
-const SNAP_PLATFORMS: [Platform; 1] = [Platform::Linux];
+/// Snap runs on Linux natively and, on Windows, inside a selected WSL
+/// distribution via `wsl -d <distro> snap ...`.
+const SNAP_PLATFORMS: [Platform; 2] = [Platform::Linux, Platform::Windows];
 
 /// Registers the snap step.
 #[must_use]
@@ -27,13 +29,17 @@ pub fn register(registry: Registry) -> Registry {
 struct SnapStep;
 
 impl SnapStep {
-    /// Runs `snap refresh`.
-    fn upgrade(&self, failures: &mut Vec<StepError>) {
+    /// Runs `snap refresh`. On Windows the command runs inside the selected
+    /// WSL distribution via `wsl -d <distro>`.
+    fn upgrade(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
         human!("snap refresh");
-        if let Err(error) = CommandSpec::new("snap")
-            .args(["refresh"])
-            .retry_transient_network(NETWORK_RETRIES)
-            .run()
+        if let Err(error) = inside_command(
+            options,
+            CommandSpec::new("snap")
+                .args(["refresh"])
+                .retry_transient_network(NETWORK_RETRIES),
+        )
+        .run()
         {
             let ProcessError::Failed { output, .. } = &error else {
                 failures.push(StepError::run_from_process(SNAP, &error));
@@ -59,7 +65,12 @@ impl Step for SnapStep {
     }
 
     fn detect(&self) -> Result<Detection, StepError> {
-        Ok(detect_snap())
+        #[cfg(target_os = "linux")]
+        return Ok(detect_snap());
+        #[cfg(target_os = "windows")]
+        return Ok(detect_wsl());
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        return Ok(Detection::NotInstalled);
     }
 
     fn check(&self) -> Result<CheckReport, StepError> {
@@ -70,10 +81,30 @@ impl Step for SnapStep {
         self.run_with_options(&RunOptions::new())
     }
 
-    fn run_with_options(&self, _options: &RunOptions) -> Result<(), StepError> {
-        let mut failures = Vec::new();
-        self.upgrade(&mut failures);
-        finish(failures)
+    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
+        #[cfg(target_os = "windows")]
+        {
+            let Some(_distro) = crate::wsl::selected_distro(options) else {
+                human!("snap: no WSL distribution selected; pass --wsl-distro <distro>");
+                return Ok(());
+            };
+            let mut failures = Vec::new();
+            self.upgrade(options, &mut failures);
+            finish(failures)
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let mut failures = Vec::new();
+            self.upgrade(options, &mut failures);
+            finish(failures)
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        {
+            // snap is not available on macOS; nothing to run.
+            Ok(())
+        }
     }
 
     fn platforms(&self) -> &'static [Platform] {
@@ -103,6 +134,16 @@ fn held_refresh_window(text: &str) -> Option<String> {
 /// Whether the `snap` binary is discoverable on `PATH`.
 fn detect_snap() -> Detection {
     if command_exists("snap") {
+        Detection::Installed
+    } else {
+        Detection::NotInstalled
+    }
+}
+
+/// Whether the `wsl` binary is discoverable on `PATH` (Windows only).
+#[cfg(target_os = "windows")]
+fn detect_wsl() -> Detection {
+    if command_exists("wsl") {
         Detection::Installed
     } else {
         Detection::NotInstalled
