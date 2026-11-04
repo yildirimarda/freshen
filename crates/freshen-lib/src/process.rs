@@ -716,7 +716,15 @@ impl CommandSpec {
         #[cfg(windows)]
         let mut command = match crate::executable::resolve(&self.program) {
             Some(path) => Command::new(path),
-            None => Command::new(&self.program),
+            None => {
+                return Err(ProcessError::Spawn {
+                    program: program.clone(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "executable not found on PATH",
+                    ),
+                });
+            }
         };
         #[cfg(not(windows))]
         let mut command = Command::new(&self.program);
