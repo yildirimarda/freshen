@@ -12,14 +12,19 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::cleanup;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::executable::command_exists;
 use crate::options::RunOptions;
 use crate::output::human;
 use crate::platform::Platform;
-use crate::process::{CommandSpec, NETWORK_RETRIES};
+use crate::process::CommandSpec;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+use crate::process::NETWORK_RETRIES;
 use crate::registry::Registry;
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::wsl::inside_command;
 
 /// The Nix channel step.
@@ -62,6 +67,7 @@ struct NixStep;
 impl NixStep {
     /// Runs `nix channel --update`. On Windows the command runs inside the
     /// selected WSL distribution via `wsl -d <distro>`.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn upgrade(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
         human!("nix channel --update");
         if let Err(error) = inside_command(
@@ -139,6 +145,7 @@ struct NixProfileStep;
 impl NixProfileStep {
     /// Runs `nix profile upgrade --all`. On Windows the command runs inside
     /// the selected WSL distribution via `wsl -d <distro>`.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn upgrade(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
         human!("nix profile upgrade --all");
         if let Err(error) = inside_command(
@@ -180,6 +187,7 @@ impl Step for NixProfileStep {
         self.run_with_options(&RunOptions::new())
     }
 
+    #[allow(unused_variables)]
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
         #[cfg(target_os = "windows")]
         {
@@ -220,6 +228,7 @@ struct NixCollectGarbageStep;
 
 impl NixCollectGarbageStep {
     /// Runs `nix-collect-garbage`, gated on `--cleanup`.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn cleanup(&self, failures: &mut Vec<StepError>, options: &RunOptions) {
         if let Err(error) = cleanup::run(
             NIX_COLLECT_GARBAGE,
@@ -258,6 +267,7 @@ impl Step for NixCollectGarbageStep {
         Ok(())
     }
 
+    #[allow(unused_variables)]
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
         #[cfg(target_os = "windows")]
         {
@@ -340,6 +350,7 @@ impl Step for HomeManagerStep {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
     match failures.into_iter().next() {
         Some(error) => Err(error),

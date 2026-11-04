@@ -11,6 +11,7 @@ use crate::cleanup;
 use crate::containers::{ContainerRuntime, NativeDockerRuntime};
 #[cfg(target_os = "linux")]
 use crate::desktop_apps::{self, HostDesktopAppSystem, StopPolicy};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::executable::command_exists;
 use crate::options::RunOptions;
 use crate::output::human;
@@ -418,7 +419,9 @@ fn temp_marker_path() -> std::path::PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_apt_simulated_upgrade, restart_needed_at, temp_marker_path};
+    use super::parse_apt_simulated_upgrade;
+    #[cfg(target_os = "linux")]
+    use super::{restart_needed_at, temp_marker_path};
 
     #[test]
     fn parses_simulated_upgrade_lines() {

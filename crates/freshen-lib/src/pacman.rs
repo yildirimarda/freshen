@@ -6,18 +6,23 @@
 //! skipped entirely when pacman is absent, so it is safe to register on
 //! every machine; on macOS and Windows it is never detected.
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::cleanup;
 #[cfg(target_os = "linux")]
 use crate::containers::{ContainerRuntime, NativeDockerRuntime};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::executable::command_exists;
 use crate::options::RunOptions;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::output::human;
+use crate::platform::Platform;
 #[cfg(target_os = "linux")]
 use crate::pacman_findings;
-use crate::platform::Platform;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::process::{CommandSpec, NETWORK_RETRIES};
 use crate::registry::Registry;
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::wsl::inside_command;
 
 /// The pacman package manager step.
@@ -171,6 +176,7 @@ impl Step for PacmanStep {
         self.run_with_options(&RunOptions::new())
     }
 
+    #[allow(unused_variables)]
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
         #[cfg(target_os = "windows")]
         {

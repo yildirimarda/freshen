@@ -6,13 +6,17 @@
 //! It is skipped entirely when apk is absent, so it is safe to register on
 //! every machine; on macOS and Windows it is never detected.
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::executable::command_exists;
 use crate::options::RunOptions;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::output::human;
 use crate::platform::Platform;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::process::{CommandSpec, NETWORK_RETRIES};
 use crate::registry::Registry;
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::wsl::inside_command;
 
 /// The apk package manager step (Alpine Linux).
@@ -88,6 +92,7 @@ impl Step for ApkStep {
         self.run_with_options(&RunOptions::new())
     }
 
+    #[allow(unused_variables)]
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
         #[cfg(target_os = "windows")]
         {

@@ -6,18 +6,25 @@
 //! step is skipped only when neither is installed. It is safe to register
 //! on every machine; on macOS and Windows it is never detected.
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::cleanup;
 #[cfg(target_os = "linux")]
 use crate::containers::{ContainerRuntime, NativeDockerRuntime};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::executable::command_exists;
 use crate::options::RunOptions;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::output::human;
 use crate::platform::Platform;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::process::{CommandSpec, NETWORK_RETRIES};
 use crate::registry::Registry;
+#[cfg(target_os = "linux")]
 use crate::restart_needed;
+#[cfg(target_os = "linux")]
 use crate::services_needing_restart;
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::wsl::inside_command;
 
 /// The dnf package manager step (falls back to `yum` when dnf is absent).
@@ -95,7 +102,6 @@ impl DnfStep {
             {
                 failures.push(StepError::run_from_process(DNF, &error));
             }
-            return;
         }
 
         #[cfg(not(target_os = "windows"))]
@@ -161,6 +167,7 @@ impl Step for DnfStep {
     fn run(&self) -> Result<(), StepError> {
         self.run_with_options(&RunOptions::new())
     }
+    #[allow(unused_variables)]
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
         #[cfg(target_os = "windows")]
         {
@@ -270,6 +277,7 @@ fn detect_wsl() -> Detection {
     }
 }
 
+#[cfg(target_os = "linux")]
 /// `needs-restarting` (from `dnf-utils`) reports which running services need a
 /// restart after a dnf/yum upgrade. It lists one service per line when run
 /// without `-r`. When the tool is not installed, or cannot be run, no services

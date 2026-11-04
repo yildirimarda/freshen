@@ -8,14 +8,19 @@
 
 #[cfg(target_os = "linux")]
 use crate::containers::{ContainerRuntime, NativeDockerRuntime};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::executable::command_exists;
 use crate::options::RunOptions;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::output::human;
 use crate::platform::Platform;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::process::{CommandSpec, NETWORK_RETRIES};
 use crate::registry::Registry;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::services_needing_restart;
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::wsl::inside_command;
 
 /// The zypper package manager step.
@@ -114,6 +119,7 @@ impl Step for ZypperStep {
         self.run_with_options(&RunOptions::new())
     }
 
+    #[allow(unused_variables)]
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
         #[cfg(target_os = "windows")]
         {
