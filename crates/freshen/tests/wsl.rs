@@ -156,15 +156,16 @@ fn wsl_list_steps_lists_wsl() {
     assert!(text.contains("installed"), "listing: {text}");
 }
 
-/// apt runs inside the selected WSL distribution via `wsl -d <distro>`.
+/// apt runs inside the selected WSL distribution via `wsl -d <distro> --exec`.
 #[test]
 fn apt_runs_inside_the_selected_wsl_distribution() {
     let tools = StubTools::new(&["wsl"]);
     tools.set_responses(
         "wsl",
         &[
-            StubOutput::new(), // run: wsl -d Ubuntu apt-get update
-            StubOutput::new(), // run: wsl -d Ubuntu apt-get upgrade -y
+            StubOutput::new(), // check: wsl -d Ubuntu --exec apt-get -s upgrade
+            StubOutput::new(), // run: wsl -d Ubuntu --exec apt-get update
+            StubOutput::new(), // run: wsl -d Ubuntu --exec apt-get upgrade -y
         ],
     );
     let output = tools
@@ -177,8 +178,9 @@ fn apt_runs_inside_the_selected_wsl_distribution() {
     assert_eq!(
         tools.step_calls(),
         &[
-            "wsl -d Ubuntu apt-get update",
-            "wsl -d Ubuntu apt-get upgrade -y",
+            "wsl -d Ubuntu --exec apt-get -s upgrade",
+            "wsl -d Ubuntu --exec apt-get update",
+            "wsl -d Ubuntu --exec apt-get upgrade -y",
         ],
         "calls: {:?}",
         tools.step_calls()
