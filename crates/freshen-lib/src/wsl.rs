@@ -102,19 +102,28 @@ pub fn selected_distro(options: &RunOptions) -> Option<&str> {
     }
 }
 
-/// Rewrites `spec` to run `wsl -d <distro> <spec>` inside the selected WSL
-/// distribution on Windows.
+/// Rewrites `spec` to run `wsl -d <distro> --exec <program> <arguments>` inside
+/// the selected WSL distribution on Windows.
 ///
 /// On non-Windows platforms, or when no distribution has been selected, `spec`
-/// is returned unchanged so Linux steps keep running natively. The timeout,
-/// retry count and neutral-locale settings of `spec` are preserved.
+/// is returned unchanged so Linux steps keep running natively.
 #[must_use]
 pub fn inside_command(options: &RunOptions, spec: CommandSpec) -> CommandSpec {
-    let Some(distro) = selected_distro(options) else {
-        return spec;
-    };
-    let mut command = CommandSpec::new("wsl");
-    command = command.arg("-d").arg(distro);
+    match selected_distro(options) {
+        Some(distro) => wrap_in_distro(distro, &spec),
+        None => spec,
+    }
+}
+
+/// Runs `spec` inside `distro`. `--exec` starts the program directly, without a
+/// shell, so no argument needs quoting. The timeout, retry count and
+/// neutral-locale settings of `spec` are preserved.
+fn wrap_in_distro(distro: &str, spec: &CommandSpec) -> CommandSpec {
+    let mut command = CommandSpec::new("wsl")
+        .arg("-d")
+        .arg(distro)
+        .arg("--exec")
+        .arg(spec.program());
     for argument in spec.arguments() {
         command = command.arg(argument);
     }
@@ -130,7 +139,7 @@ pub fn inside_command(options: &RunOptions, spec: CommandSpec) -> CommandSpec {
 
 #[cfg(test)]
 mod tests {
-    use super::{inside_command, selected_distro, WslStep, WSL};
+    use super::{inside_command, selected_distro, wrap_in_distro, WslStep, WSL};
     use crate::options::RunOptions;
     use crate::process::{CommandSpec, PATH_GUARD};
     use crate::step::{Detection, Step};
@@ -321,6 +330,7 @@ mod tests {
 
     /// `selected_distro` reports no distribution on non-Windows platforms, so
     /// Linux steps run natively there even when `--wsl-distro` is given.
+    #[cfg(not(windows))]
     #[test]
     fn selected_distro_returns_none_on_non_windows_platforms() {
         let options = RunOptions::new().with_wsl_distro(Some("Ubuntu".to_owned()));
@@ -331,6 +341,7 @@ mod tests {
 
     /// `inside_command` returns the spec unchanged on non-Windows platforms so
     /// Linux steps keep running natively there.
+    #[cfg(not(windows))]
     #[test]
     fn inside_command_returns_spec_unchanged_on_non_windows_platforms() {
         let options = RunOptions::new().with_wsl_distro(Some("Ubuntu".to_owned()));
@@ -343,5 +354,51 @@ mod tests {
         let rewritten = inside_command(&options, spec.clone());
 
         assert_eq!(rewritten, spec);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn selected_distro_returns_the_distro_on_windows() {
+        let options = RunOptions::new().with_wsl_distro(Some("Ubuntu".to_owned()));
+
+        assert_eq!(selected_distro(&options), Some("Ubuntu"));
+        assert_eq!(selected_distro(&RunOptions::new()), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn inside_command_runs_the_program_in_the_distro_on_windows() {
+        let options = RunOptions::new().with_wsl_distro(Some("Ubuntu".to_owned()));
+        let spec = CommandSpec::new("apt-get").args(["update"]);
+
+        let rewritten = inside_command(&options, spec);
+
+        assert_eq!(rewritten.program(), "wsl");
+    }
+
+    /// The wrapping itself does not depend on the platform, so every OS tests it.
+    #[test]
+    fn a_command_is_wrapped_to_run_inside_the_distro() {
+        let spec = CommandSpec::new("apt-get")
+            .args(["update"])
+            .neutral_locale()
+            .retries(2)
+            .timeout(std::time::Duration::from_secs(60));
+
+        let wrapped = wrap_in_distro("Ubuntu", &spec);
+
+        assert_eq!(wrapped.program(), "wsl");
+        let arguments: Vec<String> = wrapped
+            .arguments()
+            .iter()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(arguments, ["-d", "Ubuntu", "--exec", "apt-get", "update"]);
+        assert_eq!(
+            wrapped.timeout_limit(),
+            Some(std::time::Duration::from_secs(60))
+        );
+        assert_eq!(wrapped.retry_count(), 2);
+        assert!(wrapped.uses_neutral_locale());
     }
 }
