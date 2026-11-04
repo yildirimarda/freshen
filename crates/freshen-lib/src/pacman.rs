@@ -6,23 +6,31 @@
 //! skipped entirely when pacman is absent, so it is safe to register on
 //! every machine; on macOS and Windows it is never detected.
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::cleanup;
 #[cfg(target_os = "linux")]
 use crate::containers::{ContainerRuntime, NativeDockerRuntime};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::executable::command_exists;
 use crate::options::RunOptions;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::output::human;
+#[cfg(target_os = "linux")]
 use crate::pacman_findings;
 use crate::platform::Platform;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::process::{CommandSpec, NETWORK_RETRIES};
 use crate::registry::Registry;
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+use crate::wsl::inside_command;
 
 /// The pacman package manager step.
 pub const PACMAN: StepId = "pacman";
 
-/// pacman only runs on Linux.
-const PACMAN_PLATFORMS: [Platform; 1] = [Platform::Linux];
+/// pacman runs on Linux natively and, on Windows, inside a selected WSL
+/// distribution via `wsl -d <distro> pacman ...`.
+const PACMAN_PLATFORMS: [Platform; 2] = [Platform::Linux, Platform::Windows];
 
 /// Docker packages whose upgrade requires the Docker Engine to be restarted.
 #[cfg(target_os = "linux")]
@@ -37,13 +45,18 @@ pub fn register(registry: Registry) -> Registry {
 struct PacmanStep;
 
 impl PacmanStep {
-    /// Runs `pacman -Syu --noconfirm`.
-    fn upgrade(&self, failures: &mut Vec<StepError>) {
+    /// Runs `pacman -Syu --noconfirm`. On Windows the command runs inside the
+    /// selected WSL distribution via `wsl -d <distro> pacman ...`.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    fn upgrade(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
         human!("pacman -Syu --noconfirm");
-        if let Err(error) = CommandSpec::new("pacman")
-            .args(["-Syu", "--noconfirm"])
-            .retry_transient_network(NETWORK_RETRIES)
-            .run()
+        if let Err(error) = inside_command(
+            options,
+            CommandSpec::new("pacman")
+                .args(["-Syu", "--noconfirm"])
+                .retry_transient_network(NETWORK_RETRIES),
+        )
+        .run()
         {
             failures.push(StepError::run_from_process(PACMAN, &error));
         }
@@ -51,6 +64,7 @@ impl PacmanStep {
 
     /// Cleans the package cache and removes orphaned packages, running only
     /// when `--cleanup` is enabled.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn cleanup(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
         self.clean_package_cache(options, failures);
         self.remove_orphans(options, failures);
@@ -76,13 +90,17 @@ impl PacmanStep {
 
     /// Removes cached packages that are no longer installed and unused sync
     /// databases.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn clean_package_cache(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
         if let Err(error) = cleanup::run(
             PACMAN,
             "pacman: package cache",
-            CommandSpec::new("pacman")
-                .args(["-Sc", "--noconfirm"])
-                .retry_transient_network(NETWORK_RETRIES),
+            inside_command(
+                options,
+                CommandSpec::new("pacman")
+                    .args(["-Sc", "--noconfirm"])
+                    .retry_transient_network(NETWORK_RETRIES),
+            ),
             options,
         ) {
             failures.push(error);
@@ -90,6 +108,7 @@ impl PacmanStep {
     }
 
     /// Removes orphaned packages (packages no longer required by anything).
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn remove_orphans(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
         if !options.cleanup_enabled() {
             human!(
@@ -99,7 +118,8 @@ impl PacmanStep {
             return;
         }
 
-        let Ok(listing) = CommandSpec::new("pacman").args(["-Qtdq"]).run() else {
+        let Ok(listing) = inside_command(options, CommandSpec::new("pacman").args(["-Qtdq"])).run()
+        else {
             return;
         };
         let orphans: Vec<&str> = listing
@@ -116,10 +136,13 @@ impl PacmanStep {
         if let Err(error) = cleanup::run(
             PACMAN,
             "pacman: orphans",
-            CommandSpec::new("pacman")
-                .args(["-Rns", "--noconfirm"])
-                .args(orphans.as_slice())
-                .retry_transient_network(NETWORK_RETRIES),
+            inside_command(
+                options,
+                CommandSpec::new("pacman")
+                    .args(["-Rns", "--noconfirm"])
+                    .args(orphans.as_slice())
+                    .retry_transient_network(NETWORK_RETRIES),
+            ),
             options,
         ) {
             failures.push(error);
@@ -137,7 +160,12 @@ impl Step for PacmanStep {
     }
 
     fn detect(&self) -> Result<Detection, StepError> {
-        Ok(detect_pacman())
+        #[cfg(target_os = "linux")]
+        return Ok(detect_pacman());
+        #[cfg(target_os = "windows")]
+        return Ok(detect_wsl());
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        return Ok(Detection::NotInstalled);
     }
 
     fn check(&self) -> Result<CheckReport, StepError> {
@@ -148,43 +176,62 @@ impl Step for PacmanStep {
         self.run_with_options(&RunOptions::new())
     }
 
+    #[allow(unused_variables)]
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
-        #[cfg(target_os = "linux")]
-        let docker_upgrading = {
-            let engine = NativeDockerRuntime::new();
-            engine.detect().is_installed()
-                && Self::docker_packages_are_pending()
-                && engine.is_running()
-        };
-
-        #[cfg(target_os = "linux")]
-        if docker_upgrading {
-            if let Err(error) = NativeDockerRuntime::new().stop() {
-                return Err(StepError::run_from_process(PACMAN, &error));
-            }
+        #[cfg(target_os = "windows")]
+        {
+            let Some(_distro) = crate::wsl::selected_distro(options) else {
+                human!("pacman: no WSL distribution selected; pass --wsl-distro <distro>");
+                return Ok(());
+            };
+            let mut failures = Vec::new();
+            self.upgrade(options, &mut failures);
+            self.cleanup(options, &mut failures);
+            finish(failures)
         }
 
-        let mut failures = Vec::new();
-        self.upgrade(&mut failures);
-
         #[cfg(target_os = "linux")]
-        if docker_upgrading {
-            if let Err(error) = NativeDockerRuntime::new().start() {
-                failures.push(StepError::run_from_process(PACMAN, &error));
+        {
+            let docker_upgrading = {
+                let engine = NativeDockerRuntime::new();
+                engine.detect().is_installed()
+                    && Self::docker_packages_are_pending()
+                    && engine.is_running()
+            };
+
+            if docker_upgrading {
+                if let Err(error) = NativeDockerRuntime::new().stop() {
+                    return Err(StepError::run_from_process(PACMAN, &error));
+                }
             }
+
+            let mut failures = Vec::new();
+            self.upgrade(options, &mut failures);
+
+            if docker_upgrading {
+                if let Err(error) = NativeDockerRuntime::new().start() {
+                    failures.push(StepError::run_from_process(PACMAN, &error));
+                }
+            }
+
+            // Report `.pacnew` and `.pacsave` files left behind by a successful
+            // upgrade so the user knows which configuration files need merging.
+            if failures.is_empty() {
+                for finding in pacman_findings::pacman_findings() {
+                    pacman_findings::record(finding);
+                }
+            }
+
+            self.cleanup(options, &mut failures);
+
+            finish(failures)
         }
 
-        // Report `.pacnew` and `.pacsave` files left behind by a successful
-        // upgrade so the user knows which configuration files need merging.
-        if failures.is_empty() {
-            for finding in pacman_findings::pacman_findings() {
-                pacman_findings::record(finding);
-            }
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        {
+            // pacman is not available on macOS; nothing to run.
+            Ok(())
         }
-
-        self.cleanup(options, &mut failures);
-
-        finish(failures)
     }
 
     fn platforms(&self) -> &'static [Platform] {
@@ -192,6 +239,7 @@ impl Step for PacmanStep {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
     match failures.into_iter().next() {
         Some(error) => Err(error),
@@ -200,8 +248,19 @@ fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
 }
 
 /// Whether the `pacman` binary is discoverable on `PATH`.
+#[cfg(target_os = "linux")]
 fn detect_pacman() -> Detection {
     if command_exists("pacman") {
+        Detection::Installed
+    } else {
+        Detection::NotInstalled
+    }
+}
+
+/// Whether the `wsl` binary is discoverable on `PATH` (Windows only).
+#[cfg(target_os = "windows")]
+fn detect_wsl() -> Detection {
+    if command_exists("wsl") {
         Detection::Installed
     } else {
         Detection::NotInstalled

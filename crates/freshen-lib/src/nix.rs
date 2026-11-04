@@ -12,14 +12,20 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::cleanup;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::executable::command_exists;
 use crate::options::RunOptions;
 use crate::output::human;
 use crate::platform::Platform;
-use crate::process::{CommandSpec, NETWORK_RETRIES};
+use crate::process::CommandSpec;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+use crate::process::NETWORK_RETRIES;
 use crate::registry::Registry;
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+use crate::wsl::inside_command;
 
 /// The Nix channel step.
 pub const NIX: StepId = "nix";
@@ -30,12 +36,15 @@ pub const NIX_COLLECT_GARBAGE: StepId = "nix-collect-garbage";
 /// The home-manager step.
 pub const HOME_MANAGER: StepId = "home-manager";
 
-/// Nix only runs on Linux.
-const NIX_PLATFORMS: [Platform; 1] = [Platform::Linux];
-/// Nix profile upgrades only run on Linux.
-const NIX_PROFILE_PLATFORMS: [Platform; 1] = [Platform::Linux];
-/// Nix garbage collection only runs on Linux.
-const NIX_COLLECT_GARBAGE_PLATFORMS: [Platform; 1] = [Platform::Linux];
+/// Nix runs on Linux natively and, on Windows, inside a selected WSL
+/// distribution via `wsl -d <distro> nix ...`.
+const NIX_PLATFORMS: [Platform; 2] = [Platform::Linux, Platform::Windows];
+/// Nix profile upgrades run on Linux natively and, on Windows, inside a
+/// selected WSL distribution.
+const NIX_PROFILE_PLATFORMS: [Platform; 2] = [Platform::Linux, Platform::Windows];
+/// Nix garbage collection runs on Linux natively and, on Windows, inside a
+/// selected WSL distribution.
+const NIX_COLLECT_GARBAGE_PLATFORMS: [Platform; 2] = [Platform::Linux, Platform::Windows];
 /// home-manager runs on Linux and macOS.
 const HOME_MANAGER_PLATFORMS: [Platform; 2] = [Platform::Linux, Platform::Macos];
 
@@ -56,13 +65,18 @@ pub fn register(registry: Registry) -> Registry {
 struct NixStep;
 
 impl NixStep {
-    /// Runs `nix channel --update`.
-    fn upgrade(&self, failures: &mut Vec<StepError>) {
+    /// Runs `nix channel --update`. On Windows the command runs inside the
+    /// selected WSL distribution via `wsl -d <distro>`.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    fn upgrade(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
         human!("nix channel --update");
-        if let Err(error) = CommandSpec::new("nix")
-            .args(["channel", "--update"])
-            .retry_transient_network(NETWORK_RETRIES)
-            .run()
+        if let Err(error) = inside_command(
+            options,
+            CommandSpec::new("nix")
+                .args(["channel", "--update"])
+                .retry_transient_network(NETWORK_RETRIES),
+        )
+        .run()
         {
             failures.push(StepError::run_from_process(NIX, &error));
         }
@@ -79,7 +93,12 @@ impl Step for NixStep {
     }
 
     fn detect(&self) -> Result<Detection, StepError> {
-        Ok(detect_nix())
+        #[cfg(target_os = "linux")]
+        return Ok(detect_nix());
+        #[cfg(target_os = "windows")]
+        return Ok(detect_wsl());
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        return Ok(Detection::NotInstalled);
     }
 
     fn check(&self) -> Result<CheckReport, StepError> {
@@ -91,9 +110,29 @@ impl Step for NixStep {
     }
 
     fn run_with_options(&self, _options: &RunOptions) -> Result<(), StepError> {
-        let mut failures = Vec::new();
-        self.upgrade(&mut failures);
-        finish(failures)
+        #[cfg(target_os = "windows")]
+        {
+            let Some(_distro) = crate::wsl::selected_distro(_options) else {
+                human!("nix: no WSL distribution selected; pass --wsl-distro <distro>");
+                return Ok(());
+            };
+            let mut failures = Vec::new();
+            self.upgrade(_options, &mut failures);
+            finish(failures)
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let mut failures = Vec::new();
+            self.upgrade(_options, &mut failures);
+            finish(failures)
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        {
+            // nix is not available on macOS; nothing to run.
+            Ok(())
+        }
     }
 
     fn platforms(&self) -> &'static [Platform] {
@@ -104,13 +143,18 @@ impl Step for NixStep {
 struct NixProfileStep;
 
 impl NixProfileStep {
-    /// Runs `nix profile upgrade --all`.
-    fn upgrade(&self, failures: &mut Vec<StepError>) {
+    /// Runs `nix profile upgrade --all`. On Windows the command runs inside
+    /// the selected WSL distribution via `wsl -d <distro>`.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    fn upgrade(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
         human!("nix profile upgrade --all");
-        if let Err(error) = CommandSpec::new("nix")
-            .args(["profile", "upgrade", "--all"])
-            .retry_transient_network(NETWORK_RETRIES)
-            .run()
+        if let Err(error) = inside_command(
+            options,
+            CommandSpec::new("nix")
+                .args(["profile", "upgrade", "--all"])
+                .retry_transient_network(NETWORK_RETRIES),
+        )
+        .run()
         {
             failures.push(StepError::run_from_process(NIX_PROFILE, &error));
         }
@@ -127,7 +171,12 @@ impl Step for NixProfileStep {
     }
 
     fn detect(&self) -> Result<Detection, StepError> {
-        Ok(detect_nix())
+        #[cfg(target_os = "linux")]
+        return Ok(detect_nix());
+        #[cfg(target_os = "windows")]
+        return Ok(detect_wsl());
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        return Ok(Detection::NotInstalled);
     }
 
     fn check(&self) -> Result<CheckReport, StepError> {
@@ -138,10 +187,31 @@ impl Step for NixProfileStep {
         self.run_with_options(&RunOptions::new())
     }
 
+    #[allow(unused_variables)]
     fn run_with_options(&self, _options: &RunOptions) -> Result<(), StepError> {
-        let mut failures = Vec::new();
-        self.upgrade(&mut failures);
-        finish(failures)
+        #[cfg(target_os = "windows")]
+        {
+            let Some(_distro) = crate::wsl::selected_distro(_options) else {
+                human!("nix: no WSL distribution selected; pass --wsl-distro <distro>");
+                return Ok(());
+            };
+            let mut failures = Vec::new();
+            self.upgrade(_options, &mut failures);
+            finish(failures)
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let mut failures = Vec::new();
+            self.upgrade(_options, &mut failures);
+            finish(failures)
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        {
+            // nix is not available on macOS; nothing to run.
+            Ok(())
+        }
     }
 
     fn platforms(&self) -> &'static [Platform] {
@@ -158,11 +228,12 @@ struct NixCollectGarbageStep;
 
 impl NixCollectGarbageStep {
     /// Runs `nix-collect-garbage`, gated on `--cleanup`.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn cleanup(&self, failures: &mut Vec<StepError>, options: &RunOptions) {
         if let Err(error) = cleanup::run(
             NIX_COLLECT_GARBAGE,
             "nix-collect-garbage",
-            CommandSpec::new("nix-collect-garbage"),
+            inside_command(options, CommandSpec::new("nix-collect-garbage")),
             options,
         ) {
             failures.push(error);
@@ -180,7 +251,12 @@ impl Step for NixCollectGarbageStep {
     }
 
     fn detect(&self) -> Result<Detection, StepError> {
-        Ok(detect_nix())
+        #[cfg(target_os = "linux")]
+        return Ok(detect_nix());
+        #[cfg(target_os = "windows")]
+        return Ok(detect_wsl());
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        return Ok(Detection::NotInstalled);
     }
 
     fn check(&self) -> Result<CheckReport, StepError> {
@@ -191,10 +267,33 @@ impl Step for NixCollectGarbageStep {
         Ok(())
     }
 
-    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
-        let mut failures = Vec::new();
-        self.cleanup(&mut failures, options);
-        finish(failures)
+    #[allow(unused_variables)]
+    fn run_with_options(&self, _options: &RunOptions) -> Result<(), StepError> {
+        #[cfg(target_os = "windows")]
+        {
+            let Some(_distro) = crate::wsl::selected_distro(_options) else {
+                human!(
+                    "nix-collect-garbage: no WSL distribution selected; pass --wsl-distro <distro>"
+                );
+                return Ok(());
+            };
+            let mut failures = Vec::new();
+            self.cleanup(&mut failures, _options);
+            finish(failures)
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let mut failures = Vec::new();
+            self.cleanup(&mut failures, _options);
+            finish(failures)
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        {
+            // nix-collect-garbage is not available on macOS; nothing to run.
+            Ok(())
+        }
     }
 
     fn platforms(&self) -> &'static [Platform] {
@@ -259,8 +358,19 @@ fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
 }
 
 /// Whether the `nix` binary is discoverable on `PATH`.
+#[cfg(target_os = "linux")]
 fn detect_nix() -> Detection {
     if command_exists("nix") {
+        Detection::Installed
+    } else {
+        Detection::NotInstalled
+    }
+}
+
+/// Whether the `wsl` binary is discoverable on `PATH` (Windows only).
+#[cfg(target_os = "windows")]
+fn detect_wsl() -> Detection {
+    if command_exists("wsl") {
         Detection::Installed
     } else {
         Detection::NotInstalled
@@ -303,11 +413,14 @@ fn detect_home_manager(path: &Path) -> Detection {
 
 #[cfg(test)]
 mod tests {
-    use super::{detect_home_manager, detect_nix, home_manager_config_exists};
+    #[cfg(target_os = "linux")]
+    use super::detect_nix;
+    use super::{detect_home_manager, home_manager_config_exists};
     use crate::step::Detection;
     use std::fs;
     use std::path::PathBuf;
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn detect_nix_reports_not_installed_when_absent_from_path() {
         // `nix` is not expected on the test machine; this just exercises the

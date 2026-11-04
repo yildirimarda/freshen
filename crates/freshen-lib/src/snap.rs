@@ -4,19 +4,25 @@
 //! entirely when snap is absent, so it is safe to register on every machine;
 //! on macOS and Windows it is never detected.
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::executable::command_exists;
 use crate::options::RunOptions;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::output::human;
 use crate::platform::Platform;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::process::{CommandSpec, ProcessError, NETWORK_RETRIES};
 use crate::registry::Registry;
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+use crate::wsl::inside_command;
 
 /// The Snap package manager step.
 pub const SNAP: StepId = "snap";
 
-/// Snap only runs on Linux.
-const SNAP_PLATFORMS: [Platform; 1] = [Platform::Linux];
+/// Snap runs on Linux natively and, on Windows, inside a selected WSL
+/// distribution via `wsl -d <distro> snap ...`.
+const SNAP_PLATFORMS: [Platform; 2] = [Platform::Linux, Platform::Windows];
 
 /// Registers the snap step.
 #[must_use]
@@ -27,13 +33,18 @@ pub fn register(registry: Registry) -> Registry {
 struct SnapStep;
 
 impl SnapStep {
-    /// Runs `snap refresh`.
-    fn upgrade(&self, failures: &mut Vec<StepError>) {
+    /// Runs `snap refresh`. On Windows the command runs inside the selected
+    /// WSL distribution via `wsl -d <distro>`.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    fn upgrade(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
         human!("snap refresh");
-        if let Err(error) = CommandSpec::new("snap")
-            .args(["refresh"])
-            .retry_transient_network(NETWORK_RETRIES)
-            .run()
+        if let Err(error) = inside_command(
+            options,
+            CommandSpec::new("snap")
+                .args(["refresh"])
+                .retry_transient_network(NETWORK_RETRIES),
+        )
+        .run()
         {
             let ProcessError::Failed { output, .. } = &error else {
                 failures.push(StepError::run_from_process(SNAP, &error));
@@ -59,7 +70,12 @@ impl Step for SnapStep {
     }
 
     fn detect(&self) -> Result<Detection, StepError> {
-        Ok(detect_snap())
+        #[cfg(target_os = "linux")]
+        return Ok(detect_snap());
+        #[cfg(target_os = "windows")]
+        return Ok(detect_wsl());
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        return Ok(Detection::NotInstalled);
     }
 
     fn check(&self) -> Result<CheckReport, StepError> {
@@ -70,10 +86,31 @@ impl Step for SnapStep {
         self.run_with_options(&RunOptions::new())
     }
 
-    fn run_with_options(&self, _options: &RunOptions) -> Result<(), StepError> {
-        let mut failures = Vec::new();
-        self.upgrade(&mut failures);
-        finish(failures)
+    #[allow(unused_variables)]
+    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
+        #[cfg(target_os = "windows")]
+        {
+            let Some(_distro) = crate::wsl::selected_distro(options) else {
+                human!("snap: no WSL distribution selected; pass --wsl-distro <distro>");
+                return Ok(());
+            };
+            let mut failures = Vec::new();
+            self.upgrade(options, &mut failures);
+            finish(failures)
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let mut failures = Vec::new();
+            self.upgrade(options, &mut failures);
+            finish(failures)
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        {
+            // snap is not available on macOS; nothing to run.
+            Ok(())
+        }
     }
 
     fn platforms(&self) -> &'static [Platform] {
@@ -81,6 +118,7 @@ impl Step for SnapStep {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
     match failures.into_iter().next() {
         Some(error) => Err(error),
@@ -88,6 +126,7 @@ fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn held_refresh_window(text: &str) -> Option<String> {
     let lowered = text.to_ascii_lowercase();
     if !lowered.contains("held") {
@@ -101,6 +140,7 @@ fn held_refresh_window(text: &str) -> Option<String> {
 }
 
 /// Whether the `snap` binary is discoverable on `PATH`.
+#[cfg(target_os = "linux")]
 fn detect_snap() -> Detection {
     if command_exists("snap") {
         Detection::Installed
@@ -109,17 +149,34 @@ fn detect_snap() -> Detection {
     }
 }
 
+/// Whether the `wsl` binary is discoverable on `PATH` (Windows only).
+#[cfg(target_os = "windows")]
+fn detect_wsl() -> Detection {
+    if command_exists("wsl") {
+        Detection::Installed
+    } else {
+        Detection::NotInstalled
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{detect_snap, held_refresh_window};
+    #[cfg(target_os = "linux")]
+    use super::detect_snap;
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    use super::held_refresh_window;
     use crate::step::Detection;
+    #[cfg(target_os = "linux")]
     use std::env;
+    #[cfg(target_os = "linux")]
     use std::fs;
+    #[cfg(target_os = "linux")]
     use std::path::{Path, PathBuf};
 
     /// Runs `f` with `PATH` replaced by `dir`, restoring the previous `PATH`
     /// afterwards so the test does not depend on what happens to be installed
     /// on the host machine.
+    #[cfg(target_os = "linux")]
     fn with_path<F>(dir: &Path, f: F)
     where
         F: FnOnce(),
@@ -136,6 +193,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     fn temp_dir(name: &str) -> PathBuf {
         let dir = env::temp_dir().join(format!(
             "freshen-snap-{}-{}-{name}",
@@ -151,6 +209,7 @@ mod tests {
         dir
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn detect_snap_reports_not_installed_when_absent_from_path() {
         let dir = temp_dir("absent");
@@ -160,7 +219,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn detect_snap_reports_installed_when_on_path() {
         use std::fs::Permissions;
@@ -185,6 +244,7 @@ mod tests {
         assert!(!Detection::NotInstalled.is_installed());
     }
 
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[test]
     fn held_refresh_window_parses_held_until() {
         let held =
@@ -195,6 +255,7 @@ mod tests {
         );
     }
 
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[test]
     fn held_refresh_window_reports_held_without_time() {
         assert_eq!(
@@ -203,6 +264,7 @@ mod tests {
         );
     }
 
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[test]
     fn held_refresh_window_returns_none_when_not_held() {
         assert!(held_refresh_window("All snaps up to date.").is_none());
@@ -210,6 +272,7 @@ mod tests {
         assert!(held_refresh_window("").is_none());
     }
 
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[test]
     fn held_refresh_window_is_case_insensitive() {
         let held = held_refresh_window("ERROR: A SNAP REFRESH IS HELD UNTIL 2026-01-01T00:00:00Z");

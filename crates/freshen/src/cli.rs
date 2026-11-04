@@ -94,6 +94,12 @@ pub struct Cli {
     #[arg(long)]
     pub install_wsl_updates: bool,
 
+    /// Run the Linux package-manager steps inside this WSL distribution on
+    /// Windows (for example `--wsl-distro Ubuntu`). Implies the steps are
+    /// detected through `wsl` and executed as `wsl -d <distro> <command>`.
+    #[arg(long)]
+    pub wsl_distro: Option<String>,
+
     /// Restart the services that need a restart after a step, restoring their
     /// previous enabled/running state on error or interrupt (Linux only).
     #[arg(long)]
@@ -241,6 +247,7 @@ impl Cli {
             .with_install_macos_updates(self.install_macos_updates)
             .with_install_firmware_updates(self.install_firmware_updates)
             .with_install_wsl_updates(self.install_wsl_updates)
+            .with_wsl_distro(self.wsl_distro.clone())
             .with_restart_services(self.restart_services)
             .with_restart_apps(self.restart_apps)
             .with_step_timeout(timeout(self.step_timeout.or(config.timeouts.step_seconds)))
@@ -328,6 +335,7 @@ mod tests {
         assert!(!options.install_wsl_updates());
         assert!(!options.restart_services());
         assert!(!options.restart_apps());
+        assert_eq!(options.wsl_distro(), None);
         assert_eq!(
             options.snapshot_retention(),
             freshen_lib::DEFAULT_SNAPSHOT_RETENTION
@@ -373,6 +381,8 @@ mod tests {
             "--install-macos-updates",
             "--install-firmware-updates",
             "--install-wsl-updates",
+            "--wsl-distro",
+            "Ubuntu",
             "--restart-services",
             "--restart-apps",
             "--snapshot-retention",
@@ -410,6 +420,7 @@ mod tests {
         assert!(options.install_macos_updates());
         assert!(options.install_firmware_updates());
         assert!(options.install_wsl_updates());
+        assert_eq!(options.wsl_distro(), Some("Ubuntu"));
         assert!(options.restart_services());
         assert!(options.restart_apps());
         assert_eq!(options.snapshot_retention(), 3);
@@ -618,6 +629,7 @@ mod tests {
             "--install-macos-updates",
             "--install-firmware-updates",
             "--install-wsl-updates",
+            "--wsl-distro",
             "--restart-services",
             "--restart-apps",
             "--snapshot-retention",

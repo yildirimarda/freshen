@@ -215,6 +215,7 @@ pub struct RunOptions {
     install_macos_updates: bool,
     install_firmware_updates: bool,
     install_wsl_updates: bool,
+    wsl_distro: Option<String>,
     selection: StepSelection,
     preflight: PreflightConfig,
     package_manager: PackageManagerConfig,
@@ -453,6 +454,25 @@ impl RunOptions {
         self.install_wsl_updates
     }
 
+    /// Returns the WSL distribution selected with `--wsl-distro`, when running
+    /// on Windows. On other platforms this is always `None`, so Linux steps
+    /// run natively there.
+    #[must_use]
+    pub fn wsl_distro(&self) -> Option<&str> {
+        self.wsl_distro.as_deref()
+    }
+
+    /// Sets `--wsl-distro <distro>`: run the Linux package-manager steps
+    /// inside the selected WSL distribution on Windows.
+    ///
+    /// `wsl -d <distro>` shuts down nothing by itself, but the distribution
+    /// must exist. Without this flag the Linux steps are not run on Windows.
+    #[must_use]
+    pub fn with_wsl_distro(mut self, distro: Option<String>) -> Self {
+        self.wsl_distro = distro;
+        self
+    }
+
     /// The `--only`/`--skip` selection.
     #[must_use]
     pub fn selection(&self) -> &StepSelection {
@@ -659,6 +679,7 @@ mod tests {
         assert!(!options.install_macos_updates());
         assert!(!options.install_firmware_updates());
         assert!(!options.install_wsl_updates());
+        assert_eq!(options.wsl_distro(), None);
         assert!(!options.restart_services());
         assert!(options.selection().is_empty());
         assert_eq!(options.step_timeout(), None);
