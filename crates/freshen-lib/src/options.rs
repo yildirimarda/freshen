@@ -214,6 +214,7 @@ pub struct RunOptions {
     cleanup: bool,
     install_macos_updates: bool,
     install_firmware_updates: bool,
+    install_wsl_updates: bool,
     selection: StepSelection,
     preflight: PreflightConfig,
     package_manager: PackageManagerConfig,
@@ -278,6 +279,17 @@ impl RunOptions {
     #[must_use]
     pub fn with_install_firmware_updates(mut self, install: bool) -> Self {
         self.install_firmware_updates = install;
+        self
+    }
+
+    /// Sets `--install-wsl-updates`: run `wsl --update` instead of only
+    /// reporting that the WSL kernel update is available.
+    ///
+    /// `wsl --update` shuts down every running WSL distribution, so the update
+    /// is opt-in.
+    #[must_use]
+    pub fn with_install_wsl_updates(mut self, install: bool) -> Self {
+        self.install_wsl_updates = install;
         self
     }
 
@@ -429,6 +441,16 @@ impl RunOptions {
     #[must_use]
     pub fn install_firmware_updates(&self) -> bool {
         self.install_firmware_updates
+    }
+
+    /// Returns `true` when `--install-wsl-updates` asks for `wsl --update` to
+    /// run.
+    ///
+    /// `wsl --update` shuts down every running WSL distribution, so the update
+    /// is opt-in and only runs with this flag.
+    #[must_use]
+    pub fn install_wsl_updates(&self) -> bool {
+        self.install_wsl_updates
     }
 
     /// The `--only`/`--skip` selection.
@@ -636,6 +658,7 @@ mod tests {
         assert!(!options.cleanup_enabled());
         assert!(!options.install_macos_updates());
         assert!(!options.install_firmware_updates());
+        assert!(!options.install_wsl_updates());
         assert!(!options.restart_services());
         assert!(options.selection().is_empty());
         assert_eq!(options.step_timeout(), None);
@@ -661,6 +684,7 @@ mod tests {
             .with_force_kill(true)
             .with_cleanup(true)
             .with_install_macos_updates(true)
+            .with_install_wsl_updates(true)
             .with_step_timeout(Some(std::time::Duration::from_secs(60)))
             .with_global_timeout(Some(std::time::Duration::from_secs(600)))
             .with_snapshot_retention(4)
@@ -671,6 +695,7 @@ mod tests {
         assert!(options.force_kill());
         assert!(options.cleanup_enabled());
         assert!(options.install_macos_updates());
+        assert!(options.install_wsl_updates());
         assert_eq!(options.snapshot_retention(), 4);
         assert_eq!(options.jobs(), 3);
         assert_eq!(

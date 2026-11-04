@@ -88,6 +88,12 @@ pub struct Cli {
     #[arg(long)]
     pub install_firmware_updates: bool,
 
+    /// Install the WSL kernel update with `wsl --update` instead of only
+    /// reporting that it is available (Windows only). `wsl --update` shuts
+    /// down every running WSL distribution, so the update is opt-in.
+    #[arg(long)]
+    pub install_wsl_updates: bool,
+
     /// Restart the services that need a restart after a step, restoring their
     /// previous enabled/running state on error or interrupt (Linux only).
     #[arg(long)]
@@ -234,6 +240,7 @@ impl Cli {
             .with_cleanup(self.cleanup)
             .with_install_macos_updates(self.install_macos_updates)
             .with_install_firmware_updates(self.install_firmware_updates)
+            .with_install_wsl_updates(self.install_wsl_updates)
             .with_restart_services(self.restart_services)
             .with_restart_apps(self.restart_apps)
             .with_step_timeout(timeout(self.step_timeout.or(config.timeouts.step_seconds)))
@@ -318,6 +325,7 @@ mod tests {
         assert!(!options.cleanup_enabled());
         assert!(!options.install_macos_updates());
         assert!(!options.install_firmware_updates());
+        assert!(!options.install_wsl_updates());
         assert!(!options.restart_services());
         assert!(!options.restart_apps());
         assert_eq!(
@@ -364,6 +372,7 @@ mod tests {
             "--cleanup",
             "--install-macos-updates",
             "--install-firmware-updates",
+            "--install-wsl-updates",
             "--restart-services",
             "--restart-apps",
             "--snapshot-retention",
@@ -400,6 +409,7 @@ mod tests {
         assert!(options.cleanup_enabled());
         assert!(options.install_macos_updates());
         assert!(options.install_firmware_updates());
+        assert!(options.install_wsl_updates());
         assert!(options.restart_services());
         assert!(options.restart_apps());
         assert_eq!(options.snapshot_retention(), 3);
@@ -607,6 +617,7 @@ mod tests {
             "--cleanup",
             "--install-macos-updates",
             "--install-firmware-updates",
+            "--install-wsl-updates",
             "--restart-services",
             "--restart-apps",
             "--snapshot-retention",

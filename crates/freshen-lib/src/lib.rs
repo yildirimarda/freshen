@@ -68,6 +68,7 @@ pub mod tooling;
 pub mod warnings;
 pub mod windows_update;
 pub mod winget;
+pub mod wsl;
 pub mod xcode;
 pub mod zypper;
 
