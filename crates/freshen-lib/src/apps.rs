@@ -1370,7 +1370,7 @@ mod win32 {
     /// whose process is `pid` and stops enumerating.
     extern "system" fn enum_windows_proc(hwnd: HWND, param: isize) -> i32 {
         let context = unsafe { &*(param as *const Match) };
-        if unsafe { (*context).hwnd.load(Ordering::Relaxed) } != 0 {
+        if context.hwnd.load(Ordering::Relaxed) != 0 {
             return 0;
         }
         let mut window_pid = 0;
@@ -1382,7 +1382,7 @@ mod win32 {
             return 1;
         }
         if unsafe { GetWindow(hwnd, GW_OWNER) }.is_null() {
-            unsafe { (*context).hwnd.store(hwnd as isize, Ordering::Relaxed) };
+            context.hwnd.store(hwnd as isize, Ordering::Relaxed);
             return 0;
         }
         1
@@ -1398,7 +1398,7 @@ mod win32 {
             hwnd: AtomicIsize::new(0),
         }));
         let _ = unsafe { EnumWindows(Some(enum_windows_proc), context as *mut Match as isize) };
-        let hwnd = unsafe { (*context).hwnd.load(Ordering::Relaxed) };
+        let hwnd = context.hwnd.load(Ordering::Relaxed);
         let posted = if hwnd != 0 {
             (unsafe { PostMessageW(hwnd as HWND, WM_CLOSE, 0, 0) }) != 0
         } else {
@@ -1416,7 +1416,7 @@ mod win32 {
         }
         let mut exit_code = 0;
         let running = (unsafe { GetExitCodeProcess(handle, &mut exit_code) }) != 0
-            && exit_code == STILL_ACTIVE;
+            && exit_code == STILL_ACTIVE as u32;
         let _ = unsafe { CloseHandle(handle) };
         running
     }
