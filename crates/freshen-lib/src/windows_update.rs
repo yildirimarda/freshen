@@ -8,6 +8,14 @@
 //! is safe in `--check` mode. `run()` reports the same items without
 //! installing them — this is a reporting-only step. The step is only available
 //! on Windows.
+//!
+//! A run scans Windows Update exactly once: the check before the step fetches
+//! the listing and caches it (`last_list`), and the step's own report (plus
+//! the runner's after-run check) reuses the cached listing instead of
+//! querying `Get-WindowsUpdate` again. This mirrors how the firmware step
+//! reuses `last_list`.
+
+use std::sync::Mutex;
 
 use crate::options::RunOptions;
 use crate::output::human;
@@ -25,17 +33,38 @@ const WINDOWS_UPDATE_PLATFORMS: [Platform; 1] = [Platform::Windows];
 /// Registers the Windows Update step.
 #[must_use]
 pub fn register(registry: Registry) -> Registry {
-    registry.with(WindowsUpdateStep)
+    registry.with(WindowsUpdateStep::new())
 }
 
-struct WindowsUpdateStep;
+struct WindowsUpdateStep {
+    /// The output of the last `Get-WindowsUpdate`, so that a run only scans
+    /// Windows Update once: the check before the step fetches it and caches it
+    /// here, and the step's own report (and the runner's after-run check)
+    /// reuse it instead of querying again.
+    last_list: Mutex<Option<String>>,
+}
 
 impl WindowsUpdateStep {
-    /// Reports the Windows Updates `Get-WindowsUpdate` lists as outdated,
-    /// honouring the package include/exclude list.
-    fn check_with_options(&self, options: &RunOptions) -> Result<CheckReport, StepError> {
+    fn new() -> Self {
+        Self {
+            last_list: Mutex::new(None),
+        }
+    }
+
+    /// The listing of the pending Windows updates, reused from the check of
+    /// the run so a run only scans Windows Update once.
+    fn listing(&self) -> Result<String, StepError> {
+        let cached = self.last_list.lock().ok().and_then(|last| last.clone());
+        match cached {
+            Some(text) => Ok(text),
+            None => self.fetch_listing(),
+        }
+    }
+
+    /// Runs `Get-WindowsUpdate` through PowerShell and returns its output.
+    fn fetch_listing(&self) -> Result<String, StepError> {
         let Some(powershell) = powershell_command() else {
-            return Ok(CheckReport::up_to_date());
+            return Ok(String::new());
         };
         let output = CommandSpec::new(powershell)
             .args([
@@ -46,7 +75,17 @@ impl WindowsUpdateStep {
             .neutral_locale()
             .run()
             .map_err(|error| StepError::check_from_process(WINDOWS_UPDATE, &error))?;
-        let items = parse_windows_update(output.stdout());
+        Ok(output.stdout().to_owned())
+    }
+
+    /// Reports the Windows Updates `Get-WindowsUpdate` lists as outdated,
+    /// honouring the package include/exclude list.
+    fn check_with_options(&self, options: &RunOptions) -> Result<CheckReport, StepError> {
+        let text = self.listing()?;
+        if let Ok(mut last) = self.last_list.lock() {
+            *last = Some(text.clone());
+        }
+        let items = parse_windows_update(&text);
         let filter = options.filters().packages();
         let report = CheckReport::from_items(
             items
@@ -54,6 +93,25 @@ impl WindowsUpdateStep {
                 .filter(|item| filter.includes(item.name())),
         );
         Ok(report)
+    }
+
+    /// Reports the available updates without installing them. Reuses the
+    /// cached listing so `run` does not scan Windows Update a second time.
+    fn report(&self) -> Result<(), StepError> {
+        let text = self.listing()?;
+        if let Ok(mut last) = self.last_list.lock() {
+            *last = Some(text.clone());
+        }
+        let items = parse_windows_update(&text);
+        if items.is_empty() {
+            human!("windows-update: no Windows Updates available");
+        } else {
+            human!("windows-update: {} update(s) available", items.len());
+            for item in &items {
+                human!("  - {item}");
+            }
+        }
+        Ok(())
     }
 }
 
@@ -100,16 +158,7 @@ impl Step for WindowsUpdateStep {
     }
 
     fn run_with_options(&self, _options: &RunOptions) -> Result<(), StepError> {
-        let report = self.check()?;
-        if report.is_up_to_date() {
-            human!("windows-update: no Windows Updates available");
-        } else {
-            human!("windows-update: {} update(s) available", report.pending());
-            for item in report.items() {
-                human!("  - {item}");
-            }
-        }
-        Ok(())
+        self.report()
     }
 
     fn platforms(&self) -> &'static [Platform] {
@@ -219,10 +268,12 @@ mod tests {
             std::fs::write(&check_file, check_output.replace('\n', "\r\n"))
                 .unwrap_or_else(|error| panic!("write {}: {error}", check_file.display()));
             // `%~3` is the PowerShell script argument (`-NoProfile -Command <script>`).
-            // It contains `|`, so it is only ever read inside quotes.
+            // It contains `|`, so it is only ever read inside quotes, never
+            // echoed as `%*`. Canned output is printed from a file with `type`.
             let script = "@echo off\r\n\
                  setlocal EnableDelayedExpansion\r\n\
                  set \"script=%~3\"\r\n\
+                 if defined FRESHEN_WINDOWS_UPDATE_LOG >>\"%FRESHEN_WINDOWS_UPDATE_LOG%\" echo powershell !script!\r\n\
                  if not \"!script:ListAvailable=!\"==\"!script!\" (\r\n\
                    type \"%~dp0detect-output.txt\"\r\n\
                    exit /b 0\r\n\
@@ -325,7 +376,7 @@ mod tests {
         std::env::set_var("PATH", &dir);
         std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
 
-        let report = WindowsUpdateStep
+        let report = WindowsUpdateStep::new()
             .check_with_options(&RunOptions::new())
             .unwrap_or_else(|error| panic!("check should succeed: {error}"));
 
@@ -334,8 +385,8 @@ mod tests {
         } else {
             std::env::remove_var("PATH");
         }
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous);
+        if let Some(previous_log) = previous_log {
+            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
         } else {
             std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
         }
@@ -349,6 +400,55 @@ mod tests {
         );
     }
 
+    /// `Get-WindowsUpdate` is queried exactly once per run: the check before
+    /// the step fetches and caches the listing, and `run()` plus a second
+    /// check (the runner's after-run diff) reuse the cache instead of
+    /// scanning again. Covered on every OS through the stubbed PowerShell.
+    #[test]
+    fn get_windows_update_is_queried_once_per_run() {
+        let dir = stub_powershell(
+            "PSWindowsUpdate",
+            r#"[{"Title":"Security Update","KB":"KB5012345","Version":"10.0.19041.1234"}]"#,
+        );
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = std::env::var("PATH").ok();
+        let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
+        std::env::set_var("PATH", &dir);
+        std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
+
+        let step = WindowsUpdateStep::new();
+        step.check_with_options(&RunOptions::new())
+            .unwrap_or_else(|error| panic!("check should succeed: {error}"));
+        step.run_with_options(&RunOptions::new())
+            .unwrap_or_else(|error| panic!("run should succeed: {error}"));
+        step.check_with_options(&RunOptions::new())
+            .unwrap_or_else(|error| panic!("after-run check should succeed: {error}"));
+
+        let log = std::fs::read_to_string(dir.join("calls.log")).unwrap_or_default();
+        let get_windows_update_calls = log
+            .lines()
+            .filter(|line| line.contains("Get-WindowsUpdate"))
+            .count();
+        assert_eq!(
+            get_windows_update_calls, 1,
+            "expected exactly one Get-WindowsUpdate call per run, log:\n{log}"
+        );
+
+        if let Some(previous) = previous {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(previous_log) = previous_log {
+            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
+        } else {
+            std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn detect_returns_installed_when_module_is_available() {
         let dir = stub_powershell("PSWindowsUpdate", "[]");
@@ -360,7 +460,7 @@ mod tests {
         std::env::set_var("PATH", &dir);
         std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
 
-        let detection = WindowsUpdateStep
+        let detection = WindowsUpdateStep::new()
             .detect()
             .unwrap_or_else(|error| panic!("detect should succeed: {error}"));
 
@@ -369,8 +469,8 @@ mod tests {
         } else {
             std::env::remove_var("PATH");
         }
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous);
+        if let Some(previous_log) = previous_log {
+            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
         } else {
             std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
         }
@@ -390,7 +490,7 @@ mod tests {
         std::env::set_var("PATH", &dir);
         std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
 
-        let detection = WindowsUpdateStep
+        let detection = WindowsUpdateStep::new()
             .detect()
             .unwrap_or_else(|error| panic!("detect should succeed: {error}"));
 
@@ -399,8 +499,8 @@ mod tests {
         } else {
             std::env::remove_var("PATH");
         }
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous);
+        if let Some(previous_log) = previous_log {
+            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
         } else {
             std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
         }
@@ -424,15 +524,15 @@ mod tests {
         std::env::set_var("PATH", &dir);
         std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
 
-        let result = WindowsUpdateStep.run();
+        let result = WindowsUpdateStep::new().run();
 
         if let Some(previous) = previous {
             std::env::set_var("PATH", previous);
         } else {
             std::env::remove_var("PATH");
         }
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous);
+        if let Some(previous_log) = previous_log {
+            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
         } else {
             std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
         }
@@ -463,7 +563,7 @@ mod tests {
             crate::policy::ItemFilters::new()
                 .with_packages(crate::policy::NameFilter::new().with_exclude(["Update B"])),
         );
-        let report = WindowsUpdateStep
+        let report = WindowsUpdateStep::new()
             .check_with_options(&options)
             .unwrap_or_else(|error| panic!("check should succeed: {error}"));
 
