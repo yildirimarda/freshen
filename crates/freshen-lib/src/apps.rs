@@ -2199,6 +2199,7 @@ mod tests {
         }
 
         /// The app looks this way before it is quit.
+        #[cfg(not(windows))]
         fn with_session(self, bundle_id: &str, session: SessionState) -> Self {
             lock(&self.sessions).insert(bundle_id.to_owned(), session);
             self
