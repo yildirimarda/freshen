@@ -155,6 +155,14 @@ that gated module, never in the shared `use` block at the top of `mod tests`:
 that does not reproduce on Linux. Put platform-independent logic (a command
 rewrite, a parser, a cache) in a plain function and unit-test it on every OS.
 
+When a Windows or macOS CI job fails, read the whole failed-job log and fix
+EVERY error in it in one commit. A compile error hides the test failures behind
+it, so after the fix run the Windows lint from the project reference and look
+for the next layer yourself (an unused import, a helper only used by gated
+tests, a test that asserts a Linux-only call list) instead of waiting for the
+next CI round. A helper function, constant or struct field that only gated
+tests use must carry the same gate as those tests.
+
 ### Windows test stubs
 
 - A `.cmd` stub must never echo `%*`: the PowerShell script argument contains
@@ -196,6 +204,7 @@ freshen keeps a developer machine up to date (package managers, language toolcha
 - Format:       `cargo fmt --all -- --check`
 - Lint:         `cargo clippy --all-targets --all-features -- -D warnings`
 - Tests:        `cargo test --all-features`
+- Windows lint: `cargo clippy --target x86_64-pc-windows-gnu --all-targets --all-features -- -D warnings` compiles the Windows-only code and tests from this Linux sandbox and fails on exactly what `windows-latest` fails on at compile time (unused imports, dead code, type errors, missing `cfg` guards). Run it before every push that touches platform-specific code, tests or helpers. It cannot RUN the tests: Windows-only runtime behaviour (`.cmd` stubs, `\r\n`) is only verified by the CI. If it reports a `ring`/C compiler error, say so in the PR instead of skipping it silently. There is no equivalent for macOS (its C dependencies need the Apple SDK): rely on the Unix lint above and on the CI
 - Repository checks: `bash tests/run-tests.sh` (also checks that the removed `update-all.sh` shim stays gone); tests in `tests/` use stub executables on PATH
 - Layout:       library crate holds all logic, the binary crate is a thin CLI wrapper; one module per step
 - Style:        no `unwrap()`/`expect()` outside tests, errors via `thiserror`/`anyhow`, English comments and messages

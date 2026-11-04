@@ -79,10 +79,21 @@ RUN uv venv /opt/graphify --python 3.12 \
 # world-writable so the agent can fetch crates into the registry cache.
 ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo
 ENV PATH=/opt/cargo/bin:${PATH}
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential pkg-config \
+# The toolchain pinned by rust-toolchain.toml is installed HERE, with every
+# target the file lists, so the agent never triggers a half-finished download at
+# run time (it used to fail with "Directory not empty"). mingw-w64 is a C
+# compiler for the Windows target: with it the agent can compile and lint the
+# Windows-only code and tests from Linux (`cargo clippy --target
+# x86_64-pc-windows-gnu`), because the `ring` dependency needs one.
+COPY rust-toolchain.toml /tmp/rust-toolchain.toml
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential pkg-config gcc-mingw-w64-x86-64 \
  && rm -rf /var/lib/apt/lists/* \
  && curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable \
  && rustup component add clippy rustfmt \
+ && channel="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' /tmp/rust-toolchain.toml)" \
+ && rustup toolchain install "$channel" --profile minimal -c rustfmt -c clippy \
+      -t x86_64-unknown-linux-gnu -t x86_64-pc-windows-gnu -t x86_64-pc-windows-msvc -t x86_64-apple-darwin \
+ && rm /tmp/rust-toolchain.toml \
  && chmod -R a+rwX /opt/rustup /opt/cargo
 
 # ── ADD YOUR OWN TOOLS HERE ──────────────────────────────────────────────────
