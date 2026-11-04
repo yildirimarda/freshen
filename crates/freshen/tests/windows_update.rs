@@ -67,19 +67,22 @@ fn pwsh_calls(tools: &StubTools) -> Vec<String> {
         .collect()
 }
 
-/// Detection comes first and every later call is the `Get-WindowsUpdate` query:
-/// the runner checks before and after the step and the step reports through a
-/// check of its own, so the query runs more than once. Nothing is ever installed.
+/// Detection comes first, then exactly one `Get-WindowsUpdate` query: the
+/// runner checks before the step and the step reports through a check of its
+/// own, but both reuse the cached listing, so a run costs one slow
+/// PSWindowsUpdate scan. Nothing is ever installed.
 fn assert_windows_update_calls(calls: &[String]) {
     assert_eq!(
         calls.first().map(String::as_str),
         Some(WINDOWS_UPDATE_DETECT),
         "calls: {calls:?}"
     );
-    assert!(calls.len() >= 2, "the query must run: {calls:?}");
-    for call in &calls[1..] {
-        assert_eq!(call, WINDOWS_UPDATE_CHECK, "calls: {calls:?}");
-    }
+    assert_eq!(
+        calls.len(),
+        2,
+        "expected detect + one Get-WindowsUpdate call, got {calls:?}"
+    );
+    assert_eq!(calls[1], WINDOWS_UPDATE_CHECK, "calls: {calls:?}");
 }
 
 #[test]
