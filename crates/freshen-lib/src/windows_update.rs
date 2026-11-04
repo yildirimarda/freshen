@@ -1,19 +1,20 @@
 //! The Windows Update step: reports available Windows Updates through the
-//! PSWindowsUpdate PowerShell module when it is installed.
+//! PSWindowsUpdate PowerShell module when it is installed, falling back to
+//! `usoclient` when PSWindowsUpdate is missing.
 //!
 //! Detection checks whether PowerShell (`pwsh` preferred, then `powershell`)
-//! exists and the PSWindowsUpdate module is available. `check()` runs
-//! `Get-WindowsUpdate` through PowerShell and parses the JSON output into
-//! outdated items. Neither `detect` nor `check` changes anything, so the step
-//! is safe in `--check` mode. `run()` reports the same items without
-//! installing them — this is a reporting-only step. The step is only available
-//! on Windows.
+//! exists and the PSWindowsUpdate module is available; when the module is
+//! missing it checks whether `usoclient` exists instead. `check()` runs
+//! `Get-WindowsUpdate` through PowerShell (or `usoclient StartScan` under the
+//! fallback) and parses the output into outdated items. Neither `detect` nor
+//! `check` changes anything, so the step is safe in `--check` mode. `run()`
+//! reports the same items without installing them — this is a reporting-only
+//! step. The step is only available on Windows.
 //!
 //! A run scans Windows Update exactly once: the check before the step fetches
-//! the listing and caches it (`last_list`), and the step's own report (plus
+//! the listing and caches it (`last_items`), and the step's own report (plus
 //! the runner's after-run check) reuses the cached listing instead of
-//! querying `Get-WindowsUpdate` again. This mirrors how the firmware step
-//! reuses `last_list`.
+//! querying again. This mirrors how the firmware step reuses `last_list`.
 
 use std::sync::Mutex;
 
@@ -36,56 +37,126 @@ pub fn register(registry: Registry) -> Registry {
     registry.with(WindowsUpdateStep::new())
 }
 
+/// Which source the step uses to learn about pending Windows Updates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UpdateBackend {
+    /// `Get-WindowsUpdate` through the PSWindowsUpdate PowerShell module.
+    PsWindowsUpdate,
+    /// `usoclient StartScan`, used when PSWindowsUpdate is not installed.
+    Usoclient,
+    /// Neither backend is available; Windows Update cannot be checked.
+    None,
+}
+
 struct WindowsUpdateStep {
-    /// The output of the last `Get-WindowsUpdate`, so that a run only scans
-    /// Windows Update once: the check before the step fetches it and caches it
-    /// here, and the step's own report (and the runner's after-run check)
-    /// reuse it instead of querying again.
-    last_list: Mutex<Option<String>>,
+    /// The pending updates from the last scan, so a run only scans Windows
+    /// Update once: the check before the step fetches and caches them here,
+    /// and the step's own report (plus the runner's after-run check) reuse
+    /// them instead of scanning again.
+    last_items: Mutex<Option<Vec<OutdatedItem>>>,
+    /// Which backend produced `last_items`, so the check reuses the same
+    /// backend instead of re-detecting it.
+    backend: Mutex<Option<UpdateBackend>>,
 }
 
 impl WindowsUpdateStep {
     fn new() -> Self {
         Self {
-            last_list: Mutex::new(None),
+            last_items: Mutex::new(None),
+            backend: Mutex::new(None),
         }
     }
 
-    /// The listing of the pending Windows updates, reused from the check of
-    /// the run so a run only scans Windows Update once.
-    fn listing(&self) -> Result<String, StepError> {
-        let cached = self.last_list.lock().ok().and_then(|last| last.clone());
+    /// Resolves the backend to use, detecting it once and caching the result.
+    fn backend(&self) -> Result<UpdateBackend, StepError> {
+        if let Ok(b) = self.backend.lock() {
+            if let Some(backend) = *b {
+                return Ok(backend);
+            }
+        }
+        let backend = self.detect_backend()?;
+        if let Ok(mut b) = self.backend.lock() {
+            *b = Some(backend);
+        }
+        Ok(backend)
+    }
+
+    /// Detects which backend is available: PSWindowsUpdate first, then usoclient.
+    fn detect_backend(&self) -> Result<UpdateBackend, StepError> {
+        if let Some(powershell) = powershell_command() {
+            let output = CommandSpec::new(powershell)
+                .args([
+                    "-NoProfile",
+                    "-Command",
+                    "Get-Module -ListAvailable PSWindowsUpdate | Select-Object -ExpandProperty Name",
+                ])
+                .neutral_locale()
+                .run();
+            if let Ok(output) = output {
+                if !output.stdout().trim().is_empty() {
+                    return Ok(UpdateBackend::PsWindowsUpdate);
+                }
+            }
+        }
+        if usoclient_command().is_some() {
+            return Ok(UpdateBackend::Usoclient);
+        }
+        Ok(UpdateBackend::None)
+    }
+
+    /// The pending Windows Updates, fetched once and cached for the run.
+    fn listing(&self) -> Result<Vec<OutdatedItem>, StepError> {
+        let cached = self.last_items.lock().ok().and_then(|last| last.clone());
         match cached {
-            Some(text) => Ok(text),
-            None => self.fetch_listing(),
+            Some(items) => Ok(items),
+            None => {
+                let items = self.fetch_listing()?;
+                if let Ok(mut last) = self.last_items.lock() {
+                    *last = Some(items.clone());
+                }
+                Ok(items)
+            }
         }
     }
 
-    /// Runs `Get-WindowsUpdate` through PowerShell and returns its output.
-    fn fetch_listing(&self) -> Result<String, StepError> {
-        let Some(powershell) = powershell_command() else {
-            return Ok(String::new());
-        };
-        let output = CommandSpec::new(powershell)
-            .args([
-                "-NoProfile",
-                "-Command",
-                "Import-Module PSWindowsUpdate; Get-WindowsUpdate | Select-Object Title, KB, Version | ConvertTo-Json",
-            ])
-            .neutral_locale()
-            .run()
-            .map_err(|error| StepError::check_from_process(WINDOWS_UPDATE, &error))?;
-        Ok(output.stdout().to_owned())
+    /// Fetches the pending Windows Updates through the detected backend.
+    fn fetch_listing(&self) -> Result<Vec<OutdatedItem>, StepError> {
+        match self.backend()? {
+            UpdateBackend::PsWindowsUpdate => {
+                let Some(powershell) = powershell_command() else {
+                    return Ok(Vec::new());
+                };
+                let output = CommandSpec::new(powershell)
+                    .args([
+                        "-NoProfile",
+                        "-Command",
+                        "Import-Module PSWindowsUpdate; Get-WindowsUpdate | Select-Object Title, KB, Version | ConvertTo-Json",
+                    ])
+                    .neutral_locale()
+                    .run()
+                    .map_err(|error| StepError::check_from_process(WINDOWS_UPDATE, &error))?;
+                Ok(parse_windows_update(output.stdout()))
+            }
+            UpdateBackend::Usoclient => {
+                let Some(usoclient) = usoclient_command() else {
+                    return Ok(Vec::new());
+                };
+                let output = CommandSpec::new(usoclient)
+                    .args(["StartScan"])
+                    .neutral_locale()
+                    .run()
+                    .map_err(|error| StepError::check_from_process(WINDOWS_UPDATE, &error))?;
+                Ok(parse_usoclient_scan(output.stdout()))
+            }
+            UpdateBackend::None => Ok(Vec::new()),
+        }
     }
 
-    /// Reports the Windows Updates `Get-WindowsUpdate` lists as outdated,
-    /// honouring the package include/exclude list.
+    /// Reports the Windows Updates as outdated, honouring the package
+    /// include/exclude list. Reuses the cached listing so `check` does not
+    /// scan Windows Update a second time.
     fn check_with_options(&self, options: &RunOptions) -> Result<CheckReport, StepError> {
-        let text = self.listing()?;
-        if let Ok(mut last) = self.last_list.lock() {
-            *last = Some(text.clone());
-        }
-        let items = parse_windows_update(&text);
+        let items = self.listing()?;
         let filter = options.filters().packages();
         let report = CheckReport::from_items(
             items
@@ -98,11 +169,7 @@ impl WindowsUpdateStep {
     /// Reports the available updates without installing them. Reuses the
     /// cached listing so `run` does not scan Windows Update a second time.
     fn report(&self) -> Result<(), StepError> {
-        let text = self.listing()?;
-        if let Ok(mut last) = self.last_list.lock() {
-            *last = Some(text.clone());
-        }
-        let items = parse_windows_update(&text);
+        let items = self.listing()?;
         if items.is_empty() {
             human!("windows-update: no Windows Updates available");
         } else {
@@ -125,20 +192,9 @@ impl Step for WindowsUpdateStep {
     }
 
     fn detect(&self) -> Result<Detection, StepError> {
-        let Some(powershell) = powershell_command() else {
-            return Ok(Detection::NotInstalled);
-        };
-        let output = CommandSpec::new(powershell)
-            .args([
-                "-NoProfile",
-                "-Command",
-                "Get-Module -ListAvailable PSWindowsUpdate | Select-Object -ExpandProperty Name",
-            ])
-            .neutral_locale()
-            .run();
-        match output {
-            Ok(output) if !output.stdout().trim().is_empty() => Ok(Detection::Installed),
-            _ => Ok(Detection::NotInstalled),
+        match self.backend()? {
+            UpdateBackend::PsWindowsUpdate | UpdateBackend::Usoclient => Ok(Detection::Installed),
+            UpdateBackend::None => Ok(Detection::NotInstalled),
         }
     }
 
@@ -173,6 +229,35 @@ impl Step for WindowsUpdateStep {
 /// could land on a different (e.g. system-installed) PowerShell.
 fn powershell_command() -> Option<std::path::PathBuf> {
     crate::executable::resolve("pwsh").or_else(|| crate::executable::resolve("powershell"))
+}
+
+/// Returns the `usoclient` executable to use when PSWindowsUpdate is missing,
+/// or `None` when it is not on `PATH`. `usoclient` only exists on Windows, so
+/// this resolves to `None` on every other platform.
+fn usoclient_command() -> Option<std::path::PathBuf> {
+    crate::executable::resolve("usoclient")
+}
+
+/// Parses the output of `usoclient StartScan` into outdated items.
+///
+/// `usoclient` does not enumerate individual updates, so when the scan reports
+/// that updates are pending the step reports a single `Windows Update` item.
+/// When the scan reports nothing pending, the report is empty.
+///
+/// The scan output is expected to announce pending updates on a line that
+/// starts with `Updates found:` (for example `Updates found: 2`). Any other
+/// output means no pending updates could be determined.
+fn parse_usoclient_scan(output: &str) -> Vec<OutdatedItem> {
+    let pending = output.lines().any(|line| {
+        line.trim_start()
+            .to_ascii_lowercase()
+            .starts_with("updates found:")
+    });
+    if pending {
+        vec![OutdatedItem::new("Windows Update").with_reason("updates pending")]
+    } else {
+        Vec::new()
+    }
 }
 
 /// Parses the JSON output of `Get-WindowsUpdate | ... | ConvertTo-Json` into
@@ -211,7 +296,7 @@ fn parse_windows_update(output: &str) -> Vec<OutdatedItem> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_windows_update, WindowsUpdateStep, WINDOWS_UPDATE};
+    use super::{parse_usoclient_scan, parse_windows_update, WindowsUpdateStep, WINDOWS_UPDATE};
     use crate::options::RunOptions;
     use crate::platform::Platform;
     use crate::step::{Detection, OutdatedItem, Step};
@@ -284,6 +369,70 @@ mod tests {
                  )\r\n\
                  exit /b 0\r\n";
             let stub = dir.join("pwsh.cmd");
+            std::fs::write(&stub, script)
+                .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
+        }
+
+        dir
+    }
+
+    /// Creates a stub `usoclient` on a temp dir that prints `usoclient_output`
+    /// for `usoclient StartScan` and records its invocations. Returns the stub
+    /// directory; the caller must restore `PATH` and remove it.
+    fn stub_usoclient(usoclient_output: &str) -> std::path::PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "freshen-usoclient-{pid}-{id}",
+            pid = std::process::id(),
+            id = id
+        ));
+        std::fs::create_dir_all(&dir).unwrap_or_else(|error| {
+            panic!("failed to create stub directory {}: {error}", dir.display())
+        });
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let script = format!(
+                "#!/bin/sh\n\
+                 {{\n\
+                   printf '%s' usoclient\n\
+                   for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
+                   printf '\\n'\n\
+                 }} >> \"$FRESHEN_WINDOWS_UPDATE_LOG\"\n\
+                 case \"$*\" in\n\
+                   *StartScan*)\n\
+                     printf {}; exit 0 ;;\n\
+                   *) exit 0 ;;\n\
+                 esac\n",
+                shell_quote(usoclient_output)
+            );
+            let stub = dir.join("usoclient");
+            std::fs::write(&stub, script)
+                .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+                .unwrap_or_else(|error| panic!("failed to make stub executable: {error}"));
+        }
+
+        #[cfg(windows)]
+        {
+            let output_file = dir.join("usoclient-output.txt");
+            std::fs::write(&output_file, usoclient_output.replace('\n', "\r\n"))
+                .unwrap_or_else(|error| panic!("write {}: {error}", output_file.display()));
+            // `StartScan` has no `|`, so the argument is read with `%*` and
+            // canned output is printed from a file with `type`.
+            let script = "@echo off\r\n\
+                 setlocal EnableDelayedExpansion\r\n\
+                 set \"script=%*\"\r\n\
+                 if defined FRESHEN_WINDOWS_UPDATE_LOG >>\"%FRESHEN_WINDOWS_UPDATE_LOG%\" echo usoclient !script!\r\n\
+                 if not \"!script:StartScan=!\"==\"!script!\" (\r\n\
+                   type \"%~dp0usoclient-output.txt\"\r\n\
+                   exit /b 0\r\n\
+                 )\r\n\
+                 exit /b 0\r\n";
+            let stub = dir.join("usoclient.cmd");
             std::fs::write(&stub, script)
                 .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
         }
@@ -615,5 +764,158 @@ mod tests {
             s.push_str(&format!(" ({reason})"));
         }
         s
+    }
+
+    #[test]
+    fn parses_usoclient_scan_reports_pending_updates() {
+        let items =
+            parse_usoclient_scan("USO Client started scanning for updates.\nUpdates found: 2\n");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name(), "Windows Update");
+        assert_eq!(items[0].reason(), Some("updates pending"));
+    }
+
+    #[test]
+    fn parses_usoclient_scan_reports_none_when_no_updates() {
+        assert!(parse_usoclient_scan(
+            "USO Client started scanning for updates.\nNo updates found.\n"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn parses_usoclient_scan_empty_output() {
+        assert!(parse_usoclient_scan("").is_empty());
+        assert!(parse_usoclient_scan("   \n").is_empty());
+    }
+
+    #[test]
+    fn detect_falls_back_to_usocliter_when_pswindowsupdate_missing() {
+        let dir = stub_usoclient("updates found: 2\n");
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = std::env::var("PATH").ok();
+        let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
+        std::env::set_var("PATH", &dir);
+        std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
+
+        let detection = WindowsUpdateStep::new()
+            .detect()
+            .unwrap_or_else(|error| panic!("detect should succeed: {error}"));
+
+        if let Some(previous) = previous {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(previous_log) = previous_log {
+            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
+        } else {
+            std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(detection, Detection::Installed);
+    }
+
+    #[test]
+    fn check_reports_updates_via_usocliter_when_pswindowsupdate_missing() {
+        let dir = stub_usoclient("updates found: 2\n");
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = std::env::var("PATH").ok();
+        let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
+        std::env::set_var("PATH", &dir);
+        std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
+
+        let report = WindowsUpdateStep::new()
+            .check_with_options(&RunOptions::new())
+            .unwrap_or_else(|error| panic!("check should succeed: {error}"));
+
+        if let Some(previous) = previous {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(previous_log) = previous_log {
+            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
+        } else {
+            std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(report.pending(), 1);
+        assert_eq!(report.items()[0].name(), "Windows Update");
+        assert_eq!(report.items()[0].reason(), Some("updates pending"));
+    }
+
+    #[test]
+    fn check_reports_none_via_usocliter_when_no_updates() {
+        let dir = stub_usoclient("No updates found.\n");
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = std::env::var("PATH").ok();
+        std::env::set_var("PATH", &dir);
+
+        let report = WindowsUpdateStep::new()
+            .check_with_options(&RunOptions::new())
+            .unwrap_or_else(|error| panic!("check should succeed: {error}"));
+
+        if let Some(previous) = previous {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(report.pending(), 0);
+    }
+
+    /// `usoclient StartScan` is run once per run: the check before the step
+    /// fetches and caches the listing, and `run` plus a second check reuse it
+    /// instead of scanning again.
+    #[test]
+    fn usocliter_is_used_once_per_run() {
+        let dir = stub_usoclient("updates found: 1\n");
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = std::env::var("PATH").ok();
+        let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
+        std::env::set_var("PATH", &dir);
+        std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
+
+        let step = WindowsUpdateStep::new();
+        step.check_with_options(&RunOptions::new())
+            .unwrap_or_else(|error| panic!("check should succeed: {error}"));
+        step.run_with_options(&RunOptions::new())
+            .unwrap_or_else(|error| panic!("run should succeed: {error}"));
+        step.check_with_options(&RunOptions::new())
+            .unwrap_or_else(|error| panic!("after-run check should succeed: {error}"));
+
+        let log = std::fs::read_to_string(dir.join("calls.log")).unwrap_or_default();
+        let usoclient_calls = log
+            .lines()
+            .filter(|line| line.contains("usoclient"))
+            .count();
+        assert_eq!(
+            usoclient_calls, 1,
+            "expected exactly one usoclient call per run, log:\n{log}"
+        );
+
+        if let Some(previous) = previous {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(previous_log) = previous_log {
+            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
+        } else {
+            std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -129,12 +129,18 @@ fn windows_update_reports_none_when_no_updates_available() {
 }
 
 #[test]
-fn windows_update_skipped_when_pswindowsupdate_missing() {
-    let tools = StubTools::new(&["pwsh"]);
+fn windows_update_falls_back_to_usocliter_when_pswindowsupdate_missing() {
+    let tools = StubTools::new(&["pwsh", "usoclient"]);
     tools.set_responses(
         "pwsh",
         &[
-            StubOutput::new(), // detect: no module output
+            StubOutput::new(), // detect: PSWindowsUpdate module is missing
+        ],
+    );
+    tools.set_responses(
+        "usoclient",
+        &[
+            StubOutput::new(), // check: usoclient StartScan, no updates pending
         ],
     );
     let output = tools
@@ -145,12 +151,53 @@ fn windows_update_skipped_when_pswindowsupdate_missing() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let calls = tools.step_calls();
-    assert_eq!(calls.len(), 1, "only detect runs: {calls:?}");
+    assert_eq!(
+        calls.len(),
+        2,
+        "detect then one usoclient StartScan call, got {calls:?}"
+    );
     assert!(calls[0].contains("ListAvailable"), "detect call: {calls:?}");
+    assert!(calls[1].contains("StartScan"), "usoclient call: {calls:?}");
     let text = stdout(&output);
     assert!(
-        text.contains("not installed"),
-        "not installed in summary: {text}"
+        text.contains("no Windows Updates available"),
+        "no updates in summary: {text}"
+    );
+}
+
+#[test]
+fn windows_update_reports_updates_via_usocliter_when_pswindowsupdate_missing() {
+    let tools = StubTools::new(&["pwsh", "usoclient"]);
+    tools.set_responses(
+        "pwsh",
+        &[
+            StubOutput::new(), // detect: PSWindowsUpdate module is missing
+        ],
+    );
+    tools.set_responses(
+        "usoclient",
+        &[
+            StubOutput::stdout("updates found: 2\n"), // check: usoclient StartScan
+        ],
+    );
+    let output = tools
+        .command()
+        .args(["--only", WINDOWS_UPDATE])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert_eq!(
+        calls.len(),
+        2,
+        "detect then one usoclient StartScan call, got {calls:?}"
+    );
+    assert!(calls[1].contains("StartScan"), "usoclient call: {calls:?}");
+    let text = stdout(&output);
+    assert!(
+        text.contains("Windows Update"),
+        "fallback update listed: {text}"
     );
 }
 
