@@ -399,7 +399,7 @@ pub fn windows_update_detect() -> &'static [&'static str] {
 
 /// Named insertion: the Windows Update check step via PSWindowsUpdate.
 pub fn windows_update_check() -> &'static [&'static str] {
-    &["pwsh -NoProfile -Command Import-Module PSWindowsUpdate; Get-WindowsUpdate | Select-Object Title, KB, Version | ConvertTo-Json"]
+    &["pwsh -NoProfile -Command Import-Module PSWindowsUpdate; Get-WindowsUpdate | Select-Object Title, KB, Version, RebootRequired | ConvertTo-Json"]
 }
 
 /// Named insertion: full Windows Update transcript (detect then check).
