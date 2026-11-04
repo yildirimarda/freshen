@@ -2871,6 +2871,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn the_session_state_of_an_app_is_read_before_it_is_quit() {
         let system = FakeSystem {
             quit_stops_apps: true,

@@ -141,17 +141,11 @@ mod tests {
         use std::env;
         use std::fs;
         use std::sync::atomic::{AtomicU64, Ordering};
-        use std::sync::Mutex;
 
         use super::super::{HostSudoProbe, SudoProbe};
         use std::os::unix::fs::PermissionsExt;
 
         static COUNTER: AtomicU64 = AtomicU64::new(0);
-
-        // `PATH` is process-global and tests run in parallel threads, so the
-        // stub-sudo setup must be serialized to avoid one test overwriting
-        // another test's `PATH` while its probe is running.
-        static PATH_LOCK: Mutex<()> = Mutex::new(());
 
         /// Runs `f` with a stub `sudo` on `PATH` that exits with the given
         /// code, then restores `PATH` and removes the temp directory.
@@ -159,9 +153,12 @@ mod tests {
         where
             F: FnOnce(&HostSudoProbe) -> bool,
         {
-            let _guard = PATH_LOCK
+            // `PATH` is process-global and tests run in parallel threads: every
+            // test that replaces it must hold the one shared guard, or it
+            // overwrites the `PATH` another module's test is relying on.
+            let _guard = crate::process::PATH_GUARD
                 .lock()
-                .unwrap_or_else(|_| panic!("sudo test lock poisoned"));
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let original = env::var("PATH").unwrap_or_default();
             let id = COUNTER.fetch_add(1, Ordering::Relaxed);
             let dir = env::temp_dir().join(format!(
