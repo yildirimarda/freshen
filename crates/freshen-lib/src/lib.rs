@@ -21,6 +21,7 @@ pub(crate) mod deadline;
 pub mod desktop_apps;
 pub mod dnf;
 pub mod doctor_warnings;
+pub mod elevation;
 pub mod emerge;
 mod executable;
 pub mod exit;
@@ -93,6 +94,11 @@ pub use containers::{
     ContainerRuntimeProbe, ContainerRuntimeSource, DockerDesktopRuntime, DockerEngineProbe,
     HostComposeCommandProbe, HostContainerRuntimeProbe, HostDockerEngineProbe, NativeDockerRuntime,
     RancherDesktopRuntime, StandaloneContainer,
+};
+#[cfg(windows)]
+pub use elevation::windows::HostElevationProbe;
+pub use elevation::{
+    decide, ElevationDecision, ElevationOutcome, ElevationProbe, ElevationState, NoElevationProbe,
 };
 pub use listing::{list_steps, DetectionState, StepList, StepListing};
 pub use lock::{LockError, RunLock};
