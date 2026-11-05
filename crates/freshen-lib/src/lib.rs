@@ -12,6 +12,7 @@ pub mod aur;
 pub mod bootc;
 pub mod bundle_cleanup_packages;
 pub mod check;
+pub mod chocolatey;
 pub mod cleanup;
 pub mod cmd;
 pub mod config;

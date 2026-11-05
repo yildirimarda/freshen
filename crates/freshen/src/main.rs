@@ -182,6 +182,7 @@ fn build_registry(runtime: Option<ContainerRuntimeKind>) -> Registry {
     registry = freshen_lib::tooling::register(registry);
     registry = freshen_lib::appstore::register(registry);
     registry = freshen_lib::winget::register(registry);
+    registry = freshen_lib::chocolatey::register(registry);
     registry = freshen_lib::microsoft_store::register(registry);
     registry = freshen_lib::scoop::register(registry);
     registry = freshen_lib::wsl::register(registry);
