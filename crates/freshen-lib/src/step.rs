@@ -68,6 +68,9 @@ pub enum SkipReason {
     /// The step needs root privileges but `sudo` credentials could not be
     /// obtained, so it is skipped instead of failing.
     NeedsSudo,
+    /// The step needs administrator rights but the process is not elevated,
+    /// so it is skipped instead of failing.
+    NeedsAdministrator,
     /// A user-level step was refused because the effective user is root.
     ///
     /// User-level steps manage packages in the user's environment and must not
@@ -101,6 +104,7 @@ impl SkipReason {
             Self::RegistryUnreachable => "registry unreachable",
             Self::NotSignedIn => "not signed in",
             Self::NeedsSudo => "needs sudo",
+            Self::NeedsAdministrator => "needs administrator",
             Self::RunningAsRoot => "refuses to run user-level steps as root",
             Self::MissingConfiguration => "no configuration file found",
             Self::NothingToDo => "nothing to do",
@@ -510,6 +514,18 @@ pub trait Step: Sync {
         false
     }
 
+    /// Returns `true` when the step needs administrator rights and therefore
+    /// requires an elevated process to run.
+    ///
+    /// The default is `false`; steps that modify the system on Windows (for
+    /// example Chocolatey) override it to return `true`. The runner skips
+    /// steps that need elevation when the process is not elevated, reporting
+    /// [`SkipReason::NeedsAdministrator`].
+    #[must_use]
+    fn needs_administrator(&self) -> bool {
+        false
+    }
+
     /// Returns `true` when the step manages user-level packages (for example
     /// uv, mise, npm, gem or pipx) and therefore must not run as root.
     ///
@@ -678,6 +694,10 @@ mod tests {
     fn a_skip_reason_names_the_reason_in_one_line() {
         assert_eq!(SkipReason::NotSignedIn.to_string(), "not signed in");
         assert_eq!(SkipReason::NeedsSudo.to_string(), "needs sudo");
+        assert_eq!(
+            SkipReason::NeedsAdministrator.to_string(),
+            "needs administrator"
+        );
         assert_eq!(
             SkipReason::Conflict("brew").to_string(),
             "conflicts with `brew`"

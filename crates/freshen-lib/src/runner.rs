@@ -820,6 +820,7 @@ impl<'a> Runner<'a> {
             }
 
             let needs_sudo = step.needs_root() && !sudo_available;
+            let needs_administrator = step.needs_administrator() && !privilege.is_elevated();
             // `root` is a Unix concept: on Windows there is no root user, so an
             // elevated administrator is not refused for user-level steps.
             let refused_as_root = cfg!(unix) && privilege.is_elevated() && step.is_user_level();
@@ -841,6 +842,10 @@ impl<'a> Runner<'a> {
                 None if needs_sudo => planned.push(PlannedStep::Skip {
                     step,
                     reason: SkipReason::NeedsSudo,
+                }),
+                None if needs_administrator => planned.push(PlannedStep::Skip {
+                    step,
+                    reason: SkipReason::NeedsAdministrator,
                 }),
                 None if refused_as_root => planned.push(PlannedStep::Skip {
                     step,
@@ -1353,6 +1358,7 @@ mod tests {
         check_sleep: Duration,
         interrupt_on_run: bool,
         needs_root: bool,
+        needs_administrator: bool,
         is_user_level: bool,
         calls: Arc<Calls>,
     }
@@ -1376,6 +1382,7 @@ mod tests {
                 check_sleep: Duration::ZERO,
                 interrupt_on_run: false,
                 needs_root: false,
+                needs_administrator: false,
                 is_user_level: false,
                 calls: Arc::new(Calls::default()),
             }
@@ -1455,6 +1462,11 @@ mod tests {
 
         fn needs_root(mut self, value: bool) -> Self {
             self.needs_root = value;
+            self
+        }
+
+        fn needs_administrator(mut self, value: bool) -> Self {
+            self.needs_administrator = value;
             self
         }
 
@@ -1542,6 +1554,10 @@ mod tests {
 
         fn needs_root(&self) -> bool {
             self.needs_root
+        }
+
+        fn needs_administrator(&self) -> bool {
+            self.needs_administrator
         }
 
         fn is_user_level(&self) -> bool {
@@ -2036,6 +2052,107 @@ mod tests {
         assert_eq!(calls.detect.load(Ordering::SeqCst), 1);
         assert_eq!(calls.run.load(Ordering::SeqCst), 1);
         assert_eq!(calls.cleanup.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_step_that_needs_administrator_is_skipped_when_not_elevated() {
+        let step = FakeStep::new("chocolatey", "Chocolatey").needs_administrator(true);
+        let calls = step.calls();
+
+        let summary = Runner::with_options_and_sudo(
+            [&step as &dyn Step],
+            RunOptions::new(),
+            true,
+            Privilege::StandardUser,
+        )
+        .run();
+
+        let result = &summary.steps()[0];
+        assert_eq!(result.status(), StepStatus::Skipped);
+        assert_eq!(result.skip_reason(), Some(SkipReason::NeedsAdministrator));
+        assert_eq!(result.error(), None);
+        assert_eq!(summary.skipped_count(), 1);
+        assert_eq!(summary.ok_count(), 0);
+        assert_eq!(summary.failed_count(), 0);
+        assert_exit_code(summary.exit_code(), ExitCode::SUCCESS);
+        assert!(summary.to_string().contains("needs administrator"));
+
+        assert_eq!(calls.detect.load(Ordering::SeqCst), 0);
+        assert_eq!(calls.run.load(Ordering::SeqCst), 0);
+        assert_eq!(calls.cleanup.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_step_that_needs_administrator_runs_when_elevated() {
+        let step = FakeStep::new("chocolatey", "Chocolatey").needs_administrator(true);
+        let calls = step.calls();
+
+        let summary = Runner::with_options_and_sudo(
+            [&step as &dyn Step],
+            RunOptions::new(),
+            true,
+            Privilege::Elevated,
+        )
+        .run();
+
+        let result = &summary.steps()[0];
+        assert_eq!(result.status(), StepStatus::Ok);
+        assert_eq!(result.skip_reason(), None);
+        assert_eq!(summary.ok_count(), 1);
+        assert_eq!(summary.failed_count(), 0);
+        assert_exit_code(summary.exit_code(), ExitCode::SUCCESS);
+
+        assert_eq!(calls.detect.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.run.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.cleanup.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_step_that_does_not_need_administrator_runs_when_not_elevated() {
+        let step = FakeStep::new("winget", "winget");
+        let calls = step.calls();
+
+        let summary = Runner::with_options_and_sudo(
+            [&step as &dyn Step],
+            RunOptions::new(),
+            true,
+            Privilege::StandardUser,
+        )
+        .run();
+
+        let result = &summary.steps()[0];
+        assert_eq!(result.status(), StepStatus::Ok);
+        assert_eq!(result.skip_reason(), None);
+        assert_eq!(summary.ok_count(), 1);
+
+        assert_eq!(calls.detect.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.run.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.cleanup.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn needs_administrator_steps_are_skipped_in_check_mode_when_not_elevated() {
+        let step = FakeStep::new("chocolatey", "Chocolatey").needs_administrator(true);
+        let calls = step.calls();
+
+        let summary = Runner::with_options_and_sudo(
+            [&step as &dyn Step],
+            RunOptions::new(),
+            true,
+            Privilege::StandardUser,
+        )
+        .check();
+
+        assert_eq!(summary.steps()[0].status(), CheckStatus::Skipped);
+        assert_eq!(
+            summary.steps()[0].skip_reason(),
+            Some(SkipReason::NeedsAdministrator)
+        );
+        assert_eq!(summary.skipped_count(), 1);
+        assert_exit_code(summary.exit_code(), ExitCode::SUCCESS);
+
+        assert_eq!(calls.detect.load(Ordering::SeqCst), 0);
+        assert_eq!(calls.check.load(Ordering::SeqCst), 0);
     }
 
     #[cfg(unix)]
