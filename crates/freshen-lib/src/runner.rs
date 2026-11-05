@@ -22,6 +22,9 @@ use crate::check::{CheckResult, CheckSummary};
 use crate::cleanup::{self, CleanupReport};
 use crate::containers::{ActiveContainerRuntime, COLIMA_STOP, DOCKER};
 use crate::deadline::{self, Deadline};
+use crate::elevation::{
+    decide, ElevationDecision, ElevationOutcome, ElevationProbe, ElevationState, NoElevationProbe,
+};
 use crate::homebrew::{BundlePackage, DoctorFinding};
 use crate::options::RunOptions;
 use crate::snapshot::{RollbackCommand, SnapshotRecorder};
@@ -772,7 +775,13 @@ impl<'a> Runner<'a> {
         steps: impl IntoIterator<Item = &'a dyn Step>,
         options: RunOptions,
     ) -> Self {
-        Self::with_options_and_sudo(steps, options, true, Privilege::StandardUser)
+        Self::with_options_and_sudo(
+            steps,
+            options,
+            true,
+            Privilege::StandardUser,
+            &NoElevationProbe,
+        )
     }
 
     /// Like [`Runner::with_options`] but takes an explicit `sudo_available`
@@ -790,9 +799,11 @@ impl<'a> Runner<'a> {
         options: RunOptions,
         sudo_available: bool,
         privilege: Privilege,
+        elevation_probe: &'a dyn ElevationProbe,
     ) -> Self {
         let selection = options.selection();
         let mut planned = Vec::new();
+        let mut elevation_state = ElevationState::new();
 
         for step in steps
             .into_iter()
@@ -820,7 +831,9 @@ impl<'a> Runner<'a> {
             }
 
             let needs_sudo = step.needs_root() && !sudo_available;
-            let needs_administrator = step.needs_administrator() && !privilege.is_elevated();
+            let step_needs_administrator = step.needs_administrator();
+            let is_elevated = privilege.is_elevated();
+            let needs_administrator = step_needs_administrator && !is_elevated;
             // `root` is a Unix concept: on Windows there is no root user, so an
             // elevated administrator is not refused for user-level steps.
             let refused_as_root = cfg!(unix) && privilege.is_elevated() && step.is_user_level();
@@ -834,6 +847,28 @@ impl<'a> Runner<'a> {
                 })
                 .map(|earlier| earlier.id());
 
+            // Elevation is requested for a selected step that needs
+            // administrator rights, at most once per run (one UAC prompt).
+            let elevated = match decide(
+                step_needs_administrator,
+                selection.includes(step.id()),
+                is_elevated,
+                &elevation_state,
+            ) {
+                ElevationDecision::NotNeeded | ElevationDecision::AlreadyElevated => true,
+                ElevationDecision::Request => {
+                    let requested = matches!(
+                        elevation_probe.request_elevation(step.id()),
+                        ElevationOutcome::Requested
+                    );
+                    if requested {
+                        elevation_state.mark_requested();
+                    }
+                    requested
+                }
+                ElevationDecision::NotSelected | ElevationDecision::AlreadyRequested => false,
+            };
+
             match conflict {
                 Some(earlier) => planned.push(PlannedStep::Skip {
                     step,
@@ -843,7 +878,7 @@ impl<'a> Runner<'a> {
                     step,
                     reason: SkipReason::NeedsSudo,
                 }),
-                None if needs_administrator => planned.push(PlannedStep::Skip {
+                None if needs_administrator && !elevated => planned.push(PlannedStep::Skip {
                     step,
                     reason: SkipReason::NeedsAdministrator,
                 }),
@@ -1314,10 +1349,12 @@ fn diff_reports(before: &CheckReport, after: &CheckReport) -> Vec<VersionChange>
 mod tests {
     use super::{RunSummary, Runner, SkipReason, StepStatus};
     use crate::check::CheckStatus;
+    use crate::elevation::{ElevationOutcome, ElevationProbe};
     use crate::options::{RunOptions, StepSelection};
     use crate::platform::Platform;
     use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
     use crate::system::Privilege;
+    use crate::NoElevationProbe;
     use std::collections::BTreeMap;
     use std::process::ExitCode;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -1339,6 +1376,32 @@ mod tests {
         restore: AtomicUsize,
         check_active: AtomicUsize,
         check_max_active: AtomicUsize,
+    }
+
+    /// An injected elevation helper that records which step ids it was asked
+    /// to elevate and returns a fixed outcome.
+    struct RecordingElevationProbe {
+        calls: std::sync::Mutex<Vec<String>>,
+        outcome: ElevationOutcome,
+    }
+
+    impl RecordingElevationProbe {
+        fn new(outcome: ElevationOutcome) -> Self {
+            Self {
+                calls: std::sync::Mutex::new(Vec::new()),
+                outcome,
+            }
+        }
+    }
+
+    impl ElevationProbe for RecordingElevationProbe {
+        fn request_elevation(&self, step_id: &str) -> ElevationOutcome {
+            self.calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(step_id.to_string());
+            self.outcome
+        }
     }
 
     struct FakeStep {
@@ -1909,6 +1972,7 @@ mod tests {
             RunOptions::new(),
             false,
             Privilege::StandardUser,
+            &NoElevationProbe,
         )
         .run();
 
@@ -1937,6 +2001,7 @@ mod tests {
             RunOptions::new(),
             true,
             Privilege::StandardUser,
+            &NoElevationProbe,
         )
         .run();
 
@@ -1962,6 +2027,7 @@ mod tests {
             RunOptions::new(),
             false,
             Privilege::StandardUser,
+            &NoElevationProbe,
         )
         .run();
 
@@ -1985,6 +2051,7 @@ mod tests {
             RunOptions::new(),
             false,
             Privilege::StandardUser,
+            &NoElevationProbe,
         )
         .check();
 
@@ -2011,6 +2078,7 @@ mod tests {
             RunOptions::new(),
             true,
             Privilege::Elevated,
+            &NoElevationProbe,
         )
         .run();
 
@@ -2041,6 +2109,7 @@ mod tests {
             RunOptions::new(),
             true,
             Privilege::StandardUser,
+            &NoElevationProbe,
         )
         .run();
 
@@ -2064,6 +2133,7 @@ mod tests {
             RunOptions::new(),
             true,
             Privilege::StandardUser,
+            &NoElevationProbe,
         )
         .run();
 
@@ -2092,6 +2162,7 @@ mod tests {
             RunOptions::new(),
             true,
             Privilege::Elevated,
+            &NoElevationProbe,
         )
         .run();
 
@@ -2117,6 +2188,7 @@ mod tests {
             RunOptions::new(),
             true,
             Privilege::StandardUser,
+            &NoElevationProbe,
         )
         .run();
 
@@ -2140,6 +2212,7 @@ mod tests {
             RunOptions::new(),
             true,
             Privilege::StandardUser,
+            &NoElevationProbe,
         )
         .check();
 
@@ -2155,6 +2228,123 @@ mod tests {
         assert_eq!(calls.check.load(Ordering::SeqCst), 0);
     }
 
+    fn recording_probe(outcome: ElevationOutcome) -> RecordingElevationProbe {
+        RecordingElevationProbe::new(outcome)
+    }
+
+    #[test]
+    fn a_selected_step_that_needs_administrator_requests_elevation_once() {
+        let step = FakeStep::new("chocolatey", "Chocolatey").needs_administrator(true);
+        let calls = step.calls();
+        let probe = recording_probe(ElevationOutcome::Requested);
+
+        let summary = Runner::with_options_and_sudo(
+            [&step as &dyn Step],
+            RunOptions::new(),
+            true,
+            Privilege::StandardUser,
+            &probe,
+        )
+        .run();
+
+        let result = &summary.steps()[0];
+        assert_eq!(result.status(), StepStatus::Ok);
+        assert_eq!(result.skip_reason(), None);
+        assert_eq!(summary.ok_count(), 1);
+        assert_eq!(calls.run.load(Ordering::SeqCst), 1);
+
+        let recorded = probe
+            .calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0], "chocolatey");
+    }
+
+    #[test]
+    fn elevation_is_requested_only_once_for_multiple_administrator_steps() {
+        let first = FakeStep::new("chocolatey", "Chocolatey").needs_administrator(true);
+        let second = FakeStep::new("scoop", "Scoop").needs_administrator(true);
+        let probe = recording_probe(ElevationOutcome::Requested);
+
+        let summary = Runner::with_options_and_sudo(
+            [&first as &dyn Step, &second as &dyn Step],
+            RunOptions::new(),
+            true,
+            Privilege::StandardUser,
+            &probe,
+        )
+        .run();
+
+        let results = summary.steps();
+        assert_eq!(results[0].status(), StepStatus::Ok);
+        assert_eq!(results[1].status(), StepStatus::Skipped);
+        assert_eq!(
+            results[1].skip_reason(),
+            Some(SkipReason::NeedsAdministrator)
+        );
+        let recorded = probe
+            .calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0], "chocolatey");
+    }
+
+    #[test]
+    fn an_administrator_step_is_skipped_when_elevation_is_unavailable() {
+        let step = FakeStep::new("chocolatey", "Chocolatey").needs_administrator(true);
+        let calls = step.calls();
+        let probe = recording_probe(ElevationOutcome::Unavailable);
+
+        let summary = Runner::with_options_and_sudo(
+            [&step as &dyn Step],
+            RunOptions::new(),
+            true,
+            Privilege::StandardUser,
+            &probe,
+        )
+        .run();
+
+        let result = &summary.steps()[0];
+        assert_eq!(result.status(), StepStatus::Skipped);
+        assert_eq!(result.skip_reason(), Some(SkipReason::NeedsAdministrator));
+        assert_eq!(summary.ok_count(), 0);
+        assert_eq!(calls.run.load(Ordering::SeqCst), 0);
+
+        let recorded = probe
+            .calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(recorded.len(), 1);
+    }
+
+    #[test]
+    fn an_administrator_step_runs_without_elevation_when_already_elevated() {
+        let step = FakeStep::new("chocolatey", "Chocolatey").needs_administrator(true);
+        let calls = step.calls();
+        let probe = recording_probe(ElevationOutcome::Requested);
+
+        let summary = Runner::with_options_and_sudo(
+            [&step as &dyn Step],
+            RunOptions::new(),
+            true,
+            Privilege::Elevated,
+            &probe,
+        )
+        .run();
+
+        let result = &summary.steps()[0];
+        assert_eq!(result.status(), StepStatus::Ok);
+        assert_eq!(result.skip_reason(), None);
+        assert_eq!(calls.run.load(Ordering::SeqCst), 1);
+        assert!(probe
+            .calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty());
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_user_level_step_is_refused_in_check_mode_when_running_as_root() {
@@ -2166,6 +2356,7 @@ mod tests {
             RunOptions::new(),
             true,
             Privilege::Elevated,
+            &NoElevationProbe,
         )
         .check();
 
@@ -2190,6 +2381,7 @@ mod tests {
             RunOptions::new(),
             true,
             Privilege::Elevated,
+            &NoElevationProbe,
         )
         .run();
 

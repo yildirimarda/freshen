@@ -5,12 +5,14 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use freshen_lib::sudo::{HostSudoProbe, SudoState};
+#[cfg(windows)]
+use freshen_lib::HostElevationProbe;
 use freshen_lib::{
     detect_active_runtime, exit, install_interrupt_handler, list_steps, wait_for_package_managers,
     ActiveContainerRuntime, AppLists, Config, ConfigEnvironment, ContainerRuntimeKind,
-    HostContainerRuntimeProbe, HostPackageManagerProbe, HostPreflightProbe, PackageManagerConfig,
-    PackageManagerProbe, Platform, PreflightReport, Registry, RunLock, Runner, SystemInfo,
-    WaitOutcome,
+    HostContainerRuntimeProbe, HostPackageManagerProbe, HostPreflightProbe, NoElevationProbe,
+    PackageManagerConfig, PackageManagerProbe, Platform, PreflightReport, Registry, RunLock,
+    Runner, SystemInfo, WaitOutcome,
 };
 
 mod cli;
@@ -74,8 +76,14 @@ fn main() -> ExitCode {
     }
 
     if cli.check {
-        let summary =
-            Runner::with_options_and_sudo(steps, options, sudo_available, privilege).check();
+        let summary = Runner::with_options_and_sudo(
+            steps,
+            options,
+            sudo_available,
+            privilege,
+            &NoElevationProbe,
+        )
+        .check();
         if cli.json {
             println!("{}", summary.to_json());
         } else if cli.markdown {
@@ -112,7 +120,9 @@ fn main() -> ExitCode {
         }
     }
 
-    let summary = Runner::with_options_and_sudo(steps, options, sudo_available, privilege).run();
+    let summary =
+        Runner::with_options_and_sudo(steps, options, sudo_available, privilege, elevation_probe())
+            .run();
     if cli.json {
         println!("{}", summary.to_json());
     } else if cli.markdown {
@@ -235,4 +245,20 @@ fn preflight_skipped() -> bool {
             let value = value.trim().to_ascii_lowercase();
             !value.is_empty() && value != "0" && value != "false" && value != "no"
         })
+}
+
+/// Returns the elevation probe used when running (not `--check`) steps.
+///
+/// On Windows this is the real `HostElevationProbe` which shows a single UAC
+/// prompt; on other platforms elevation is unavailable, so steps that need
+/// administrator rights are skipped instead.
+fn elevation_probe() -> &'static dyn freshen_lib::ElevationProbe {
+    #[cfg(windows)]
+    {
+        &HostElevationProbe
+    }
+    #[cfg(not(windows))]
+    {
+        &NoElevationProbe
+    }
 }
