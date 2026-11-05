@@ -66,6 +66,11 @@ pub struct Cli {
     #[arg(long, value_name = "STEP", value_delimiter = ',', action = ArgAction::Append)]
     pub skip: Vec<String>,
 
+    /// Exclude these Chocolatey packages from the upgrade (repeatable,
+    /// comma-separated). Chocolatey only runs on Windows.
+    #[arg(long, value_name = "PACKAGE", value_delimiter = ',', action = ArgAction::Append)]
+    pub except: Vec<String>,
+
     /// Assume yes for every confirmation prompt.
     #[arg(long, short = 'y')]
     pub yes: bool,
@@ -268,6 +273,7 @@ impl Cli {
             .with_step_overrides(config.step_overrides())
             .with_filters(config.item_filters())
             .with_app_lists(config.app_lists())
+            .with_chocolatey_except(self.except.clone())
     }
 }
 
@@ -360,6 +366,7 @@ mod tests {
             options.package_manager().wait(),
             std::time::Duration::from_secs(30)
         );
+        assert!(options.chocolatey_except().is_empty());
     }
 
     #[test]
@@ -404,6 +411,10 @@ mod tests {
             "5",
             "--battery-threshold",
             "35",
+            "--except",
+            "git",
+            "--except",
+            "python",
         ]);
         let options = options(&cli);
 
@@ -448,6 +459,7 @@ mod tests {
             options.package_manager().wait(),
             std::time::Duration::from_secs(5)
         );
+        assert_eq!(options.chocolatey_except(), ["git", "python"]);
     }
 
     #[test]
