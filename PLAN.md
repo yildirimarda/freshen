@@ -261,7 +261,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Implement read-only `check()` for Chocolatey with `choco outdated --limit-output` (parse `name|current|available|pinned`), reporting pinned packages as held back, covered by recorded transcripts
 - [x] Add the Chocolatey upgrade step: first upgrade Chocolatey itself, then upgrade all packages, streaming output and recording per-package failures in the summary, covered by stub-based tests
 - [x] Map Chocolatey exit codes: 0 is success, 1641 and 3010 are success with a "reboot pending" flag in the summary, any other non-zero code is a failure, covered by tests
-- [ ] Honour `choco pin` and report pinned packages as held back, covered by tests
+- [x] Honour `choco pin` and report pinned packages as held back, covered by tests
 - [ ] Add a Chocolatey exclusion list passed as `--except`, with the excluded packages shown in `--list-steps` and the run summary, covered by tests
 - [ ] Record `choco list --local-only -r` in the pre-upgrade snapshot, covered by tests
 - [ ] Print rollback hints (`choco upgrade <name> --version <old>`) for upgraded Chocolatey packages, covered by tests
