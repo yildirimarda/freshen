@@ -19,8 +19,9 @@
 use crate::options::RunOptions;
 use crate::output::human;
 use crate::platform::Platform;
-use crate::process::CommandSpec;
+use crate::process::{CommandSpec, ProcessError};
 use crate::registry::Registry;
+use crate::restart_needed;
 use crate::skipped_items;
 use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
 
@@ -107,12 +108,8 @@ impl Step for ChocolateyStep {
 
         // 1. Upgrade Chocolatey itself first.
         human!("choco upgrade chocolatey");
-        if let Err(error) = CommandSpec::new("choco")
-            .args(["upgrade", "chocolatey"])
-            .neutral_locale()
-            .run_streaming(|_, line| stream_line(line))
-        {
-            failures.push(StepError::run_from_process(CHOCOLATEY, &error));
+        if let Err(error) = run_choco_upgrade(&["upgrade", "chocolatey"]) {
+            failures.push(error);
         }
 
         // 2. List the outdated packages so each can be upgraded individually,
@@ -146,13 +143,9 @@ impl Step for ChocolateyStep {
                 continue;
             }
             human!("choco upgrade {}", package.name);
-            if let Err(error) = CommandSpec::new("choco")
-                .args(["upgrade", &package.name])
-                .neutral_locale()
-                .run_streaming(|_, line| stream_line(line))
-            {
+            if let Err(error) = run_choco_upgrade(&["upgrade", &package.name]) {
                 failed_packages.push(package.name.clone());
-                failures.push(StepError::run_from_process(CHOCOLATEY, &error));
+                failures.push(error);
             }
         }
 
@@ -174,6 +167,44 @@ impl Step for ChocolateyStep {
 fn stream_line(line: &str) {
     if !line.is_empty() {
         human!("  {line}");
+    }
+}
+
+/// Whether a Chocolatey exit code means "success, reboot pending".
+///
+/// Exit code 0 is a plain success. Exit codes 1641 and 3010 mean the upgrade
+/// succeeded but a reboot is pending. Any other non-zero exit code is a
+/// failure.
+#[must_use]
+fn is_reboot_pending_exit_code(code: Option<i32>) -> bool {
+    matches!(code, Some(1641) | Some(3010))
+}
+
+/// Runs a `choco upgrade <args...>` command, streaming its output.
+///
+/// Exit code 0 is success. Exit codes 1641 and 3010 mean the upgrade
+/// succeeded but a reboot is pending: the command is treated as successful
+/// and [`restart_needed::record`] is called so the summary reports a pending
+/// reboot. Any other non-zero exit code is a failure.
+fn run_choco_upgrade(args: &[&str]) -> Result<(), StepError> {
+    let result = CommandSpec::new("choco")
+        .args(args)
+        .neutral_locale()
+        .run_streaming(|_, line| stream_line(line));
+    match result {
+        Ok(_) => Ok(()),
+        Err(error) => match &error {
+            ProcessError::Failed { status, .. } => {
+                if is_reboot_pending_exit_code(status.code()) {
+                    restart_needed::record();
+                    human!("choco: reboot pending");
+                    Ok(())
+                } else {
+                    Err(StepError::run_from_process(CHOCOLATEY, &error))
+                }
+            }
+            _ => Err(StepError::run_from_process(CHOCOLATEY, &error)),
+        },
     }
 }
 
@@ -246,7 +277,9 @@ fn parse_chocolatey_outdated(output: &str) -> Vec<ChocolateyPackage> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_chocolatey_outdated, ChocolateyStep, CHOCOLATEY};
+    use super::{
+        is_reboot_pending_exit_code, parse_chocolatey_outdated, ChocolateyStep, CHOCOLATEY,
+    };
     use crate::options::RunOptions;
     use crate::platform::Platform;
     use crate::step::{Detection, Step};
@@ -727,4 +760,46 @@ mod tests {
         assert_eq!(error.step(), CHOCOLATEY);
         assert_eq!(error.operation(), crate::step::Operation::Run);
     }
+
+    #[test]
+    fn exit_code_is_reboot_pending() {
+        assert!(!is_reboot_pending_exit_code(Some(0)));
+        assert!(!is_reboot_pending_exit_code(Some(1)));
+        assert!(!is_reboot_pending_exit_code(Some(2)));
+        assert!(!is_reboot_pending_exit_code(Some(42)));
+        assert!(!is_reboot_pending_exit_code(None));
+        assert!(is_reboot_pending_exit_code(Some(1641)));
+        assert!(is_reboot_pending_exit_code(Some(3010)));
+    }
+
+    #[test]
+    fn run_does_not_report_reboot_pending_on_clean_exit_zero() {
+        let dir = stub_choco_for_run("git|2.45.2|2.46.0|\n");
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = std::env::var("PATH").ok();
+        std::env::set_var("PATH", &dir);
+
+        let result = ChocolateyStep.run_with_options(&RunOptions::new());
+
+        if let Some(previous) = previous {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(result.is_ok(), "exit 0 should succeed: {result:?}");
+        assert!(
+            !crate::restart_needed::take(),
+            "exit 0 should not record a pending reboot"
+        );
+    }
+
+    // Exit codes 1641 and 3010 cannot be produced by a shell stub on Unix
+    // (the operating system truncates exit status to eight bits), so the
+    // reboot-pending behavior for those codes is exercised by
+    // `exit_code_is_reboot_pending` and runs for real on Windows, where
+    // `choco` can return them directly.
 }
