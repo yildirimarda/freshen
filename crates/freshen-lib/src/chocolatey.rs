@@ -1,12 +1,15 @@
 //! The Chocolatey step: detection, a read-only check and the upgrade for the
-//! Chocolatey package manager on Windows.
+//! Chocolatey package manager.
 //!
 //! Detection runs `choco --version`. On Windows `choco` is resolved through
 //! `PATHEXT`, so `choco.exe` is found even when only the `.exe` is on
-//! `PATH`. Chocolatey modifies the system, so the step declares that it needs
-//! administrator rights ([`Step::needs_administrator`]); the runner skips it
-//! with [`SkipReason::NeedsAdministrator`] when the process is not elevated.
-//! The step is only available on Windows.
+//! `PATH`. Chocolatey installs packages system-wide, so on Windows the step
+//! declares that it needs administrator rights ([`Step::needs_administrator`]);
+//! the runner skips it with [`SkipReason::NeedsAdministrator`] when the process
+//! is not elevated. The step is registered on every platform so end-to-end
+//! stub tests can run against a stub `choco` executable regardless of the host
+//! OS; on non-Windows hosts `choco` is simply not installed and `detect()`
+//! reports it as absent.
 //!
 //! `check()` runs `choco outdated --limit-output` and reports outdated
 //! packages. Pinned packages are held back instead of reported as outdated.
@@ -32,8 +35,11 @@ pub const CHOCOLATEY: StepId = "chocolatey";
 /// The reason shown for a Chocolatey package the user pinned with `choco pin`.
 const PINNED_REASON: &str = "held back (pinned)";
 
-/// Chocolatey only runs on Windows.
-const CHOCOLATEY_PLATFORMS: [Platform; 1] = [Platform::Windows];
+/// Chocolatey is a Windows package manager. It is registered on every
+/// platform so end-to-end stub tests can run against a stub `choco` executable
+/// regardless of the host OS; on non-Windows hosts `choco` is not installed
+/// and `detect()` reports it as absent.
+const CHOCOLATEY_PLATFORMS: &[Platform] = &Platform::ALL;
 
 /// Registers the Chocolatey step.
 #[must_use]
@@ -160,13 +166,14 @@ impl Step for ChocolateyStep {
     }
 
     fn platforms(&self) -> &'static [Platform] {
-        &CHOCOLATEY_PLATFORMS
+        CHOCOLATEY_PLATFORMS
     }
 
-    /// Chocolatey installs packages system-wide, so it requires administrator
-    /// rights.
+    /// Chocolatey installs packages system-wide, so on Windows it requires
+    /// administrator rights. On other platforms Chocolatey is not installed,
+    /// so this is never consulted there.
     fn needs_administrator(&self) -> bool {
-        true
+        cfg!(windows)
     }
 
     fn snapshot(&self) -> Option<SnapshotSection> {
@@ -396,13 +403,13 @@ mod tests {
     }
 
     #[test]
-    fn chocolatey_needs_administrator_rights() {
-        assert!(ChocolateyStep.needs_administrator());
+    fn chocolatey_needs_administrator_rights_on_windows() {
+        assert_eq!(ChocolateyStep.needs_administrator(), cfg!(windows));
     }
 
     #[test]
-    fn chocolatey_is_windows_only() {
-        assert_eq!(ChocolateyStep.platforms(), &[Platform::Windows]);
+    fn chocolatey_is_available_on_every_platform() {
+        assert_eq!(ChocolateyStep.platforms(), Platform::ALL.as_slice());
     }
 
     #[test]
