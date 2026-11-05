@@ -264,7 +264,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Honour `choco pin` and report pinned packages as held back, covered by tests
 - [x] Add a Chocolatey exclusion list passed as `--except`, with the excluded packages shown in `--list-steps` and the run summary, covered by tests
 - [x] Record `choco list --local-only -r` in the pre-upgrade snapshot, covered by tests
-- [ ] Print rollback hints (`choco upgrade <name> --version <old>`) for upgraded Chocolatey packages, covered by tests
+- [x] Print rollback hints (`choco upgrade <name> --version <old>`) for upgraded Chocolatey packages, covered by tests
 - [ ] Report packages that are installed by more than one Windows package manager (winget, Chocolatey, Scoop) so the same application is not upgraded twice unnoticed, as a report-only check covered by tests with injected package lists
 - [ ] Add a stub `choco` executable to the stub harness (canned `outdated` output, exit codes 0, 1641, 3010 and 1) and cover the Chocolatey step end to end on every platform
 - [ ] Warn before `wsl --update` because it shuts down every running WSL distribution and anything running inside it: list the running distributions and require confirmation or `--yes`, covered by tests with injected `wsl --list --running` output
