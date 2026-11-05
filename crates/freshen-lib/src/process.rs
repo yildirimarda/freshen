@@ -1672,6 +1672,34 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn streams_lines_while_the_command_is_still_running() {
+        // Stub `sleep` so the test does not depend on an external `sleep`
+        // binary being installed (minimal containers may not ship one).
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = std::env::var("PATH").ok();
+        let dir = std::env::temp_dir().join(format!(
+            "freshen-process-stub-sleep-{pid}",
+            pid = std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap_or_else(|error| {
+            panic!("failed to create stub directory {}: {error}", dir.display())
+        });
+        let stub = dir.join("sleep");
+        std::fs::write(
+            &stub,
+            "#!/bin/sh\n\
+             # Wait for about a second without an external `sleep` binary.\n\
+             i=0\n\
+             while [ $i -lt 20000000 ]; do i=$((i + 1)); done\n",
+        )
+        .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+            .unwrap_or_else(|error| panic!("failed to make stub executable: {error}"));
+        std::env::set_var("PATH", &dir);
+        drop(_guard);
+
         let (sender, receiver) = std::sync::mpsc::channel();
         let handle = std::thread::spawn(move || {
             shell("printf 'first\\n'; sleep 1; printf 'second\\n'").run_streaming(
@@ -1695,6 +1723,13 @@ mod tests {
             Ok(Err(error)) => panic!("command failed: {error}"),
             Err(_) => panic!("runner thread panicked"),
         }
+
+        if let Some(previous) = previous {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]
