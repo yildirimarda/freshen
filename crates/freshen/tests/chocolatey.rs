@@ -5,7 +5,7 @@
 //! package is upgraded individually, with per-package failures recorded in
 //! the summary. No real package manager is touched.
 
-#![cfg(all(feature = "test-harness", target_os = "windows"))]
+#![cfg(feature = "test-harness")]
 
 mod support;
 
@@ -112,7 +112,7 @@ fn chocolatey_reports_ok_when_all_upgrades_succeed() {
 #[test]
 fn chocolatey_reports_failed_when_a_package_upgrade_fails() {
     let tools = StubTools::new(&["choco"]);
-    let output = run(&tools, 42);
+    let output = run(&tools, 1);
 
     assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
     assert_eq!(
@@ -129,6 +129,66 @@ fn chocolatey_reports_failed_when_a_package_upgrade_fails() {
     assert!(
         stdout(&output).contains("git"),
         "failed package git should be named: {}",
+        stdout(&output)
+    );
+}
+
+/// Exit code 1641 means success with a reboot pending. The step is recorded as
+/// ok and the summary notes that a reboot is pending.
+///
+/// Windows-only: shell-script stubs on Unix cannot return exit codes above 255,
+/// so 1641 would be truncated.
+#[cfg(windows)]
+#[test]
+fn chocolatey_reports_ok_with_reboot_pending_for_exit_code_1641() {
+    let tools = StubTools::new(&["choco"]);
+    let output = run(&tools, 1641);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        CHOCO_CALLS,
+        "calls: {:?}",
+        tools.step_calls()
+    );
+    assert!(
+        stdout(&output).contains("1 ok, 0 planned, 0 skipped, 0 failed"),
+        "summary: {}",
+        stdout(&output)
+    );
+    assert!(
+        stdout(&output).contains("reboot pending"),
+        "reboot pending should be reported: {}",
+        stdout(&output)
+    );
+}
+
+/// Exit code 3010 means success with a reboot pending. The step is recorded as
+/// ok and the summary notes that a reboot is pending.
+///
+/// Windows-only: shell-script stubs on Unix cannot return exit codes above 255,
+/// so 3010 would be truncated.
+#[cfg(windows)]
+#[test]
+fn chocolatey_reports_ok_with_reboot_pending_for_exit_code_3010() {
+    let tools = StubTools::new(&["choco"]);
+    let output = run(&tools, 3010);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        CHOCO_CALLS,
+        "calls: {:?}",
+        tools.step_calls()
+    );
+    assert!(
+        stdout(&output).contains("1 ok, 0 planned, 0 skipped, 0 failed"),
+        "summary: {}",
+        stdout(&output)
+    );
+    assert!(
+        stdout(&output).contains("reboot pending"),
+        "reboot pending should be reported: {}",
         stdout(&output)
     );
 }
