@@ -259,7 +259,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Request elevation for a single step through one UAC prompt only when that step is selected, covered by tests with an injected elevation helper Platform guard: this code is Windows-only. Put it behind `#[cfg(windows)]` with its tests and imports inside the gated module, and keep parsers and decision logic platform-neutral so they are tested on every OS; otherwise Linux and macOS CI fail with `unused_imports`/`dead_code` under `-D warnings`
 - [x] Add Chocolatey detection (`choco.exe` through `PATHEXT`, `choco --version`) and mark the step as requiring administrator rights, covered by tests with an injected elevation state
 - [x] Implement read-only `check()` for Chocolatey with `choco outdated --limit-output` (parse `name|current|available|pinned`), reporting pinned packages as held back, covered by recorded transcripts
-- [ ] Add the Chocolatey upgrade step: first upgrade Chocolatey itself, then upgrade all packages, streaming output and recording per-package failures in the summary, covered by stub-based tests
+- [x] Add the Chocolatey upgrade step: first upgrade Chocolatey itself, then upgrade all packages, streaming output and recording per-package failures in the summary, covered by stub-based tests
 - [ ] Map Chocolatey exit codes: 0 is success, 1641 and 3010 are success with a "reboot pending" flag in the summary, any other non-zero code is a failure, covered by tests
 - [ ] Honour `choco pin` and report pinned packages as held back, covered by tests
 - [ ] Add a Chocolatey exclusion list passed as `--except`, with the excluded packages shown in `--list-steps` and the run summary, covered by tests
