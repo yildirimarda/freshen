@@ -151,3 +151,43 @@ fn chocolatey_list_steps_lists_chocolatey() {
     assert!(text.contains("chocolatey"), "listing: {text}");
     assert!(text.contains("installed"), "listing: {text}");
 }
+
+/// The pre-upgrade snapshot records installed versions, and the summary prints
+/// a `choco upgrade <name> --version <old>` hint for each installed package so
+/// the user can return to the versions recorded before the run.
+#[test]
+fn chocolatey_prints_rollback_hints() {
+    let tools = StubTools::new(&["choco"]);
+    let package_list = "git|2.45.2|2.46.0|\npython|3.11.0|3.11.1|\n";
+    let snapshot_output = "git 2.45.2\npython 3.11.0\n";
+
+    tools.set_responses(
+        "choco",
+        &[
+            StubOutput::new(),                   // detect: choco --version
+            StubOutput::stdout(snapshot_output), // snapshot: choco list --local-only -r
+            StubOutput::stdout(package_list),    // check before: choco outdated --limit-output
+            StubOutput::new(),                   // run: choco upgrade chocolatey
+            StubOutput::stdout(package_list), // run: choco outdated --limit-output (package list)
+            StubOutput::new(),                // run: choco upgrade git
+            StubOutput::new(),                // run: choco upgrade python
+            StubOutput::stdout(package_list), // check after: choco outdated --limit-output
+        ],
+    );
+    let output = tools
+        .command()
+        .args(["--only", "chocolatey"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("choco upgrade git --version 2.45.2"),
+        "rollback hint for git: {text}"
+    );
+    assert!(
+        text.contains("choco upgrade python --version 3.11.0"),
+        "rollback hint for python: {text}"
+    );
+}
