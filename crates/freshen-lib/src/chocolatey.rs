@@ -579,15 +579,15 @@ mod tests {
                 .unwrap_or_else(|error| panic!("write {}: {error}", output_file.display()));
             let script = "@echo off\r\n\
                  if \"%~1\"==\"--version\" exit /b 0\r\n\
-                 if \"%~1 %~2\"==\"upgrade chocolatey\" (\r\n\
-                   if \"%FRESHEN_CHOCO_FAIL_CHOCOLATEY%\"==\"1\" exit /b 1\r\n\
-                   exit /b 0\r\n\
-                 )\r\n\
-                 if \"%~1\"==\"upgrade\" (\r\n\
-                   if \"%FRESHEN_CHOCO_FAIL_PACKAGE%\"==\"%~2\" exit /b 1\r\n\
-                   exit /b 0\r\n\
-                 )\r\n\
+                 if \"%~1 %~2\"==\"upgrade chocolatey\" goto upgrade_chocolatey\r\n\
+                 if \"%~1\"==\"upgrade\" goto upgrade_package\r\n\
                  if \"%~1 %~2\"==\"outdated --limit-output\" type \"%~dp0outdated.txt\"\r\n\
+                 exit /b 0\r\n\
+                 :upgrade_chocolatey\r\n\
+                 if \"%FRESHEN_CHOCO_FAIL_CHOCOLATEY%\"==\"1\" exit /b 1\r\n\
+                 exit /b 0\r\n\
+                 :upgrade_package\r\n\
+                 if \"%FRESHEN_CHOCO_FAIL_PACKAGE%\"==\"%~2\" exit /b 1\r\n\
                  exit /b 0\r\n";
             let stub = dir.join("choco.cmd");
             std::fs::write(&stub, script)
