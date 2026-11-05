@@ -371,6 +371,9 @@ impl CapturedSection {
                 "docker" if entry.command == "docker image ls --digests" => {
                     commands.extend(docker_rollback_commands(entry));
                 }
+                "chocolatey" if entry.command == "choco list --local-only -r" => {
+                    commands.extend(chocolatey_rollback_commands(entry));
+                }
                 _ => {}
             }
         }
@@ -483,6 +486,23 @@ fn docker_rollback_commands(entry: &SnapshotEntry) -> Vec<RollbackCommand> {
             Some(RollbackCommand::new(
                 "docker",
                 format!("docker pull {repository}@{digest}"),
+            ))
+        })
+        .collect()
+}
+
+fn chocolatey_rollback_commands(entry: &SnapshotEntry) -> Vec<RollbackCommand> {
+    recorded_lines(entry)
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let name = fields.next()?;
+            let version = fields.next_back()?;
+            if name == version {
+                return None;
+            }
+            Some(RollbackCommand::new(
+                "chocolatey",
+                format!("choco upgrade {name} --version {version}"),
             ))
         })
         .collect()
@@ -886,6 +906,23 @@ mod tests {
                 "brew install --cask firefox@121.0",
                 "brew install --cask visual-studio-code@1.85.1",
                 "brew install --cask firefox@115",
+            ]
+        );
+    }
+
+    #[test]
+    fn chocolatey_rollback_commands_use_the_recorded_versions() {
+        assert_eq!(
+            commands(CapturedSection {
+                group: "chocolatey",
+                entries: vec![SnapshotEntry::new(
+                    "choco list --local-only -r",
+                    "git 2.45.2\npython 3.11.0\n",
+                )],
+            }),
+            [
+                "choco upgrade git --version 2.45.2",
+                "choco upgrade python --version 3.11.0",
             ]
         );
     }
