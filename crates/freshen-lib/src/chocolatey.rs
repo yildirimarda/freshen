@@ -578,14 +578,13 @@ mod tests {
             std::fs::write(&output_file, &table)
                 .unwrap_or_else(|error| panic!("write {}: {error}", output_file.display()));
             let script = "@echo off\r\n\
-                 setlocal EnableDelayedExpansion\r\n\
                  if \"%~1\"==\"--version\" exit /b 0\r\n\
                  if \"%~1 %~2\"==\"upgrade chocolatey\" (\r\n\
-                   if \"!FRESHEN_CHOCO_FAIL_CHOCOLATEY!\"==\"1\" exit /b 1\r\n\
+                   if \"%FRESHEN_CHOCO_FAIL_CHOCOLATEY%\"==\"1\" exit /b 1\r\n\
                    exit /b 0\r\n\
                  )\r\n\
                  if \"%~1\"==\"upgrade\" (\r\n\
-                   if \"!FRESHEN_CHOCO_FAIL_PACKAGE!\"==\"%~2\" exit /b 1\r\n\
+                   if \"%FRESHEN_CHOCO_FAIL_PACKAGE%\"==\"%~2\" exit /b 1\r\n\
                    exit /b 0\r\n\
                  )\r\n\
                  if \"%~1 %~2\"==\"outdated --limit-output\" type \"%~dp0outdated.txt\"\r\n\
