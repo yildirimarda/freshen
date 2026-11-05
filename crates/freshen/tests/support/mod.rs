@@ -522,6 +522,7 @@ fn is_snapshot_capture(call: &str) -> bool {
         || call.starts_with("brew bundle dump ")
         || call == "uv tool list"
         || call == "mise ls"
+        || call == "choco list --local-only -r"
         || call.starts_with("docker image ls ")
 }
 

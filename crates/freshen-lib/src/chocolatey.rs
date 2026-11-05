@@ -23,6 +23,7 @@ use crate::process::{CommandSpec, ProcessError};
 use crate::registry::Registry;
 use crate::restart_needed;
 use crate::skipped_items;
+use crate::snapshot::{SnapshotCommand, SnapshotSection};
 use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
 
 /// The Chocolatey package manager step.
@@ -166,6 +167,16 @@ impl Step for ChocolateyStep {
     /// rights.
     fn needs_administrator(&self) -> bool {
         true
+    }
+
+    fn snapshot(&self) -> Option<SnapshotSection> {
+        Some(SnapshotSection::new(
+            CHOCOLATEY,
+            vec![SnapshotCommand::new(
+                "choco",
+                ["list", "--local-only", "-r"],
+            )],
+        ))
     }
 }
 
@@ -872,4 +883,15 @@ mod tests {
     // reboot-pending behavior for those codes is exercised by
     // `exit_code_is_reboot_pending` and runs for real on Windows, where
     // `choco` can return them directly.
+    #[test]
+    fn snapshot_records_choco_list_local_only_r() {
+        let section = ChocolateyStep
+            .snapshot()
+            .unwrap_or_else(|| panic!("chocolatey should record a snapshot"));
+        assert_eq!(section.group(), CHOCOLATEY);
+        let commands = section.commands();
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].program(), "choco");
+        assert_eq!(commands[0].arguments(), ["list", "--local-only", "-r"]);
+    }
 }
