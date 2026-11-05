@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use crate::chocolatey::CHOCOLATEY;
 use crate::containers::ActiveContainerRuntime;
 use crate::options::{RunOptions, SelectionFlag, StepSelection};
 use crate::platform::Platform;
@@ -57,6 +58,8 @@ pub struct StepListing {
     name: String,
     detection: DetectionState,
     skip_reason: Option<SkipReason>,
+    /// Packages excluded from this step with `--except`, when any.
+    excluded: Vec<String>,
 }
 
 impl StepListing {
@@ -82,6 +85,12 @@ impl StepListing {
     #[must_use]
     pub fn skip_reason(&self) -> Option<SkipReason> {
         self.skip_reason
+    }
+
+    /// Packages excluded from this step with `--except`, when any.
+    #[must_use]
+    pub fn excluded(&self) -> &[String] {
+        &self.excluded
     }
 }
 
@@ -150,6 +159,9 @@ impl fmt::Display for StepList {
             if let Some(reason) = step.skip_reason {
                 write!(f, " - skipped: {reason}")?;
             }
+            if !step.excluded.is_empty() {
+                write!(f, " - excluded: {}", step.excluded.join(", "))?;
+            }
             if let DetectionState::Failed(error) = &step.detection {
                 write!(f, " - {error}")?;
             }
@@ -195,6 +207,7 @@ fn list_step(
             name,
             detection: DetectionState::Unsupported,
             skip_reason: Some(SkipReason::UnsupportedPlatform),
+            excluded: Vec::new(),
         };
     }
 
@@ -221,11 +234,18 @@ fn list_step(
         .or(blocked)
         .or((detection == DetectionState::NotInstalled).then_some(SkipReason::NotInstalled));
 
+    let excluded = if id == CHOCOLATEY {
+        options.chocolatey_except().to_vec()
+    } else {
+        Vec::new()
+    };
+
     StepListing {
         id,
         name,
         detection,
         skip_reason,
+        excluded,
     }
 }
 
@@ -480,6 +500,21 @@ mod tests {
         assert_eq!(
             skip_uv.steps()[1].skip_reason(),
             Some(SkipReason::NotSelected(SelectionFlag::Skip))
+        );
+    }
+
+    #[test]
+    fn excepted_chocolatey_packages_are_shown_in_listing() {
+        let registry = registry([TestStep::new("chocolatey", &Platform::ALL)]);
+        let options = RunOptions::new().with_chocolatey_except(["git", "python"]);
+        let listed = list_steps(&registry, &options, Platform::Linux);
+
+        assert_eq!(listed.steps()[0].id(), "chocolatey");
+        assert_eq!(listed.steps()[0].excluded(), ["git", "python"]);
+        let text = listed.to_string();
+        assert!(
+            text.contains("excluded: git, python"),
+            "listing does not show excluded packages: {text}"
         );
     }
 

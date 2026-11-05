@@ -226,6 +226,7 @@ pub struct RunOptions {
     step_overrides: BTreeMap<String, bool>,
     filters: ItemFilters,
     app_lists: AppLists,
+    chocolatey_except: Vec<String>,
     container_runtime: Option<ActiveContainerRuntime>,
     restart_services: bool,
     restart_apps: bool,
@@ -368,6 +369,16 @@ impl RunOptions {
     #[must_use]
     pub fn with_app_lists(mut self, app_lists: AppLists) -> Self {
         self.app_lists = app_lists;
+        self
+    }
+
+    /// Replaces the Chocolatey packages excluded with `--except`.
+    #[must_use]
+    pub fn with_chocolatey_except(
+        mut self,
+        names: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.chocolatey_except = names.into_iter().map(Into::into).collect();
         self
     }
 
@@ -540,6 +551,12 @@ impl RunOptions {
     #[must_use]
     pub fn app_lists(&self) -> &AppLists {
         &self.app_lists
+    }
+
+    /// The Chocolatey packages excluded with `--except`.
+    #[must_use]
+    pub fn chocolatey_except(&self) -> &[String] {
+        &self.chocolatey_except
     }
 
     /// The active container runtime, when one was detected or overridden.

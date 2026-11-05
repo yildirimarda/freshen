@@ -57,22 +57,27 @@ impl ChocolateyStep {
 
     /// Reports the packages `choco outdated --limit-output` lists as
     /// outdated. Pinned packages are kept in the report with a "held back
-    /// (pinned)" reason instead of being reported as plainly outdated.
-    fn check_with_options(&self, _options: &RunOptions) -> Result<CheckReport, StepError> {
+    /// (pinned)" reason instead of being reported as plainly outdated. Packages
+    /// excluded with `--except` are not reported at all.
+    fn check_with_options(&self, options: &RunOptions) -> Result<CheckReport, StepError> {
         let output = CommandSpec::new("choco")
             .args(["outdated", "--limit-output"])
             .neutral_locale()
             .run()
             .map_err(|error| StepError::check_from_process(CHOCOLATEY, &error))?;
         let packages = parse_chocolatey_outdated(output.stdout());
-        let report = CheckReport::from_items(packages.into_iter().map(|package| {
+        let except = options.chocolatey_except();
+        let report = CheckReport::from_items(packages.into_iter().filter_map(|package| {
+            if except.contains(&package.name) {
+                return None;
+            }
             let mut item = OutdatedItem::new(&package.name)
                 .with_current(&package.current)
                 .with_latest(&package.available);
             if package.pinned {
                 item = item.with_reason(PINNED_REASON);
             }
-            item
+            Some(item)
         }));
         Ok(report)
     }
@@ -130,6 +135,7 @@ impl Step for ChocolateyStep {
 
         // 3. Upgrade every non-pinned package individually.
         let filter = options.filters().packages();
+        let except = options.chocolatey_except();
         let mut failed_packages = Vec::new();
         for package in &packages {
             if package.pinned {
@@ -137,7 +143,7 @@ impl Step for ChocolateyStep {
                 skipped_items::record(package.name.clone());
                 continue;
             }
-            if !filter.includes(&package.name) {
+            if except.contains(&package.name) || !filter.includes(&package.name) {
                 human!("{}: excluded", package.name);
                 skipped_items::record(package.name.clone());
                 continue;
@@ -282,6 +288,7 @@ mod tests {
     };
     use crate::options::RunOptions;
     use crate::platform::Platform;
+    use crate::skipped_items;
     use crate::step::{Detection, Step};
 
     /// Creates a stub `choco` on a temp dir that exits 0 for `choco
@@ -530,6 +537,38 @@ mod tests {
     }
 
     #[test]
+    fn check_excludes_excepted_packages() {
+        let dir = stub_choco_with_outdated_output("git|2.45.2|2.46.0|\npython|3.11.0|3.11.1|\n");
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = std::env::var("PATH").ok();
+        std::env::set_var("PATH", &dir);
+
+        let options = RunOptions::new().with_chocolatey_except(["python"]);
+        let report = ChocolateyStep
+            .check_with_options(&options)
+            .unwrap_or_else(|error| panic!("check should succeed: {error}"));
+
+        if let Some(previous) = previous {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(report.pending(), 1);
+        assert!(
+            report.items().iter().any(|item| item.name() == "git"),
+            "git should be reported"
+        );
+        assert!(
+            !report.items().iter().any(|item| item.name() == "python"),
+            "python should be excluded"
+        );
+    }
+
+    #[test]
     fn check_reports_nothing_when_no_outdated_packages() {
         let dir = stub_choco_with_outdated_output("");
         let _guard = crate::process::PATH_GUARD
@@ -709,6 +748,37 @@ mod tests {
         assert!(
             result.is_ok(),
             "pinned package should be skipped, not upgraded"
+        );
+    }
+
+    #[test]
+    fn run_skips_excepted_packages() {
+        let dir = stub_choco_for_run("git|2.45.2|2.46.0|\npython|3.11.0|3.11.1|\n");
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = std::env::var("PATH").ok();
+        std::env::set_var("PATH", &dir);
+        // If python were upgraded, this would fail, so a successful run proves
+        // the excepted package is skipped instead of upgraded.
+        std::env::set_var("FRESHEN_CHOCO_FAIL_PACKAGE", "python");
+
+        let options = RunOptions::new().with_chocolatey_except(["python"]);
+        let result = ChocolateyStep.run_with_options(&options);
+
+        if let Some(previous) = previous {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        std::env::remove_var("FRESHEN_CHOCO_FAIL_PACKAGE");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(result.is_ok(), "excepted package should not be upgraded");
+        let skipped = skipped_items::take();
+        assert!(
+            skipped.contains(&"python".to_string()),
+            "excepted package should be recorded as skipped: {skipped:?}"
         );
     }
 
