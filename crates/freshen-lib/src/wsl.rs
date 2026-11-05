@@ -10,11 +10,12 @@
 //! The step only runs on Windows, because `wsl` exists only there.
 
 use crate::options::RunOptions;
-use crate::output::human;
+use crate::output::{flush, human, human_print};
 use crate::platform::Platform;
 use crate::process::CommandSpec;
 use crate::registry::Registry;
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
+use std::io;
 
 /// The WSL step.
 pub const WSL: StepId = "wsl";
@@ -68,25 +69,110 @@ impl Step for WslStep {
 
     /// Runs `wsl --update` only when the opt-in flag is set. Without it the
     /// step reports that the update is available and changes nothing, because
-    /// the update shuts down every running WSL distribution.
+    /// the update shuts down every running WSL distribution. When the flag is
+    /// set the running distributions are listed first and the user must confirm
+    /// unless `--yes` was given.
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
-        if Self::update_enabled(options) {
-            human!("wsl: install (WSL kernel update)");
-            CommandSpec::new("wsl")
-                .args(["--update"])
-                .neutral_locale()
-                .run()
-                .map(|_| ())
-                .map_err(|error| StepError::run_from_process(WSL, &error))
-        } else {
+        if !Self::update_enabled(options) {
             human!("wsl: kernel update available; nothing updated (use --install-wsl-updates)");
-            Ok(())
+            return Ok(());
         }
+
+        let running = running_distributions()?;
+        if !running.is_empty() {
+            human!(
+                "warning: wsl --update shuts down every running WSL distribution and anything running inside it:"
+            );
+            for distro in &running {
+                human!("   - {distro}");
+            }
+            if !options.assume_yes() {
+                match confirm_proceed()? {
+                    true => {}
+                    false => {
+                        human!("wsl: update skipped; running WSL distributions would be shut down");
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        human!("wsl: install (WSL kernel update)");
+        CommandSpec::new("wsl")
+            .args(["--update"])
+            .neutral_locale()
+            .run()
+            .map(|_| ())
+            .map_err(|error| StepError::run_from_process(WSL, &error))
     }
 
     fn platforms(&self) -> &'static [Platform] {
         &WSL_PLATFORMS
     }
+}
+
+/// Returns the distributions that are currently running, as reported by
+/// `wsl --list --running`.
+fn running_distributions() -> Result<Vec<String>, StepError> {
+    let output = CommandSpec::new("wsl")
+        .args(["--list", "--running"])
+        .neutral_locale()
+        .run()
+        .map_err(|error| StepError::run_from_process(WSL, &error))?;
+    Ok(parse_running_distributions(output.stdout()))
+}
+
+/// Parses the output of `wsl --list --running` into distribution names.
+///
+/// The first line is a header; every other non-empty line lists one
+/// distribution. The default distribution is marked with a leading `*`.
+fn parse_running_distributions(output: &str) -> Vec<String> {
+    let mut distros = Vec::new();
+    let mut lines = output.lines();
+    if let Some(first) = lines.next() {
+        if !first.trim_start().starts_with("NAME") {
+            if let Some(name) = distro_name(first) {
+                distros.push(name);
+            }
+        }
+    }
+    for line in lines {
+        if let Some(name) = distro_name(line) {
+            distros.push(name);
+        }
+    }
+    distros
+}
+
+/// Extracts one distribution name from a line of `wsl --list --running` output.
+fn distro_name(line: &str) -> Option<String> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+    let line = line.trim_start_matches('*').trim_start();
+    let token = line.split_whitespace().next()?;
+    if token.is_empty() {
+        None
+    } else {
+        Some(token.to_owned())
+    }
+}
+
+/// Prints the confirmation prompt and returns `true` when the user answers yes.
+fn confirm_proceed() -> Result<bool, StepError> {
+    human_print!("Proceed with wsl --update? [y/N]: ");
+    flush();
+    let mut answer = String::new();
+    io::stdin()
+        .read_line(&mut answer)
+        .map_err(|error| StepError::run(WSL, format!("failed to read confirmation: {error}")))?;
+    Ok(is_confirmation_yes(&answer))
+}
+
+/// Returns `true` when the confirmation answer means yes.
+fn is_confirmation_yes(answer: &str) -> bool {
+    matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
 /// The WSL distribution selected with `--wsl-distro`, when running on Windows.
@@ -139,7 +225,10 @@ fn wrap_in_distro(distro: &str, spec: &CommandSpec) -> CommandSpec {
 
 #[cfg(test)]
 mod tests {
-    use super::{inside_command, selected_distro, wrap_in_distro, WslStep, WSL};
+    use super::{
+        inside_command, is_confirmation_yes, parse_running_distributions, selected_distro,
+        wrap_in_distro, WslStep, WSL,
+    };
     use crate::options::RunOptions;
     use crate::process::{CommandSpec, PATH_GUARD};
     use crate::step::{Detection, Step};
@@ -148,9 +237,10 @@ mod tests {
     /// Creates a stub `wsl` on a temp dir that logs its invocations to
     /// `$FRESHEN_WSL_LOG`. When `installed` is true, `wsl --version` and
     /// `wsl --update` exit 0; otherwise `wsl --version` exits 1 so detection
-    /// reports the tool as missing. Returns the stub directory; the caller
+    /// reports the tool as missing. `running` lists the distributions that
+    /// `wsl --list --running` reports. Returns the stub directory; the caller
     /// restores `PATH` and removes it.
-    fn stub_wsl(installed: bool) -> std::path::PathBuf {
+    fn stub_wsl(installed: bool, running: &[&str]) -> std::path::PathBuf {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
@@ -162,11 +252,13 @@ mod tests {
             panic!("failed to create stub directory {}: {error}", dir.display())
         });
 
+        let version_exit = if installed { "0" } else { "1" };
+
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
 
-            let version_exit = if installed { "0" } else { "1" };
+            let running_args = running.join(" ");
             let script = format!(
                 "#!/bin/sh\n\
                  {{\n\
@@ -177,9 +269,16 @@ mod tests {
                  case \"$1\" in\n\
                    --version) exit {} ;;\n\
                    --update) exit 0 ;;\n\
+                   --list)\n\
+                     printf 'NAME            STATE           VERSION\\n'\n\
+                     running=\"{}\"\n\
+                     for distro in $running; do\n\
+                       printf '* %s Running 2\\n' \"$distro\"\n\
+                     done\n\
+                     exit 0 ;;\n\
                    *) exit 1 ;;\n\
                  esac\n",
-                version_exit
+                version_exit, running_args
             );
             let stub = dir.join("wsl");
             std::fs::write(&stub, script)
@@ -193,14 +292,23 @@ mod tests {
             let output_file = dir.join("wsl-output.txt");
             std::fs::write(&output_file, "")
                 .unwrap_or_else(|error| panic!("write {}: {error}", output_file.display()));
-            let version_exit = if installed { "0" } else { "1" };
+            let running_echo: String = running
+                .iter()
+                .map(|distro| format!("echo {} Running 2\r\n", distro))
+                .collect();
             let script = format!(
                 "@echo off\r\n\
                  >>\"%FRESHEN_WSL_LOG%\" echo wsl %*\r\n\
                  if \"%~1\"==\"--version\" (exit /b {}) else (\n\
-                   if \"%~1\"==\"--update\" (exit /b 0) else (exit /b 1)\n\
+                   if \"%~1\"==\"--update\" (exit /b 0) else (\n\
+                     if \"%~1\"==\"--list\" (\n\
+                       echo NAME            STATE           VERSION\r\n\
+                       {}\r\n\
+                       exit /b 0\n\
+                     ) else (exit /b 1)\n\
+                   )\n\
                  )\r\n",
-                version_exit
+                version_exit, running_echo
             );
             let stub = dir.join("wsl.cmd");
             std::fs::write(&stub, script)
@@ -248,7 +356,7 @@ mod tests {
 
     #[test]
     fn detect_reports_wsl_installed() {
-        let dir = stub_wsl(true);
+        let dir = stub_wsl(true, &[]);
         let (result, _calls) = with_wsl_on_path(&dir, || WslStep.detect());
 
         let detection = result.unwrap_or_else(|error| panic!("detection failed: {error}"));
@@ -257,7 +365,7 @@ mod tests {
 
     #[test]
     fn detect_reports_wsl_not_installed() {
-        let dir = stub_wsl(false);
+        let dir = stub_wsl(false, &[]);
         let (result, _calls) = with_wsl_on_path(&dir, || WslStep.detect());
 
         let detection = result.unwrap_or_else(|error| panic!("detection failed: {error}"));
@@ -266,7 +374,7 @@ mod tests {
 
     #[test]
     fn check_is_up_to_date_without_changing_anything() {
-        let dir = stub_wsl(true);
+        let dir = stub_wsl(true, &[]);
         let (result, calls) = with_wsl_on_path(&dir, || {
             let report = WslStep
                 .check()
@@ -281,7 +389,7 @@ mod tests {
 
     #[test]
     fn run_without_the_opt_in_does_not_update() {
-        let dir = stub_wsl(true);
+        let dir = stub_wsl(true, &[]);
         let (result, calls) = with_wsl_on_path(&dir, || WslStep.run());
 
         assert!(result.is_ok());
@@ -290,12 +398,74 @@ mod tests {
 
     #[test]
     fn run_with_the_opt_in_runs_wsl_update() {
-        let dir = stub_wsl(true);
+        let dir = stub_wsl(true, &[]);
         let options = RunOptions::new().with_install_wsl_updates(true);
         let (result, calls) = with_wsl_on_path(&dir, || WslStep.run_with_options(&options));
 
         assert!(result.is_ok(), "wsl --update should succeed");
-        assert_eq!(calls, vec!["wsl --update"], "calls: {calls:?}");
+        assert_eq!(
+            calls,
+            vec!["wsl --list --running", "wsl --update"],
+            "calls: {calls:?}"
+        );
+    }
+
+    #[test]
+    fn run_with_the_opt_in_and_running_distributions_proceeds_with_yes() {
+        let dir = stub_wsl(true, &["Ubuntu"]);
+        let options = RunOptions::new()
+            .with_install_wsl_updates(true)
+            .with_assume_yes(true);
+        let (result, calls) = with_wsl_on_path(&dir, || WslStep.run_with_options(&options));
+
+        assert!(result.is_ok(), "wsl --update should succeed with --yes");
+        assert_eq!(
+            calls,
+            vec!["wsl --list --running", "wsl --update"],
+            "calls: {calls:?}"
+        );
+    }
+
+    #[test]
+    fn parse_running_distributions_parses_the_listed_distributions() {
+        let output = "NAME            STATE           VERSION\n\
+                      * Ubuntu        Running         2\n\
+                      docker-desktop  Running         2\n";
+        let distros = parse_running_distributions(output);
+        assert_eq!(distros, ["Ubuntu", "docker-desktop"]);
+    }
+
+    #[test]
+    fn parse_running_distributions_ignores_the_header_and_empty_lines() {
+        let output = "NAME            STATE           VERSION\n\nUbuntu   Running   2\n";
+        let distros = parse_running_distributions(output);
+        assert_eq!(distros, ["Ubuntu"]);
+    }
+
+    #[test]
+    fn parse_running_distributions_without_a_header() {
+        let output = "Ubuntu\n";
+        let distros = parse_running_distributions(output);
+        assert_eq!(distros, ["Ubuntu"]);
+    }
+
+    #[test]
+    fn parse_running_distributions_with_no_running_distributions_is_empty() {
+        let output = "NAME            STATE           VERSION\n";
+        let distros = parse_running_distributions(output);
+        assert!(distros.is_empty());
+    }
+
+    #[test]
+    fn is_confirmation_yes_accepts_y_and_yes() {
+        assert!(is_confirmation_yes("y"));
+        assert!(is_confirmation_yes("yes"));
+        assert!(is_confirmation_yes("Y"));
+        assert!(is_confirmation_yes("YES"));
+        assert!(!is_confirmation_yes(""));
+        assert!(!is_confirmation_yes("n"));
+        assert!(!is_confirmation_yes("no"));
+        assert!(!is_confirmation_yes("maybe"));
     }
 
     #[test]
