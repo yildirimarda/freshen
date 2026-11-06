@@ -54,7 +54,8 @@ pub struct Cli {
     pub config: Option<PathBuf>,
 
     /// Use this container runtime instead of detecting the active one
-    /// (colima, orbstack, docker-desktop, rancher-desktop, podman, docker).
+    /// (colima, orbstack, docker-desktop, podman-desktop, rancher-desktop,
+    /// podman, docker).
     #[arg(long, value_name = "RUNTIME", value_parser = parse_container_runtime)]
     pub container_runtime: Option<ContainerRuntimeKind>,
 

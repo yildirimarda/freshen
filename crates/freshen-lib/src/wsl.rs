@@ -9,6 +9,7 @@
 //!
 //! The step only runs on Windows, because `wsl` exists only there.
 
+use crate::containers::COLIMA_STOP;
 use crate::options::RunOptions;
 use crate::output::{flush, human, human_print};
 use crate::platform::Platform;
@@ -26,13 +27,45 @@ const WSL_PLATFORMS: [Platform; 1] = [Platform::Windows];
 /// Registers the WSL step.
 #[must_use]
 pub fn register(registry: Registry) -> Registry {
-    registry.with(WslStep)
+    #[cfg(windows)]
+    {
+        registry.with(WslStep::with_container_stop())
+    }
+    #[cfg(not(windows))]
+    {
+        registry.with(WslStep::new())
+    }
 }
 
 /// The WSL kernel update step.
-struct WslStep;
+struct WslStep {
+    /// Step that must run before `wsl --update`, so containers are stopped
+    /// before WSL shuts down every distribution (Windows only, set when
+    /// Podman Desktop or Docker Desktop is the active runtime).
+    stop_before: Option<StepId>,
+}
 
 impl WslStep {
+    /// Creates the WSL step without any container-stop prerequisite.
+    #[allow(dead_code)]
+    #[must_use]
+    fn new() -> Self {
+        Self { stop_before: None }
+    }
+
+    /// Creates the WSL step that runs after the container runtime is stopped.
+    ///
+    /// `wsl --update` shuts down every WSL distribution, so container runtimes
+    /// that run inside WSL (such as Podman Desktop on Windows) must be stopped
+    /// first and started again afterwards.
+    #[cfg(windows)]
+    #[must_use]
+    fn with_container_stop() -> Self {
+        Self {
+            stop_before: Some(COLIMA_STOP),
+        }
+    }
+
     /// Whether the opt-in flag that permits `wsl --update` is set.
     fn update_enabled(options: &RunOptions) -> bool {
         options.install_wsl_updates()
@@ -108,6 +141,15 @@ impl Step for WslStep {
 
     fn platforms(&self) -> &'static [Platform] {
         &WSL_PLATFORMS
+    }
+
+    /// Steps that must run before `wsl --update`. Container runtimes that run
+    /// inside WSL (e.g. Podman Desktop on Windows) must be stopped first.
+    fn prerequisites(&self) -> &'static [StepId] {
+        match self.stop_before {
+            Some(_) => &[COLIMA_STOP],
+            None => &[],
+        }
     }
 }
 
@@ -227,12 +269,44 @@ fn wrap_in_distro(distro: &str, spec: &CommandSpec) -> CommandSpec {
 mod tests {
     use super::{
         inside_command, is_confirmation_yes, parse_running_distributions, selected_distro,
-        wrap_in_distro, WslStep, WSL,
+        wrap_in_distro, WslStep, COLIMA_STOP, WSL,
     };
     use crate::options::RunOptions;
     use crate::process::{CommandSpec, PATH_GUARD};
-    use crate::step::{Detection, Step};
+    use crate::step::{CheckReport, Detection, Step, StepError, StepId};
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// A stand-in for the `colima-stop` container step. On Windows the `wsl`
+    /// step declares `colima-stop` as a prerequisite, and production always
+    /// registers it (via `containers::register`) before `wsl::register`. The
+    /// standalone `wsl` tests register it here so `validate()` can run.
+    struct ColimaStopStub;
+
+    impl Step for ColimaStopStub {
+        fn id(&self) -> StepId {
+            COLIMA_STOP
+        }
+
+        fn display_name(&self) -> &str {
+            "Colima stop"
+        }
+
+        fn detect(&self) -> Result<Detection, StepError> {
+            Ok(Detection::NotInstalled)
+        }
+
+        fn check(&self) -> Result<CheckReport, StepError> {
+            Ok(CheckReport::up_to_date())
+        }
+
+        fn run(&self) -> Result<(), StepError> {
+            Ok(())
+        }
+
+        fn platforms(&self) -> &'static [Platform] {
+            &Platform::ALL
+        }
+    }
 
     /// Creates a stub `wsl` on a temp dir that logs its invocations to
     /// `$FRESHEN_WSL_LOG`. When `installed` is true, `wsl --version` and
@@ -357,7 +431,7 @@ mod tests {
     #[test]
     fn detect_reports_wsl_installed() {
         let dir = stub_wsl(true, &[]);
-        let (result, _calls) = with_wsl_on_path(&dir, || WslStep.detect());
+        let (result, _calls) = with_wsl_on_path(&dir, || WslStep::new().detect());
 
         let detection = result.unwrap_or_else(|error| panic!("detection failed: {error}"));
         assert_eq!(detection, Detection::Installed);
@@ -366,7 +440,7 @@ mod tests {
     #[test]
     fn detect_reports_wsl_not_installed() {
         let dir = stub_wsl(false, &[]);
-        let (result, _calls) = with_wsl_on_path(&dir, || WslStep.detect());
+        let (result, _calls) = with_wsl_on_path(&dir, || WslStep::new().detect());
 
         let detection = result.unwrap_or_else(|error| panic!("detection failed: {error}"));
         assert_eq!(detection, Detection::NotInstalled);
@@ -376,7 +450,7 @@ mod tests {
     fn check_is_up_to_date_without_changing_anything() {
         let dir = stub_wsl(true, &[]);
         let (result, calls) = with_wsl_on_path(&dir, || {
-            let report = WslStep
+            let report = WslStep::new()
                 .check()
                 .unwrap_or_else(|error| panic!("check failed: {error}"));
             assert!(report.is_up_to_date());
@@ -390,7 +464,7 @@ mod tests {
     #[test]
     fn run_without_the_opt_in_does_not_update() {
         let dir = stub_wsl(true, &[]);
-        let (result, calls) = with_wsl_on_path(&dir, || WslStep.run());
+        let (result, calls) = with_wsl_on_path(&dir, || WslStep::new().run());
 
         assert!(result.is_ok());
         assert_eq!(calls, Vec::<String>::new(), "calls: {calls:?}");
@@ -400,7 +474,7 @@ mod tests {
     fn run_with_the_opt_in_runs_wsl_update() {
         let dir = stub_wsl(true, &[]);
         let options = RunOptions::new().with_install_wsl_updates(true);
-        let (result, calls) = with_wsl_on_path(&dir, || WslStep.run_with_options(&options));
+        let (result, calls) = with_wsl_on_path(&dir, || WslStep::new().run_with_options(&options));
 
         assert!(result.is_ok(), "wsl --update should succeed");
         assert_eq!(
@@ -416,7 +490,7 @@ mod tests {
         let options = RunOptions::new()
             .with_install_wsl_updates(true)
             .with_assume_yes(true);
-        let (result, calls) = with_wsl_on_path(&dir, || WslStep.run_with_options(&options));
+        let (result, calls) = with_wsl_on_path(&dir, || WslStep::new().run_with_options(&options));
 
         assert!(result.is_ok(), "wsl --update should succeed with --yes");
         assert_eq!(
@@ -470,7 +544,7 @@ mod tests {
 
     #[test]
     fn the_step_only_runs_on_windows() {
-        let registry = super::register(crate::registry::Registry::new());
+        let registry = super::register(crate::registry::Registry::new().with(ColimaStopStub));
 
         assert_eq!(registry.validate(), Ok(()));
         let step = registry
@@ -482,7 +556,7 @@ mod tests {
 
     #[test]
     fn the_step_is_not_part_of_a_run_on_other_platforms() {
-        let registry = super::register(crate::registry::Registry::new());
+        let registry = super::register(crate::registry::Registry::new().with(ColimaStopStub));
 
         for platform in [
             crate::platform::Platform::Linux,
@@ -570,5 +644,25 @@ mod tests {
         );
         assert_eq!(wrapped.retry_count(), 2);
         assert!(wrapped.uses_neutral_locale());
+    }
+
+    /// `wsl --update` must run after the container runtime is stopped, so
+    /// containers running inside WSL are cleanly shut down first.
+    #[cfg(windows)]
+    #[test]
+    fn wsl_step_requires_container_stop_before_update() {
+        use crate::containers::COLIMA_STOP;
+
+        let step = WslStep::with_container_stop();
+        assert_eq!(step.prerequisites(), &[COLIMA_STOP]);
+    }
+
+    /// On non-Windows platforms, `wsl --update` has no container-stop
+    /// prerequisite because no WSL-backed runtime runs there.
+    #[cfg(not(windows))]
+    #[test]
+    fn wsl_step_has_no_container_stop_prerequisite_on_non_windows() {
+        let step = WslStep::new();
+        assert_eq!(step.prerequisites(), &[] as &[StepId]);
     }
 }
