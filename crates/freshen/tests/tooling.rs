@@ -748,3 +748,118 @@ fn check_skips_node_lts_when_node_is_not_active() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(stdout(&output), "Everything is up to date.\n");
 }
+
+#[test]
+fn mise_upgrade_without_bump_keeps_lts_and_latest() {
+    let tools = StubTools::new(&["mise"]);
+    tools.set_responses(
+        "mise",
+        &[
+            // The `check()` query (`mise outdated`).
+            StubOutput::stdout(
+                "Plugin  Requested  Current  Latest\n\
+                 node    lts        20.0.0   22.12.0\n\
+                 python  latest     3.11.0   3.11.1\n",
+            ),
+            // The active version (`mise current node`).
+            StubOutput::stdout("20.0.0\n"),
+            // The available LTS versions (`mise ls-remote node@lts`).
+            StubOutput::stdout("20.18.0\n22.12.0\n"),
+            // The self-update (`mise self-update -y`).
+            StubOutput::new(),
+            // The upgrade (`mise upgrade` — one command, keeps lts/latest).
+            StubOutput::new(),
+            // The prune list (`mise ls --prunable --json`).
+            StubOutput::stdout("{}"),
+            // The prune (`mise prune -y`).
+            StubOutput::new(),
+        ],
+    );
+
+    let output = run(&tools, "mise");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        vec![
+            "mise outdated",
+            "mise current node",
+            "mise ls-remote node@lts",
+            "mise self-update -y",
+            "mise upgrade",
+            "mise ls --prunable --json",
+            "mise prune -y",
+        ]
+    );
+    let text = stdout(&output);
+    assert!(
+        !text.contains("warning: mise --bump replaces lts/latest with a fixed version"),
+        "unexpected bump warning: {text}"
+    );
+}
+
+#[test]
+fn mise_bump_replaces_lts_and_latest_with_a_fixed_version() {
+    let tools = StubTools::new(&["mise"]);
+    tools.set_responses(
+        "mise",
+        &mise_responses(&[
+            // The `check()` query (`mise outdated`).
+            StubOutput::stdout(
+                "Plugin  Requested  Current  Latest\n\
+                 node    lts        20.0.0   22.12.0\n\
+                 python  latest     3.11.0   3.11.1\n",
+            ),
+            // The active version (`mise current node`).
+            StubOutput::stdout("20.0.0\n"),
+            // The available LTS versions (`mise ls-remote node@lts`).
+            StubOutput::stdout("20.18.0\n22.12.0\n"),
+            // The self-update (`mise self-update -y`).
+            StubOutput::new(),
+            // The `upgrade_tools` bump query (`mise outdated` again).
+            StubOutput::stdout(
+                "Plugin  Requested  Current  Latest\n\
+                 node    lts        20.0.0   22.12.0\n\
+                 python  latest     3.11.0   3.11.1\n",
+            ),
+            // The upgrade pins `lts`/`latest` to a fixed version.
+            StubOutput::new(),
+            StubOutput::new(),
+            // The prune list (`mise ls --prunable --json`).
+            StubOutput::stdout("{}"),
+            // The prune (`mise prune -y`).
+            StubOutput::new(),
+        ]),
+    );
+
+    let output = tools
+        .command()
+        .args(["--only", "mise", "--cleanup", "--bump"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        vec![
+            "mise outdated",
+            "mise current node",
+            "mise ls-remote node@lts",
+            "mise self-update -y",
+            "mise outdated",
+            "mise install node@22.12.0",
+            "mise install python@3.11.1",
+            "mise ls --prunable --json",
+            "mise prune -y",
+            // The runner re-checks after the run to compute the version diff
+            // because the before-check reported outdated items.
+            "mise outdated",
+            "mise current node",
+        ]
+    );
+    let text = stdout(&output);
+    assert!(
+        text.contains("warning: mise --bump replaces lts/latest with a fixed version"),
+        "missing bump warning: {text}"
+    );
+}

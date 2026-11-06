@@ -116,6 +116,11 @@ pub struct Cli {
     #[arg(long)]
     pub restart_apps: bool,
 
+    /// Replace `lts`/`latest` mise tool requests with a fixed version when
+    /// upgrading mise-managed tools (opt-in, off by default).
+    #[arg(long)]
+    pub bump: bool,
+
     /// Keep this many pre-upgrade snapshot files (0 keeps every snapshot,
     /// default 10).
     #[arg(long, value_name = "COUNT")]
@@ -256,6 +261,7 @@ impl Cli {
             .with_wsl_distro(self.wsl_distro.clone())
             .with_restart_services(self.restart_services)
             .with_restart_apps(self.restart_apps)
+            .with_bump(self.bump)
             .with_step_timeout(timeout(self.step_timeout.or(config.timeouts.step_seconds)))
             .with_global_timeout(timeout(self.timeout.or(config.timeouts.total_seconds)))
             .with_snapshot_retention(
@@ -342,6 +348,7 @@ mod tests {
         assert!(!options.install_wsl_updates());
         assert!(!options.restart_services());
         assert!(!options.restart_apps());
+        assert!(!options.bump());
         assert_eq!(options.wsl_distro(), None);
         assert_eq!(
             options.snapshot_retention(),
@@ -393,6 +400,7 @@ mod tests {
             "Ubuntu",
             "--restart-services",
             "--restart-apps",
+            "--bump",
             "--snapshot-retention",
             "3",
             "--step-timeout",
@@ -435,6 +443,7 @@ mod tests {
         assert_eq!(options.wsl_distro(), Some("Ubuntu"));
         assert!(options.restart_services());
         assert!(options.restart_apps());
+        assert!(options.bump());
         assert_eq!(options.snapshot_retention(), 3);
         assert_eq!(
             options.step_timeout(),
@@ -645,6 +654,7 @@ mod tests {
             "--wsl-distro",
             "--restart-services",
             "--restart-apps",
+            "--bump",
             "--snapshot-retention",
             "--step-timeout",
             "--timeout",
