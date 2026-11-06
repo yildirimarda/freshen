@@ -269,14 +269,44 @@ fn wrap_in_distro(distro: &str, spec: &CommandSpec) -> CommandSpec {
 mod tests {
     use super::{
         inside_command, is_confirmation_yes, parse_running_distributions, selected_distro,
-        wrap_in_distro, WslStep, WSL,
+        wrap_in_distro, WslStep, COLIMA_STOP, WSL,
     };
     use crate::options::RunOptions;
     use crate::process::{CommandSpec, PATH_GUARD};
-    #[cfg(not(windows))]
-    use crate::step::StepId;
-    use crate::step::{Detection, Step};
+    use crate::step::{CheckReport, Detection, Step, StepError, StepId};
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// A stand-in for the `colima-stop` container step. On Windows the `wsl`
+    /// step declares `colima-stop` as a prerequisite, and production always
+    /// registers it (via `containers::register`) before `wsl::register`. The
+    /// standalone `wsl` tests register it here so `validate()` can run.
+    struct ColimaStopStub;
+
+    impl Step for ColimaStopStub {
+        fn id(&self) -> StepId {
+            COLIMA_STOP
+        }
+
+        fn display_name(&self) -> &str {
+            "Colima stop"
+        }
+
+        fn detect(&self) -> Result<Detection, StepError> {
+            Ok(Detection::NotInstalled)
+        }
+
+        fn check(&self) -> Result<CheckReport, StepError> {
+            Ok(CheckReport::up_to_date())
+        }
+
+        fn run(&self) -> Result<(), StepError> {
+            Ok(())
+        }
+
+        fn platforms(&self) -> &'static [Platform] {
+            &Platform::ALL
+        }
+    }
 
     /// Creates a stub `wsl` on a temp dir that logs its invocations to
     /// `$FRESHEN_WSL_LOG`. When `installed` is true, `wsl --version` and
@@ -514,7 +544,7 @@ mod tests {
 
     #[test]
     fn the_step_only_runs_on_windows() {
-        let registry = super::register(crate::registry::Registry::new());
+        let registry = super::register(crate::registry::Registry::new().with(ColimaStopStub));
 
         assert_eq!(registry.validate(), Ok(()));
         let step = registry
@@ -526,7 +556,7 @@ mod tests {
 
     #[test]
     fn the_step_is_not_part_of_a_run_on_other_platforms() {
-        let registry = super::register(crate::registry::Registry::new());
+        let registry = super::register(crate::registry::Registry::new().with(ColimaStopStub));
 
         for platform in [
             crate::platform::Platform::Linux,
