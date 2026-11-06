@@ -1213,7 +1213,7 @@ fn windows_processes() -> Vec<ProcessInfo> {
                   \"$($_.ProcessId) $($_.ParentProcessId) $($_.Name)\" }";
     let powershell = crate::shell::windows::powershell();
     let mut command = Command::new(powershell.map_or("powershell", |shell| shell.command()));
-    command.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+    command.args(crate::shell::windows::invocation_args(script, true));
     crate::locale::with_neutral_locale(&mut command);
     let Ok(output) = command.stdin(Stdio::null()).stderr(Stdio::null()).output() else {
         return Vec::new();

@@ -96,6 +96,8 @@ impl WindowsUpdateStep {
             let output = CommandSpec::new(powershell)
                 .args([
                     "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
                     "-Command",
                     "Get-Module -ListAvailable PSWindowsUpdate | Select-Object -ExpandProperty Name",
                 ])
@@ -138,6 +140,8 @@ impl WindowsUpdateStep {
                 let output = CommandSpec::new(powershell)
                     .args([
                         "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass",
                         "-Command",
                         "Import-Module PSWindowsUpdate; Get-WindowsUpdate | Select-Object Title, KB, Version, RebootRequired | ConvertTo-Json",
                     ])
@@ -402,12 +406,14 @@ mod tests {
                 .unwrap_or_else(|error| panic!("write {}: {error}", detect_file.display()));
             std::fs::write(&check_file, check_output.replace('\n', "\r\n"))
                 .unwrap_or_else(|error| panic!("write {}: {error}", check_file.display()));
-            // `%~3` is the PowerShell script argument (`-NoProfile -Command <script>`).
-            // It contains `|`, so it is only ever read inside quotes, never
-            // echoed as `%*`. Canned output is printed from a file with `type`.
+            // `%~5` is the PowerShell script argument (`-NoProfile -ExecutionPolicy
+            // Bypass -Command <script>`). It contains `|`, so it is only ever
+            // read inside quotes, never echoed as `%*`: with several quoted
+            // arguments `%*` flips the quote parity and cmd.exe runs the `|`.
+            // Canned output is printed from a file with `type`.
             let script = "@echo off\r\n\
                  setlocal EnableDelayedExpansion\r\n\
-                 set \"script=%~3\"\r\n\
+                 set \"script=%~5\"\r\n\
                  if defined FRESHEN_WINDOWS_UPDATE_LOG >>\"%FRESHEN_WINDOWS_UPDATE_LOG%\" echo powershell !script!\r\n\
                  if not \"!script:ListAvailable=!\"==\"!script!\" (\r\n\
                    type \"%~dp0detect-output.txt\"\r\n\
@@ -475,7 +481,7 @@ mod tests {
             // canned output is printed from a file with `type`.
             let script = "@echo off\r\n\
                  setlocal EnableDelayedExpansion\r\n\
-                 set \"script=%*\"\r\n\
+                 set \"script=%~5\"\r\n\
                  if defined FRESHEN_WINDOWS_UPDATE_LOG >>\"%FRESHEN_WINDOWS_UPDATE_LOG%\" echo usoclient !script!\r\n\
                  if not \"!script:StartScan=!\"==\"!script!\" (\r\n\
                    type \"%~dp0usoclient-output.txt\"\r\n\

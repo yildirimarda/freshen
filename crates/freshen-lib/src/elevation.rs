@@ -151,7 +151,7 @@ pub mod windows {
             exe = exe.display(),
         );
         Command::new(powershell.command())
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .args(crate::shell::windows::invocation_args(&script, true))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())

@@ -386,7 +386,7 @@ fn windows_processes() -> Vec<ProcessEntry> {
     let Ok(output) = CommandSpec::new(
         crate::shell::windows::powershell().map_or("powershell", |shell| shell.command()),
     )
-    .args(["-NoProfile", "-NonInteractive", "-Command", script])
+    .args(crate::shell::windows::invocation_args(script, true))
     .neutral_locale()
     .run() else {
         return Vec::new();
