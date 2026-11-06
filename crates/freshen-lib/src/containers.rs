@@ -826,6 +826,92 @@ impl ContainerRuntime for DockerDesktopRuntime {
     }
 }
 
+/// Docker Desktop on Windows with the WSL2 backend.
+///
+/// Docker Desktop on Windows is controlled through the `docker desktop` CLI
+/// (`docker desktop stop`, `docker desktop start`, `docker desktop status`),
+/// and the `docker.exe` on `PATH` talks to the WSL2 backend through a named
+/// pipe. On Windows there are no Homebrew casks, so nothing triggers the
+/// stop/start cycle through the Homebrew block; the runtime is still detected
+/// from `docker.exe`, `DOCKER_HOST`, `docker context show` and the well-known
+/// named pipe, and its `stop`/`start` run when the container steps are active.
+#[derive(Debug, Default, Clone, Copy)]
+#[cfg(windows)]
+pub struct DockerDesktopWindowsRuntime;
+
+#[cfg(windows)]
+impl DockerDesktopWindowsRuntime {
+    /// Creates the Docker Desktop on Windows runtime.
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[cfg(windows)]
+impl ContainerRuntime for DockerDesktopWindowsRuntime {
+    fn name(&self) -> &'static str {
+        "docker-desktop"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Docker Desktop"
+    }
+
+    fn command(&self) -> &'static str {
+        "docker desktop"
+    }
+
+    fn detection_commands(&self) -> &'static [&'static str] {
+        &["docker"]
+    }
+
+    fn detect(&self) -> Detection {
+        if command_exists("docker") {
+            Detection::Installed
+        } else {
+            Detection::NotInstalled
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        match CommandSpec::new("docker").args(["desktop", "status"]).run() {
+            Ok(output) => {
+                let status = output.stdout().trim().to_ascii_lowercase();
+                status.is_empty()
+                    || (!status.contains("stopped") && !status.contains("not running"))
+            }
+            Err(_) => false,
+        }
+    }
+
+    fn stop(&self) -> Result<(), ProcessError> {
+        CommandSpec::new("docker")
+            .args(["desktop", "stop"])
+            .run()
+            .map(|_| ())
+    }
+
+    fn start(&self) -> Result<(), ProcessError> {
+        CommandSpec::new("docker")
+            .args(["desktop", "start"])
+            .run()
+            .map(|_| ())
+    }
+
+    fn restart_formulae(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn restart_casks(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn platforms(&self) -> &'static [Platform] {
+        &[Platform::Windows]
+    }
+}
+
 /// The facts and commands used to control a native Docker Engine through
 /// systemd.
 ///
@@ -1582,7 +1668,7 @@ pub fn register_for(registry: Registry, kind: Option<ContainerRuntimeKind>) -> R
         Some(ContainerRuntimeKind::DockerDesktop) => register_with_runtime(
             registry,
             ContainerRuntimeKind::DockerDesktop,
-            DockerDesktopRuntime::default(),
+            docker_desktop_runtime(),
         ),
         Some(ContainerRuntimeKind::RancherDesktop) => register_with_runtime(
             registry,
@@ -1599,6 +1685,19 @@ pub fn register_for(registry: Registry, kind: Option<ContainerRuntimeKind>) -> R
         ),
         _ => register(registry),
     }
+}
+
+/// Returns the `ContainerRuntime` implementation for Docker Desktop, chosen by
+/// platform: the WSL2-backed runtime on Windows and the app-bundled runtime on
+/// other operating systems.
+#[cfg(windows)]
+fn docker_desktop_runtime() -> DockerDesktopWindowsRuntime {
+    DockerDesktopWindowsRuntime::new()
+}
+
+#[cfg(not(windows))]
+fn docker_desktop_runtime() -> DockerDesktopRuntime {
+    DockerDesktopRuntime::default()
 }
 
 #[derive(Debug, Default, Clone)]
@@ -2185,6 +2284,8 @@ fn command_exists(program: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::DockerDesktopWindowsRuntime;
     use super::{
         detect_active_runtime, detect_compose_command, live_restore_warning,
         parse_compose_projects, parse_live_restore_enabled,
@@ -2606,6 +2707,23 @@ mod tests {
         assert!(!runtime.triggers_restart("colima"));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn docker_desktop_windows_runtime_declares_windows_and_its_commands() {
+        let runtime = DockerDesktopWindowsRuntime::new();
+
+        assert_eq!(runtime.name(), "docker-desktop");
+        assert_eq!(runtime.display_name(), "Docker Desktop");
+        assert_eq!(runtime.command(), "docker desktop");
+        assert_eq!(runtime.detection_commands(), &["docker"]);
+        assert_eq!(runtime.platforms(), [Platform::Windows]);
+        assert!(runtime.restart_formulae().is_empty());
+        assert!(runtime.restart_casks().is_empty());
+        assert!(!runtime.triggers_restart("docker-desktop"));
+        assert!(!runtime.triggers_restart("docker"));
+    }
+
+    #[cfg(not(windows))]
     #[test]
     fn docker_desktop_stops_before_casks_and_starts_after_them() {
         let registry = homebrew::register(register_for(
@@ -3163,6 +3281,10 @@ mod tests {
                 "unix:///var/run/docker.sock",
                 ContainerRuntimeKind::NativeDocker,
             ),
+            (
+                "npipe:////./pipe/docker_engine",
+                ContainerRuntimeKind::DockerDesktop,
+            ),
         ] {
             let probe = FakeProbe::default().with_var("DOCKER_HOST", host);
             let runtime = detected(&probe).unwrap_or_else(|| panic!("{host} was not detected"));
@@ -3179,6 +3301,7 @@ mod tests {
             ("colima-dev", ContainerRuntimeKind::Colima),
             ("orbstack", ContainerRuntimeKind::OrbStack),
             ("desktop-linux", ContainerRuntimeKind::DockerDesktop),
+            ("desktop-windows", ContainerRuntimeKind::DockerDesktop),
             ("rancher-desktop", ContainerRuntimeKind::RancherDesktop),
             ("podman-machine-default", ContainerRuntimeKind::Podman),
         ] {

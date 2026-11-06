@@ -90,6 +90,8 @@ pub use config::{
     AppSection, Config, ConfigEnvironment, ConfigError, FilterSection, PackageManagerSection,
     PreflightSection, RunSection, TimeoutSection, CONFIG_DIR_NAME, CONFIG_FILE_NAME,
 };
+#[cfg(windows)]
+pub use containers::DockerDesktopWindowsRuntime;
 pub use containers::{
     detect_active_runtime, detect_compose_command, parse_compose_projects,
     parse_standalone_containers, ActiveContainerRuntime, ColimaRuntime, ComposeCommand,
