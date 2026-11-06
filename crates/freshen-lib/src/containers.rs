@@ -31,6 +31,7 @@ use crate::process::{CommandSpec, ProcessError, NETWORK_RETRIES};
 use crate::registry::Registry;
 use crate::snapshot::{self, SnapshotCommand, SnapshotSection};
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
+use crate::wsl::WSL;
 
 /// Stops containers and Colima before the formula upgrade.
 pub const COLIMA_STOP: StepId = "colima-stop";
@@ -54,6 +55,8 @@ pub enum ContainerRuntimeKind {
     OrbStack,
     /// Docker Desktop.
     DockerDesktop,
+    /// Podman Desktop (Windows, WSL2 backend).
+    PodmanDesktop,
     /// Rancher Desktop.
     RancherDesktop,
     /// Podman, including its machine on macOS and Windows.
@@ -64,10 +67,11 @@ pub enum ContainerRuntimeKind {
 
 impl ContainerRuntimeKind {
     /// Every known runtime.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Colima,
         Self::OrbStack,
         Self::DockerDesktop,
+        Self::PodmanDesktop,
         Self::RancherDesktop,
         Self::Podman,
         Self::NativeDocker,
@@ -80,6 +84,7 @@ impl ContainerRuntimeKind {
             Self::Colima => "colima",
             Self::OrbStack => "orbstack",
             Self::DockerDesktop => "docker-desktop",
+            Self::PodmanDesktop => "podman-desktop",
             Self::RancherDesktop => "rancher-desktop",
             Self::Podman => "podman",
             Self::NativeDocker => "docker",
@@ -93,6 +98,7 @@ impl ContainerRuntimeKind {
             Self::Colima => "Colima",
             Self::OrbStack => "OrbStack",
             Self::DockerDesktop => "Docker Desktop",
+            Self::PodmanDesktop => "Podman Desktop",
             Self::RancherDesktop => "Rancher Desktop",
             Self::Podman => "Podman",
             Self::NativeDocker => "Docker Engine",
@@ -115,6 +121,7 @@ impl FromStr for ContainerRuntimeKind {
             "colima" | "lima" => Ok(Self::Colima),
             "orbstack" | "orb-stack" => Ok(Self::OrbStack),
             "docker-desktop" | "dockerdesktop" | "desktop" => Ok(Self::DockerDesktop),
+            "podman-desktop" | "podmandesktop" => Ok(Self::PodmanDesktop),
             "rancher-desktop" | "rancher" | "rd" => Ok(Self::RancherDesktop),
             "podman" | "podman-machine" => Ok(Self::Podman),
             "docker" | "native" | "native-docker" | "docker-engine" => Ok(Self::NativeDocker),
@@ -468,6 +475,14 @@ pub trait ContainerRuntime: Send + Sync {
     /// running while Colima is stopped and started. Runtimes that do not
     /// manage standalone Lima instances can ignore this.
     fn set_lima_upgrading(&self, _upgrading: bool) {}
+
+    /// Steps that must complete before this runtime can be started again,
+    /// because they affect the host environment. For example, `wsl --update`
+    /// shuts down every WSL distribution, so a WSL-backed runtime must be
+    /// restarted after it. The default is no additional steps.
+    fn start_after_steps(&self) -> &'static [StepId] {
+        &[]
+    }
 }
 
 /// The Colima/lima container runtime.
@@ -909,6 +924,101 @@ impl ContainerRuntime for DockerDesktopWindowsRuntime {
 
     fn platforms(&self) -> &'static [Platform] {
         &[Platform::Windows]
+    }
+}
+
+/// Podman Desktop on Windows (WSL2 backend).
+///
+/// Podman Desktop runs a Podman machine inside a WSL2 distribution.
+/// `wsl --update` shuts down every WSL distribution, so Podman Desktop must
+/// be stopped before `wsl --update` runs and started again afterwards.
+#[derive(Debug, Default, Clone, Copy)]
+#[cfg(windows)]
+pub struct PodmanDesktopWindowsRuntime;
+
+#[cfg(windows)]
+impl PodmanDesktopWindowsRuntime {
+    /// Creates the Podman Desktop on Windows runtime.
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[cfg(windows)]
+impl ContainerRuntime for PodmanDesktopWindowsRuntime {
+    fn name(&self) -> &'static str {
+        "podman-desktop"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Podman Desktop"
+    }
+
+    fn command(&self) -> &'static str {
+        "podman desktop"
+    }
+
+    fn detection_commands(&self) -> &'static [&'static str] {
+        &["podman"]
+    }
+
+    fn detect(&self) -> Detection {
+        if command_exists("podman") {
+            Detection::Installed
+        } else {
+            Detection::NotInstalled
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        match CommandSpec::new("podman")
+            .args(["desktop", "status"])
+            .neutral_locale()
+            .run()
+        {
+            Ok(output) => {
+                let status = output.stdout().trim().to_ascii_lowercase();
+                status.is_empty()
+                    || (!status.contains("stopped") && !status.contains("not running"))
+            }
+            Err(_) => false,
+        }
+    }
+
+    fn stop(&self) -> Result<(), ProcessError> {
+        CommandSpec::new("podman")
+            .args(["desktop", "stop"])
+            .neutral_locale()
+            .run()
+            .map(|_| ())
+    }
+
+    fn start(&self) -> Result<(), ProcessError> {
+        CommandSpec::new("podman")
+            .args(["desktop", "start"])
+            .neutral_locale()
+            .run()
+            .map(|_| ())
+    }
+
+    fn restart_formulae(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn restart_casks(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn platforms(&self) -> &'static [Platform] {
+        &[Platform::Windows]
+    }
+
+    /// `wsl --update` shuts down every WSL distribution, including the one
+    /// Podman Desktop's machine runs in. Podman Desktop must be started again
+    /// after `wsl --update` completes.
+    fn start_after_steps(&self) -> &'static [StepId] {
+        &[WSL]
     }
 }
 
@@ -1619,7 +1729,7 @@ pub fn register_with_runtime(
 #[must_use]
 fn container_cli(kind: ContainerRuntimeKind) -> &'static str {
     match kind {
-        ContainerRuntimeKind::Podman => "podman",
+        ContainerRuntimeKind::Podman | ContainerRuntimeKind::PodmanDesktop => "podman",
         _ => "docker",
     }
 }
@@ -1670,6 +1780,12 @@ pub fn register_for(registry: Registry, kind: Option<ContainerRuntimeKind>) -> R
             ContainerRuntimeKind::DockerDesktop,
             docker_desktop_runtime(),
         ),
+        #[cfg(windows)]
+        Some(ContainerRuntimeKind::PodmanDesktop) => register_with_runtime(
+            registry,
+            ContainerRuntimeKind::PodmanDesktop,
+            podman_desktop_runtime(),
+        ),
         Some(ContainerRuntimeKind::RancherDesktop) => register_with_runtime(
             registry,
             ContainerRuntimeKind::RancherDesktop,
@@ -1693,6 +1809,11 @@ pub fn register_for(registry: Registry, kind: Option<ContainerRuntimeKind>) -> R
 #[cfg(windows)]
 fn docker_desktop_runtime() -> DockerDesktopWindowsRuntime {
     DockerDesktopWindowsRuntime::new()
+}
+
+#[cfg(windows)]
+fn podman_desktop_runtime() -> PodmanDesktopWindowsRuntime {
+    PodmanDesktopWindowsRuntime::new()
 }
 
 #[cfg(not(windows))]
@@ -2043,8 +2164,15 @@ impl Step for ContainerStartStep {
     }
 
     fn prerequisites(&self) -> &'static [StepId] {
+        let with_wsl = !self.runtime.start_after_steps().is_empty();
         if self.runtime.restart_casks().is_empty() {
-            &[FORMULAE, COLIMA_STOP]
+            if with_wsl {
+                &[FORMULAE, COLIMA_STOP, WSL]
+            } else {
+                &[FORMULAE, COLIMA_STOP]
+            }
+        } else if with_wsl {
+            &[CASKS, COLIMA_STOP, WSL]
         } else {
             &[CASKS, COLIMA_STOP]
         }
@@ -2285,7 +2413,8 @@ fn command_exists(program: &str) -> bool {
 #[cfg(test)]
 mod tests {
     #[cfg(windows)]
-    use super::DockerDesktopWindowsRuntime;
+    use super::{DockerDesktopWindowsRuntime, PodmanDesktopWindowsRuntime};
+    use crate::wsl::WSL;
     use super::{
         detect_active_runtime, detect_compose_command, live_restore_warning,
         parse_compose_projects, parse_live_restore_enabled,
@@ -2721,6 +2850,50 @@ mod tests {
         assert!(runtime.restart_casks().is_empty());
         assert!(!runtime.triggers_restart("docker-desktop"));
         assert!(!runtime.triggers_restart("docker"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn podman_desktop_windows_runtime_declares_windows_and_its_commands() {
+        let runtime = PodmanDesktopWindowsRuntime::new();
+
+        assert_eq!(runtime.name(), "podman-desktop");
+        assert_eq!(runtime.display_name(), "Podman Desktop");
+        assert_eq!(runtime.command(), "podman desktop");
+        assert_eq!(runtime.detection_commands(), &["podman"]);
+        assert_eq!(runtime.platforms(), [Platform::Windows]);
+        assert!(runtime.restart_formulae().is_empty());
+        assert!(runtime.restart_casks().is_empty());
+        assert!(!runtime.triggers_restart("podman-desktop"));
+        assert!(!runtime.triggers_restart("docker"));
+        assert!(!runtime.triggers_restart("colima"));
+        assert_eq!(runtime.start_after_steps(), &[WSL]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn podman_desktop_start_step_waits_for_wsl_update() {
+        let registry = register_for(Registry::new(), Some(ContainerRuntimeKind::PodmanDesktop));
+        let prerequisite_ids = |id: StepId| {
+            registry
+                .steps()
+                .find(|step| step.id() == id)
+                .unwrap_or_else(|| panic!("{id} is not registered"))
+                .prerequisites()
+                .to_vec()
+        };
+
+        // The container start step must wait for `wsl --update` so it starts
+        // after WSL comes back up.
+        let start_prereqs = prerequisite_ids(COLIMA_START);
+        assert!(
+            start_prereqs.contains(&WSL),
+            "colima-start prerequisites should include wsl, got {start_prereqs:?}"
+        );
+        assert!(
+            start_prereqs.contains(&COLIMA_STOP),
+            "colima-start prerequisites should include colima-stop, got {start_prereqs:?}"
+        );
     }
 
     #[cfg(not(windows))]
