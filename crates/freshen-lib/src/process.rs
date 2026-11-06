@@ -713,70 +713,30 @@ impl CommandSpec {
         on_line: &mut dyn FnMut(OutputStream, &str),
     ) -> Result<AttemptResult, ProcessError> {
         let program = self.program.to_string_lossy().into_owned();
-        let neutral_flag = self
-            .neutral_locale
-            .then(|| crate::locale::non_interactive_flag(&self.program))
-            .flatten();
-        let mut command = {
-            #[cfg(windows)]
-            {
-                match crate::executable::resolve(&self.program) {
-                    Some(path) => {
-                        if crate::cmd::is_shim(path.to_string_lossy().as_ref()) {
-                            // `.cmd`/`.bat` shims are batch files interpreted by
-                            // `cmd.exe`; `CreateProcess` cannot run them directly,
-                            // so launch them through `cmd.exe /c`. The path and
-                            // arguments are folded into a single cmd.exe command
-                            // line, with each piece quoted for cmd.exe's own
-                            // parsing, so that arguments carrying metacharacters
-                            // (for example a PowerShell script containing `|`)
-                            // are not reinterpreted as pipe operators by cmd.exe.
-                            let mut command = Command::new("cmd");
-                            command.arg("/C");
-                            if let Some(flag) = neutral_flag {
-                                command.arg(flag);
-                            }
-                            let mut command_line = String::new();
-                            command_line
-                                .push_str(&crate::cmd::quote(path.to_string_lossy().as_ref()));
-                            for arg in &self.args {
-                                command_line.push(' ');
-                                command_line
-                                    .push_str(&crate::cmd::quote(arg.to_string_lossy().as_ref()));
-                            }
-                            command.arg(command_line);
-                            command
-                        } else {
-                            let mut command = Command::new(path);
-                            if let Some(flag) = neutral_flag {
-                                command.arg(flag);
-                            }
-                            command.args(&self.args);
-                            command
-                        }
-                    }
-                    None => {
-                        return Err(ProcessError::Spawn {
-                            program: program.clone(),
-                            source: std::io::Error::new(
-                                std::io::ErrorKind::NotFound,
-                                "executable not found on PATH",
-                            ),
-                        });
-                    }
-                }
-            }
-            #[cfg(not(windows))]
-            {
-                let mut command = Command::new(&self.program);
-                if let Some(flag) = neutral_flag {
-                    command.arg(flag);
-                }
-                command.args(&self.args);
-                command
+        #[cfg(windows)]
+        let mut command = match crate::executable::resolve(&self.program) {
+            Some(path) => Command::new(path),
+            None => {
+                return Err(ProcessError::Spawn {
+                    program: program.clone(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "executable not found on PATH",
+                    ),
+                });
             }
         };
+        #[cfg(not(windows))]
+        let mut command = Command::new(&self.program);
+        if self.neutral_locale {
+            // The flag comes before the subcommand, because a tool that
+            // knows it expects it as a global option.
+            if let Some(flag) = crate::locale::non_interactive_flag(&self.program) {
+                command.arg(flag);
+            }
+        }
         command
+            .args(&self.args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
