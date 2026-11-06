@@ -249,7 +249,15 @@ impl Step for MiseStep {
             .retry_transient_network(NETWORK_RETRIES)
             .run()
             .map_err(|error| StepError::check_from_process(MISE, &error))?;
-        let report = CheckReport::from_items(parse_mise_outdated(output.stdout()));
+        let mut items: Vec<OutdatedItem> = parse_mise_outdated(output.stdout());
+
+        // Report when a newer Node LTS major exists than the active one,
+        // without switching to it.
+        if let Some(lts_item) = node_lts_outdated_item() {
+            items.push(lts_item);
+        }
+
+        let report = CheckReport::from_items(items);
         Ok(report.filtered(|name| options.filters().packages().includes(name)))
     }
 
@@ -421,9 +429,86 @@ fn command_exists(program: &str) -> bool {
     crate::executable::command_exists(program)
 }
 
+/// Whether a newer Node LTS major exists than the active one, without
+/// switching to it.
+///
+/// Runs `mise ls-remote node@lts` to list available LTS versions and
+/// `mise current node` to learn the active version. When the newest LTS
+/// major is higher than the active major, returns an outdated item naming
+/// the latest LTS version. Best effort: a missing `mise`, an absent node
+/// install or unparseable output yields `None` and never fails the step.
+#[must_use]
+fn node_lts_outdated_item() -> Option<OutdatedItem> {
+    let active = active_node_version()?;
+    let active_major = major_version(&active)?;
+
+    let Ok(output) = CommandSpec::new("mise")
+        .args(["ls-remote", "node@lts"])
+        .neutral_locale()
+        .retry_transient_network(NETWORK_RETRIES)
+        .run()
+    else {
+        return None;
+    };
+
+    let latest = latest_lts_version(output.stdout())?;
+    let latest_major = major_version(&latest)?;
+
+    (latest_major > active_major).then_some(
+        OutdatedItem::new("node")
+            .with_current(active)
+            .with_latest(latest)
+            .with_reason("newer Node LTS major available"),
+    )
+}
+
+/// The active Node version from `mise current node`, when node is installed.
+#[must_use]
+fn active_node_version() -> Option<String> {
+    let Ok(output) = CommandSpec::new("mise")
+        .args(["current", "node"])
+        .neutral_locale()
+        .run()
+    else {
+        return None;
+    };
+    let version = output.stdout().trim().to_owned();
+    (!version.is_empty()).then_some(version)
+}
+
+/// The leading numeric component of a version string, e.g. `20` from `20.18.0`.
+#[must_use]
+fn major_version(version: &str) -> Option<u64> {
+    version.split('.').next()?.parse().ok()
+}
+
+/// The latest version from `mise ls-remote node@lts` output.
+#[must_use]
+fn latest_lts_version(output: &str) -> Option<String> {
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .max_by_key(|line| version_key(line))
+        .map(str::to_owned)
+}
+
+/// A sortable key for a version string like `20.18.0`.
+#[must_use]
+fn version_key(version: &str) -> (u64, u64, u64) {
+    let mut parts = version.split('.');
+    let major = parts.next().and_then(|part| part.parse().ok()).unwrap_or(0);
+    let minor = parts.next().and_then(|part| part.parse().ok()).unwrap_or(0);
+    let patch = parts.next().and_then(|part| part.parse().ok()).unwrap_or(0);
+    (major, minor, patch)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_mise_outdated, parse_uv_outdated, register, MISE, UV};
+    use super::{
+        active_node_version, latest_lts_version, major_version, node_lts_outdated_item,
+        parse_mise_outdated, parse_uv_outdated, register, version_key, MISE, UV,
+    };
     use crate::containers;
     use crate::homebrew;
     use crate::platform::Platform;
@@ -599,5 +684,46 @@ mod tests {
         assert_eq!(items[0].name(), "node");
         assert_eq!(items[0].current(), Some("20.0.0"));
         assert_eq!(items[0].latest(), Some("20.1.0"));
+    }
+
+    #[test]
+    fn version_key_parses_major_minor_patch() {
+        assert_eq!(version_key("20.18.0"), (20, 18, 0));
+        assert_eq!(version_key("22.12.0"), (22, 12, 0));
+        assert_eq!(version_key("18.0.0"), (18, 0, 0));
+        assert_eq!(version_key("20"), (20, 0, 0));
+        assert_eq!(version_key("not.a.version"), (0, 0, 0));
+    }
+
+    #[test]
+    fn major_version_returns_the_leading_component() {
+        assert_eq!(major_version("20.18.0"), Some(20));
+        assert_eq!(major_version("22.12.0"), Some(22));
+        assert_eq!(major_version("18"), Some(18));
+        assert_eq!(major_version("not-a-version"), None);
+    }
+
+    #[test]
+    fn latest_lts_version_picks_the_highest_version() {
+        let output = "18.20.0\n20.18.0\n22.12.0\n";
+        assert_eq!(latest_lts_version(output), Some("22.12.0".to_owned()));
+
+        let output = "22.12.0\n20.18.0\n18.20.0\n";
+        assert_eq!(latest_lts_version(output), Some("22.12.0".to_owned()));
+
+        let output = "";
+        assert_eq!(latest_lts_version(output), None);
+    }
+
+    #[test]
+    fn node_lts_outdated_item_reports_when_newer_lts_major_exists() {
+        let _ = node_lts_outdated_item();
+        // Best-effort: without a real `mise` on PATH this returns None.
+        assert!(node_lts_outdated_item().is_none());
+    }
+
+    #[test]
+    fn active_node_version_returns_none_without_mise() {
+        assert!(active_node_version().is_none());
     }
 }

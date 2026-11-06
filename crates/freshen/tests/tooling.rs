@@ -100,10 +100,19 @@ fn mise_self_updates_upgrades_and_prunes_when_not_installed_with_brew() {
     tools.set_responses(
         "mise",
         &mise_responses(&[
+            // The `check()` query (`mise outdated`).
             StubOutput::new(),
+            // The active version (`mise current node`).
+            StubOutput::stdout("20.0.0\n"),
+            // The available LTS versions (`mise ls-remote node@lts`).
+            StubOutput::stdout("20.18.0\n"),
+            // The self-update (`mise self-update -y`).
             StubOutput::new(),
+            // The upgrade (`mise upgrade`).
             StubOutput::new(),
+            // The prune list (`mise ls --prunable --json`).
             StubOutput::stdout("{}"),
+            // The prune (`mise prune -y`).
             StubOutput::new(),
         ]),
     );
@@ -127,9 +136,17 @@ fn mise_installed_with_brew_is_not_self_updated() {
     tools.set_responses(
         "mise",
         &mise_responses(&[
+            // The `check()` query (`mise outdated`).
             StubOutput::new(),
+            // The active version (`mise current node`).
+            StubOutput::stdout("20.0.0\n"),
+            // The available LTS versions (`mise ls-remote node@lts`).
+            StubOutput::stdout("20.18.0\n"),
+            // The upgrade (`mise upgrade`).
             StubOutput::new(),
+            // The prune list (`mise ls --prunable --json`).
             StubOutput::stdout("{}"),
+            // The prune (`mise prune -y`).
             StubOutput::new(),
         ]),
     );
@@ -156,10 +173,19 @@ fn mise_self_updates_when_brew_is_not_installed() {
     tools.set_responses(
         "mise",
         &mise_responses(&[
+            // The `check()` query (`mise outdated`).
             StubOutput::new(),
+            // The active version (`mise current node`).
+            StubOutput::stdout("20.0.0\n"),
+            // The available LTS versions (`mise ls-remote node@lts`).
+            StubOutput::stdout("20.18.0\n"),
+            // The self-update (`mise self-update -y`).
             StubOutput::new(),
+            // The upgrade (`mise upgrade`).
             StubOutput::new(),
+            // The prune list (`mise ls --prunable --json`).
             StubOutput::stdout("{}"),
+            // The prune (`mise prune -y`).
             StubOutput::new(),
         ]),
     );
@@ -182,10 +208,19 @@ fn a_failing_mise_self_update_is_only_a_warning() {
     tools.set_responses(
         "mise",
         &mise_responses(&[
+            // The `check()` query (`mise outdated`).
             StubOutput::new(),
+            // The active version (`mise current node`).
+            StubOutput::stdout("20.0.0\n"),
+            // The available LTS versions (`mise ls-remote node@lts`).
+            StubOutput::stdout("20.18.0\n"),
+            // The self-update (`mise self-update -y`).
             StubOutput::new().with_status(1),
+            // The upgrade (`mise upgrade`).
             StubOutput::new(),
+            // The prune list (`mise ls --prunable --json`).
             StubOutput::stdout("{}"),
+            // The prune (`mise prune -y`).
             StubOutput::new(),
         ]),
     );
@@ -217,10 +252,19 @@ fn a_failing_mise_upgrade_still_prunes_and_fails_the_step() {
     tools.set_responses(
         "mise",
         &mise_responses(&[
+            // The `check()` query (`mise outdated`).
             StubOutput::new(),
+            // The active version (`mise current node`).
+            StubOutput::stdout("20.0.0\n"),
+            // The available LTS versions (`mise ls-remote node@lts`).
+            StubOutput::stdout("20.18.0\n"),
+            // The self-update (`mise self-update -y`).
             StubOutput::new(),
+            // The upgrade (`mise upgrade`).
             StubOutput::new().with_status(1),
+            // The prune list (`mise ls --prunable --json`).
             StubOutput::stdout("{}"),
+            // The prune (`mise prune -y`).
             StubOutput::new(),
         ]),
     );
@@ -266,6 +310,15 @@ fn install_stale_node(tools: &StubTools) {
     tools.set_script(
         "mise",
         r#"case "$*" in
+  "outdated")
+    printf '%s' ''
+    ;;
+  "current node")
+    printf '%s' '20.0.0'
+    ;;
+  "ls-remote node@lts")
+    printf '%s' '20.18.0'
+    ;;
   "ls --prunable --json")
     printf '%s' '{"node":[{"version":"20.0.0","install_path":"/home/user/.local/share/mise/installs/node/20.0.0"}]}'
     ;;
@@ -494,9 +547,16 @@ fn check_reports_outdated_mise_tools_and_exits_2() {
     let tools = StubTools::new(&["mise"]);
     tools.set_responses(
         "mise",
-        &[StubOutput::stdout(
-            "Plugin  Requested  Current  Latest\nnode    20         20.0.0   20.1.0\npython  3.11       3.11.0   3.11.1\n",
-        )],
+        &[
+            // The `check()` query (`mise outdated`).
+            StubOutput::stdout(
+                "Plugin  Requested  Current  Latest\nnode    20         20.0.0   20.1.0\npython  3.11       3.11.0   3.11.1\n",
+            ),
+            // The active version (`mise current node`).
+            StubOutput::stdout("20.0.0\n"),
+            // The available LTS versions (`mise ls-remote node@lts`).
+            StubOutput::stdout("20.18.0\n22.12.0\n"),
+        ],
     );
 
     let output = tools
@@ -506,13 +566,24 @@ fn check_reports_outdated_mise_tools_and_exits_2() {
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
 
     assert_eq!(output.status.code(), Some(2), "stderr: {}", stderr(&output));
-    assert_eq!(tools.step_calls(), vec!["mise outdated".to_string()]);
+    assert_eq!(
+        tools.step_calls(),
+        vec![
+            "mise outdated".to_string(),
+            "mise current node".to_string(),
+            "mise ls-remote node@lts".to_string(),
+        ]
+    );
     let text = stdout(&output);
     assert!(text.contains("mise:"), "output: {text}");
     assert!(text.contains("node 20.0.0 -> 20.1.0"), "output: {text}");
     assert!(text.contains("python 3.11.0 -> 3.11.1"), "output: {text}");
     assert!(
-        text.contains("2 update(s) pending across 1 step(s)."),
+        text.contains("node 20.0.0 -> 22.12.0"),
+        "missing LTS major report: {text}"
+    );
+    assert!(
+        text.contains("3 update(s) pending across 1 step(s)."),
         "output: {text}"
     );
 }
@@ -521,7 +592,16 @@ fn check_reports_outdated_mise_tools_and_exits_2() {
 fn check_reports_uv_and_mise_up_to_date_without_running_them() {
     let tools = StubTools::new(&["uv", "mise"]);
     tools.set_responses("uv", &[StubOutput::stdout("No tools installed\n")]);
-    tools.set_responses("mise", &[StubOutput::stderr("All tools are up to date\n")]);
+    tools.set_responses(
+        "mise",
+        &[
+            StubOutput::new(),
+            // The active version (`mise current node`).
+            StubOutput::stdout("20.0.0\n"),
+            // The available LTS versions (`mise ls-remote node@lts`).
+            StubOutput::stdout("20.18.0\n"),
+        ],
+    );
 
     let output = tools
         .command()
@@ -535,6 +615,8 @@ fn check_reports_uv_and_mise_up_to_date_without_running_them() {
         vec![
             "uv tool list --outdated".to_string(),
             "mise outdated".to_string(),
+            "mise current node".to_string(),
+            "mise ls-remote node@lts".to_string(),
         ]
     );
     assert_eq!(stdout(&output), "Everything is up to date.\n");
@@ -561,4 +643,108 @@ fn check_reports_a_failed_tool_query_with_exit_1() {
         "output: {}",
         stdout(&output)
     );
+}
+
+#[test]
+fn check_reports_newer_node_lts_major_without_switching() {
+    let tools = StubTools::new(&["mise"]);
+    tools.set_responses(
+        "mise",
+        &[
+            // The `check()` query (`mise outdated`).
+            StubOutput::new(),
+            // The active version (`mise current node`).
+            StubOutput::stdout("20.0.0\n"),
+            // The available LTS versions (`mise ls-remote node@lts`).
+            StubOutput::stdout("18.20.0\n20.18.0\n22.12.0\n"),
+        ],
+    );
+
+    let output = tools
+        .command()
+        .args(["--check", "--only", "mise"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert_eq!(output.status.code(), Some(2), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        vec![
+            "mise outdated".to_string(),
+            "mise current node".to_string(),
+            "mise ls-remote node@lts".to_string(),
+        ]
+    );
+    let text = stdout(&output);
+    assert!(text.contains("mise:"), "output: {text}");
+    assert!(
+        text.contains("node 20.0.0 -> 22.12.0"),
+        "missing LTS major report: {text}"
+    );
+    assert!(
+        text.contains("newer Node LTS major available"),
+        "missing LTS reason: {text}"
+    );
+    // No `mise use` or `mise install` — the check must not switch.
+    assert!(
+        !text.contains("mise use"),
+        "must not switch automatically: {text}"
+    );
+    assert!(
+        !text.contains("mise install"),
+        "must not install automatically: {text}"
+    );
+}
+
+#[test]
+fn check_does_not_report_node_lts_when_active_is_latest_lts() {
+    let tools = StubTools::new(&["mise"]);
+    tools.set_responses(
+        "mise",
+        &[
+            StubOutput::new(),
+            StubOutput::stdout("22.12.0\n"),
+            StubOutput::stdout("18.20.0\n20.18.0\n22.12.0\n"),
+        ],
+    );
+
+    let output = tools
+        .command()
+        .args(["--check", "--only", "mise"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        vec![
+            "mise outdated".to_string(),
+            "mise current node".to_string(),
+            "mise ls-remote node@lts".to_string(),
+        ]
+    );
+    assert_eq!(stdout(&output), "Everything is up to date.\n");
+}
+
+#[test]
+fn check_skips_node_lts_when_node_is_not_active() {
+    let tools = StubTools::new(&["mise"]);
+    tools.set_responses(
+        "mise",
+        &[
+            StubOutput::new(),
+            // `mise current node` returns nothing when node is not installed.
+            StubOutput::new(),
+            StubOutput::stdout("22.12.0\n"),
+        ],
+    );
+
+    let output = tools
+        .command()
+        .args(["--check", "--only", "mise"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(stdout(&output), "Everything is up to date.\n");
 }

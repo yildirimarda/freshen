@@ -15,10 +15,12 @@ pub fn uv_transcript() -> Vec<&'static str> {
     uv_steps().to_vec()
 }
 
-/// Named insertion: mise steps with self-update (brew not installed).
+/// Named insertion: mise full steps with self-update (brew not installed).
 pub fn mise_full_steps() -> &'static [&'static str] {
     &[
         "mise outdated",
+        "mise current node",
+        "mise ls-remote node@lts",
         "mise self-update -y",
         "mise upgrade",
         "mise ls --prunable --json",
@@ -35,6 +37,8 @@ pub fn mise_full_transcript() -> Vec<&'static str> {
 pub fn mise_brew_steps() -> &'static [&'static str] {
     &[
         "mise outdated",
+        "mise current node",
+        "mise ls-remote node@lts",
         "brew list --formula mise",
         "mise upgrade",
         "mise ls --prunable --json",
@@ -47,6 +51,8 @@ pub fn mise_brew_steps() -> &'static [&'static str] {
 pub fn mise_brew_failed_steps() -> &'static [&'static str] {
     &[
         "mise outdated",
+        "mise current node",
+        "mise ls-remote node@lts",
         "brew list --formula mise",
         "mise self-update -y",
         "mise upgrade",

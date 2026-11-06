@@ -315,6 +315,10 @@ fn the_package_exclude_list_limits_the_mise_tool_upgrade() {
             support::StubOutput::new(),
             // The `check()` query (`mise outdated`).
             support::StubOutput::new(),
+            // The active version (`mise current node`).
+            support::StubOutput::stdout("20.0.0\n"),
+            // The available LTS versions (`mise ls-remote node@lts`).
+            support::StubOutput::stdout("20.18.0\n"),
             // The self-update (`mise self-update -y`).
             support::StubOutput::new(),
             // The upgrade query (`mise outdated`) when a filter is set.
