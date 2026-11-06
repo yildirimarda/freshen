@@ -12,6 +12,9 @@
 
 use crate::options::RunOptions;
 use crate::output::human;
+use crate::package_processes::{
+    self, HostProcessSystem, PackageLocation, ProcessSystem, StopPolicy,
+};
 use crate::platform::Platform;
 use crate::process::{CommandSpec, ProcessError};
 use crate::registry::Registry;
@@ -38,12 +41,70 @@ const WINGET_PLATFORMS: [Platform; 1] = [Platform::Windows];
 /// Registers the winget step.
 #[must_use]
 pub fn register(registry: Registry) -> Registry {
-    registry.with(WingetStep)
+    registry.with(WingetStep::new())
 }
 
-struct WingetStep;
+struct WingetStep {
+    /// Install locations of outdated packages, used to find running processes
+    /// that must be stopped before upgrading. Populated by tests; empty in
+    /// production until package-manager install-location probing is added.
+    install_locations: Vec<PackageLocation>,
+    /// Injected process system for tests; defaults to the host implementation.
+    process_system: Option<Box<dyn ProcessSystem>>,
+}
 
 impl WingetStep {
+    fn new() -> Self {
+        Self {
+            install_locations: Vec::new(),
+            process_system: None,
+        }
+    }
+
+    fn process_system(&self) -> &dyn ProcessSystem {
+        self.process_system.as_deref().unwrap_or(&HostProcessSystem)
+    }
+
+    /// Stops running processes whose executables live under the install
+    /// location of an outdated package, applying the quit/force-kill policy
+    /// before the upgrade.
+    fn stop_running_processes(&self, options: &RunOptions) {
+        if self.install_locations.is_empty() {
+            return;
+        }
+        let system = self.process_system();
+        let policy = StopPolicy::from_env(options.force_kill());
+        let (stopped, still_running) = package_processes::stop_processes_under_locations(
+            system,
+            &self.install_locations,
+            &policy,
+        );
+
+        for process in &stopped {
+            human!(
+                "Stopped process {} ({})",
+                process.pid,
+                process.executable.display()
+            );
+        }
+
+        for process in &still_running {
+            if policy.force_kill() {
+                human!(
+                    "warning: process {} ({}) did not stop before the upgrade, even after force-killing",
+                    process.pid,
+                    process.executable.display()
+                );
+            } else {
+                human!(
+                    "warning: process {} ({}) did not stop before the upgrade (use --force-kill to force)",
+                    process.pid,
+                    process.executable.display()
+                );
+            }
+        }
+    }
+
     /// Reports the packages `winget upgrade` lists as outdated, honouring the
     /// package include/exclude list. Packages that are excluded (pinned) are
     /// kept in the report with a "held back (pinned)" reason instead of being
@@ -105,6 +166,7 @@ impl Step for WingetStep {
     }
 
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
+        self.stop_running_processes(options);
         let mut failures = Vec::new();
         let mut not_applicable = false;
 
@@ -305,9 +367,353 @@ mod tests {
         parse_winget_packages, parse_winget_upgrade, WingetStep, EXIT_UPDATE_NOT_APPLICABLE,
     };
     use crate::options::RunOptions;
+    use crate::package_processes::{PackageLocation, Process, ProcessSystem};
     use crate::policy::{ItemFilters, NameFilter};
     use crate::skipped_items;
     use crate::step::{SkipReason, Step, StepError};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    /// A fake process system for winget tests.
+    struct FakeProcessSystem {
+        processes: Vec<Process>,
+        alive: Mutex<HashMap<u32, bool>>,
+        current_pid: u32,
+        signals: Arc<Mutex<Vec<(u32, bool)>>>,
+    }
+
+    impl FakeProcessSystem {
+        fn new() -> Self {
+            Self {
+                processes: Vec::new(),
+                alive: Mutex::new(HashMap::new()),
+                current_pid: 999,
+                signals: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn with_process(mut self, pid: u32, executable: impl Into<PathBuf>) -> Self {
+            self.processes.push(Process {
+                pid,
+                executable: executable.into(),
+            });
+            self.alive
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(pid, true);
+            self
+        }
+
+        fn with_current_pid(mut self, pid: u32) -> Self {
+            self.current_pid = pid;
+            self
+        }
+    }
+
+    impl ProcessSystem for FakeProcessSystem {
+        fn processes(&self) -> Vec<Process> {
+            self.processes.clone()
+        }
+
+        fn quit(&self, pid: u32) -> bool {
+            self.signals
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push((pid, false));
+            true
+        }
+
+        fn kill(&self, pid: u32) -> bool {
+            self.signals
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push((pid, true));
+            let mut alive = self
+                .alive
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            alive.insert(pid, false);
+            true
+        }
+
+        fn is_alive(&self, pid: u32) -> bool {
+            self.alive
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get(&pid)
+                .copied()
+                .unwrap_or(false)
+        }
+
+        fn current_pid(&self) -> u32 {
+            self.current_pid
+        }
+    }
+
+    /// A stub `winget` that exits 0 for every command and logs invocations.
+    fn stub_winget_always_ok() -> (std::path::PathBuf, std::path::PathBuf) {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "freshen-winget-stop-{pid}-{id}",
+            pid = std::process::id(),
+            id = id
+        ));
+        std::fs::create_dir_all(&dir).unwrap_or_else(|error| {
+            panic!("failed to create stub directory {}: {error}", dir.display())
+        });
+        let log = dir.join("calls.log");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let script = "#!/bin/sh\n\
+                 {\n\
+                   printf '%s' winget\n\
+                   for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
+                   printf '\\n'\n\
+                 } >> \"$FRESHEN_WINGET_LOG\"\n\
+                 exit 0\n";
+            let stub = dir.join("winget");
+            std::fs::write(&stub, script)
+                .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+                .unwrap_or_else(|error| panic!("failed to make stub executable: {error}"));
+        }
+
+        #[cfg(windows)]
+        {
+            let script = "@echo off\r\n>>\"%FRESHEN_WINGET_LOG%\" echo winget %*\r\nexit /b 0\r\n";
+            let stub = dir.join("winget.cmd");
+            std::fs::write(&stub, script)
+                .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
+        }
+
+        (dir, log)
+    }
+
+    #[test]
+    fn stop_running_processes_stops_process_under_install_location() {
+        let fake = FakeProcessSystem::new()
+            .with_process(100, "/Program Files/Git/bin/git.exe")
+            .with_current_pid(999);
+        let signals = fake.signals.clone();
+
+        let step = WingetStep {
+            install_locations: vec![PackageLocation {
+                name: "git".to_owned(),
+                install_location: PathBuf::from("/Program Files/Git"),
+            }],
+            process_system: Some(Box::new(fake)),
+        };
+
+        let options = RunOptions::new();
+        step.stop_running_processes(&options);
+
+        assert_eq!(
+            signals.lock().unwrap_or_else(|p| p.into_inner()).clone(),
+            [(100, false)]
+        );
+    }
+
+    #[test]
+    fn stop_running_processes_ignores_process_outside_install_location() {
+        let fake = FakeProcessSystem::new()
+            .with_process(100, "/Windows/System32/notepad.exe")
+            .with_current_pid(999);
+        let signals = fake.signals.clone();
+
+        let step = WingetStep {
+            install_locations: vec![PackageLocation {
+                name: "git".to_owned(),
+                install_location: PathBuf::from("/Program Files/Git"),
+            }],
+            process_system: Some(Box::new(fake)),
+        };
+
+        step.stop_running_processes(&RunOptions::new());
+
+        assert!(
+            signals
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+                .is_empty(),
+            "no process should be stopped"
+        );
+    }
+
+    #[test]
+    fn stop_running_processes_force_kills_stuck_process() {
+        let fake = FakeProcessSystem::new()
+            .with_process(100, "/Program Files/Git/bin/git.exe")
+            .with_current_pid(999);
+        let signals = fake.signals.clone();
+
+        let step = WingetStep {
+            install_locations: vec![PackageLocation {
+                name: "git".to_owned(),
+                install_location: PathBuf::from("/Program Files/Git"),
+            }],
+            process_system: Some(Box::new(fake)),
+        };
+
+        let options = RunOptions::new().with_force_kill(true);
+        step.stop_running_processes(&options);
+
+        let signals = signals.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        assert_eq!(signals, [(100, false), (100, true)], "quit then force-kill");
+    }
+
+    #[test]
+    fn stop_running_processes_does_not_force_kill_without_flag() {
+        let fake = FakeProcessSystem::new()
+            .with_process(100, "/Program Files/Git/bin/git.exe")
+            .with_current_pid(999);
+        let signals = fake.signals.clone();
+
+        let step = WingetStep {
+            install_locations: vec![PackageLocation {
+                name: "git".to_owned(),
+                install_location: PathBuf::from("/Program Files/Git"),
+            }],
+            process_system: Some(Box::new(fake)),
+        };
+
+        step.stop_running_processes(&RunOptions::new());
+
+        assert_eq!(
+            signals.lock().unwrap_or_else(|p| p.into_inner()).clone(),
+            [(100, false)],
+            "only graceful quit, no force-kill"
+        );
+    }
+
+    #[test]
+    fn stop_running_processes_never_stops_frenhen_process() {
+        let fake = FakeProcessSystem::new()
+            .with_current_pid(999)
+            .with_process(999, r"C:\Program Files\Git\bin\git.exe");
+        let signals = fake.signals.clone();
+
+        let step = WingetStep {
+            install_locations: vec![PackageLocation {
+                name: "git".to_owned(),
+                install_location: PathBuf::from("/Program Files/Git"),
+            }],
+            process_system: Some(Box::new(fake)),
+        };
+
+        step.stop_running_processes(&RunOptions::new());
+
+        assert!(
+            signals
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+                .is_empty(),
+            "freshen process must never be stopped"
+        );
+    }
+
+    #[test]
+    fn run_with_options_stops_process_before_upgrading() {
+        let (dir, log) = stub_winget_always_ok();
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous_path = std::env::var("PATH").ok();
+        let previous_log = std::env::var("FRESHEN_WINGET_LOG").ok();
+        std::env::set_var("PATH", &dir);
+        std::env::set_var("FRESHEN_WINGET_LOG", &log);
+
+        let fake = FakeProcessSystem::new()
+            .with_process(100, "/Program Files/Git/bin/git.exe")
+            .with_current_pid(999);
+        let signals = fake.signals.clone();
+
+        let step = WingetStep {
+            install_locations: vec![PackageLocation {
+                name: "git".to_owned(),
+                install_location: PathBuf::from("/Program Files/Git"),
+            }],
+            process_system: Some(Box::new(fake)),
+        };
+
+        // Use a short stop timeout so the test does not wait 20 seconds when
+        // the fake process does not stop after the graceful quit.
+        std::env::set_var("DESKTOP_STOP_TIMEOUT", "1");
+        let result = step.run_with_options(&RunOptions::new());
+        std::env::remove_var("DESKTOP_STOP_TIMEOUT");
+
+        if let Some(previous) = previous_path {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(previous) = previous_log {
+            std::env::set_var("FRESHEN_WINGET_LOG", previous);
+        } else {
+            std::env::remove_var("FRESHEN_WINGET_LOG");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(result.is_ok(), "run should succeed: {result:?}");
+
+        // The process was stopped before the upgrade commands ran.
+        assert_eq!(
+            signals.lock().unwrap_or_else(|p| p.into_inner()).clone(),
+            [(100, false)],
+            "process should be quit before upgrade"
+        );
+    }
+
+    #[test]
+    fn run_with_options_no_locations_means_no_stopping() {
+        let (dir, log) = stub_winget_always_ok();
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous_path = std::env::var("PATH").ok();
+        let previous_log = std::env::var("FRESHEN_WINGET_LOG").ok();
+        std::env::set_var("PATH", &dir);
+        std::env::set_var("FRESHEN_WINGET_LOG", &log);
+
+        let fake = FakeProcessSystem::new()
+            .with_process(100, "/Program Files/Git/bin/git.exe")
+            .with_current_pid(999);
+        let signals = fake.signals.clone();
+
+        let step = WingetStep {
+            install_locations: Vec::new(),
+            process_system: Some(Box::new(fake)),
+        };
+
+        let result = step.run_with_options(&RunOptions::new());
+
+        if let Some(previous) = previous_path {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(previous) = previous_log {
+            std::env::set_var("FRESHEN_WINGET_LOG", previous);
+        } else {
+            std::env::remove_var("FRESHEN_WINGET_LOG");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(result.is_ok());
+        assert!(
+            signals
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+                .is_empty(),
+            "no processes stopped when no install locations"
+        );
+    }
 
     /// Creates a stub `winget` on a temp dir that prints `output` for
     /// `winget upgrade` and exits 0 for `winget --version`. Returns the stub
@@ -331,15 +737,15 @@ mod tests {
             let script = format!(
                 "#!/bin/sh\n\
                  {{\n\
-                   printf '%s' winget\n\
-                   for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
-                   printf '\\n'\n\
+                    printf '%s' winget\n\
+                    for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
+                    printf '\\n'\n\
                  }} >> \"$FRESHEN_WINGET_LOG\"\n\
                  case \"$1\" in\n\
-                   --version) exit 0 ;;\n\
+                    --version) exit 0 ;;\n\
                  esac\n\
                  case \"$2\" in\n\
-                   upgrade) printf {}; exit 0 ;;\n                   *) exit 0 ;;\n                 esac\n",
+                    upgrade) printf {}; exit 0 ;;\n                   *) exit 0 ;;\n                 esac\n",
                 shell_quote(output)
             );
             let stub = dir.join("winget");
@@ -457,7 +863,7 @@ mod tests {
         let options = RunOptions::new().with_filters(
             ItemFilters::new().with_packages(NameFilter::new().with_exclude(["Git"])),
         );
-        let report = WingetStep
+        let report = WingetStep::new()
             .check_with_options(&options)
             .unwrap_or_else(|error| panic!("check should succeed: {error}"));
 
@@ -496,7 +902,7 @@ mod tests {
         let options = RunOptions::new().with_filters(
             ItemFilters::new().with_packages(NameFilter::new().with_include(["7zip"])),
         );
-        let report = WingetStep
+        let report = WingetStep::new()
             .check_with_options(&options)
             .unwrap_or_else(|error| panic!("check should succeed: {error}"));
 
@@ -534,7 +940,7 @@ mod tests {
                     .with_exclude(["Git"]),
             ),
         );
-        let report = WingetStep
+        let report = WingetStep::new()
             .check_with_options(&options)
             .unwrap_or_else(|error| panic!("check should succeed: {error}"));
 
@@ -571,9 +977,9 @@ mod tests {
 
             let script = "#!/bin/sh\n\
                  {\n\
-                   printf '%s' winget\n\
-                   for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
-                   printf '\\n'\n\
+                    printf '%s' winget\n\
+                    for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
+                    printf '\\n'\n\
                  } >> \"$FRESHEN_WINGET_LOG\"\n\
                  exit 0\n";
             let stub = dir.join("winget");
@@ -603,7 +1009,7 @@ mod tests {
         std::env::set_var("PATH", &dir);
         std::env::set_var("FRESHEN_WINGET_LOG", &log);
 
-        let result = WingetStep.run();
+        let result = WingetStep::new().run();
 
         if let Some(previous) = previous_path {
             std::env::set_var("PATH", previous);
@@ -654,22 +1060,22 @@ mod tests {
 
             let script = "#!/bin/sh\n\
                  {\n\
-                   printf '%s' winget\n\
-                   for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
-                   printf '\\n'\n\
+                    printf '%s' winget\n\
+                    for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
+                    printf '\\n'\n\
                  } >> \"$FRESHEN_WINGET_LOG\"\n\
                  case \"$2\" in\n\
-                   source) exit 0 ;;\n\
-                   upgrade)\n\
-                     if [ \"$3\" = --id ]; then\n\
-                       exit 0\n\
-                     else\n\
-                       printf 'Name Id Version Source\\n'\n\
-                       printf '------ -- -- ------- ------\\n'\n\
-                       printf '7zip 7zip.7zip 24.08 winget\\n'\n\
-                       printf 'Git Git.Git 2.45.2 winget\\n'\n\
-                       exit 0\n\
-                     fi ;;\n                   *) exit 0 ;;\n                 esac\n";
+                    source) exit 0 ;;\n\
+                    upgrade)\n\
+                      if [ \"$3\" = --id ]; then\n\
+                        exit 0\n\
+                      else\n\
+                        printf 'Name Id Version Source\\n'\n\
+                        printf '------ -- -- ------- ------\\n'\n\
+                        printf '7zip 7zip.7zip 24.08 winget\\n'\n\
+                        printf 'Git Git.Git 2.45.2 winget\\n'\n\
+                        exit 0\n\
+                      fi ;;\n                   *) exit 0 ;;\n                 esac\n";
             let stub = dir.join("winget");
             std::fs::write(&stub, script)
                 .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
@@ -682,11 +1088,11 @@ mod tests {
             let script = "@echo off\r\n\
                  >>\"%FRESHEN_WINGET_LOG%\" echo winget %*\r\n\
                  if \"%~2\"==\"source\" (exit /b 0) else (\n\
-                   if \"%~3\"==\"--id\" (exit /b 0) else (\n\
-                     echo Name Id Version Source\r\n\
-                     echo 7zip 7zip.7zip 24.08 winget\r\n\
-                     echo Git Git.Git 2.45.2 winget\r\n\
-                     exit /b 0\n                   )\n                 )\r\n";
+                    if \"%~3\"==\"--id\" (exit /b 0) else (\n\
+                      echo Name Id Version Source\r\n\
+                      echo 7zip 7zip.7zip 24.08 winget\r\n\
+                      echo Git Git.Git 2.45.2 winget\r\n\
+                      exit /b 0\n                   )\n                 )\r\n";
             let stub = dir.join("winget.cmd");
             std::fs::write(&stub, script)
                 .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
@@ -704,7 +1110,7 @@ mod tests {
         let options = RunOptions::new().with_filters(
             ItemFilters::new().with_packages(NameFilter::new().with_exclude(["Git"])),
         );
-        let result = WingetStep.run_with_options(&options);
+        let result = WingetStep::new().run_with_options(&options);
 
         if let Some(previous) = previous_path {
             std::env::set_var("PATH", previous);
@@ -762,13 +1168,13 @@ mod tests {
 
             let script = "#!/bin/sh\n\
                  {\n\
-                   printf '%s' winget\n\
-                   for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
-                   printf '\\n'\n\
+                    printf '%s' winget\n\
+                    for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
+                    printf '\\n'\n\
                  } >> \"$FRESHEN_WINGET_LOG\"\n\
                  case \"$2\" in\n\
-                   source) exit 0 ;;\n\
-                   *) exit \"${FRESHEN_WINGET_EXIT_CODE:-0}\" ;;\n\
+                    source) exit 0 ;;\n\
+                    *) exit \"${FRESHEN_WINGET_EXIT_CODE:-0}\" ;;\n\
                  esac\n";
             let stub = dir.join("winget");
             std::fs::write(&stub, script)
@@ -784,9 +1190,9 @@ mod tests {
                  set \"code=%FRESHEN_WINGET_EXIT_CODE%\r\n\
                  if not defined code set code=0\r\n\
                  if \"%~2\"==\"source\" (\r\n\
-                   exit /b 0\r\n\
+                    exit /b 0\r\n\
                  ) else (\r\n\
-                   exit /b %code%\r\n\
+                    exit /b %code%\r\n\
                  )\r\n";
             let stub = dir.join("winget.cmd");
             std::fs::write(&stub, script)
@@ -806,7 +1212,7 @@ mod tests {
         std::env::set_var("FRESHEN_WINGET_LOG", &log);
         std::env::set_var("FRESHEN_WINGET_EXIT_CODE", exit_code.to_string());
 
-        let result = WingetStep.run();
+        let result = WingetStep::new().run();
 
         if let Some(previous) = previous_path {
             std::env::set_var("PATH", previous);

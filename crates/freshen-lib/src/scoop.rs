@@ -12,6 +12,9 @@
 use crate::cleanup;
 use crate::options::RunOptions;
 use crate::output::human;
+use crate::package_processes::{
+    self, HostProcessSystem, PackageLocation, ProcessSystem, StopPolicy,
+};
 use crate::platform::Platform;
 use crate::process::CommandSpec;
 use crate::registry::Registry;
@@ -26,12 +29,70 @@ const SCOOP_PLATFORMS: [Platform; 1] = [Platform::Windows];
 /// Registers the scoop step.
 #[must_use]
 pub fn register(registry: Registry) -> Registry {
-    registry.with(ScoopStep)
+    registry.with(ScoopStep::new())
 }
 
-struct ScoopStep;
+struct ScoopStep {
+    /// Install locations of outdated packages, used to find running processes
+    /// that must be stopped before upgrading. Populated by tests; empty in
+    /// production until package-manager install-location probing is added.
+    install_locations: Vec<PackageLocation>,
+    /// Injected process system for tests; defaults to the host implementation.
+    process_system: Option<Box<dyn ProcessSystem>>,
+}
 
 impl ScoopStep {
+    fn new() -> Self {
+        Self {
+            install_locations: Vec::new(),
+            process_system: None,
+        }
+    }
+
+    fn process_system(&self) -> &dyn ProcessSystem {
+        self.process_system.as_deref().unwrap_or(&HostProcessSystem)
+    }
+
+    /// Stops running processes whose executables live under the install
+    /// location of an outdated package, applying the quit/force-kill policy
+    /// before the upgrade.
+    fn stop_running_processes(&self, options: &RunOptions) {
+        if self.install_locations.is_empty() {
+            return;
+        }
+        let system = self.process_system();
+        let policy = StopPolicy::from_env(options.force_kill());
+        let (stopped, still_running) = package_processes::stop_processes_under_locations(
+            system,
+            &self.install_locations,
+            &policy,
+        );
+
+        for process in &stopped {
+            human!(
+                "Stopped process {} ({})",
+                process.pid,
+                process.executable.display()
+            );
+        }
+
+        for process in &still_running {
+            if policy.force_kill() {
+                human!(
+                    "warning: process {} ({}) did not stop before the upgrade, even after force-killing",
+                    process.pid,
+                    process.executable.display()
+                );
+            } else {
+                human!(
+                    "warning: process {} ({}) did not stop before the upgrade (use --force-kill to force)",
+                    process.pid,
+                    process.executable.display()
+                );
+            }
+        }
+    }
+
     /// Reports the apps `scoop status` lists as outdated.
     fn check_with_options(&self, options: &RunOptions) -> Result<CheckReport, StepError> {
         let output = CommandSpec::new("scoop")
@@ -82,6 +143,7 @@ impl Step for ScoopStep {
     }
 
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
+        self.stop_running_processes(options);
         let mut failures = Vec::new();
 
         human!("scoop update");
@@ -165,9 +227,326 @@ fn parse_scoop_status(output: &str) -> Vec<OutdatedItem> {
 mod tests {
     use super::{parse_scoop_status, ScoopStep, SCOOP};
     use crate::options::RunOptions;
+    use crate::package_processes::{PackageLocation, Process, ProcessSystem};
     use crate::platform::Platform;
     use crate::policy::{ItemFilters, NameFilter};
     use crate::step::{Detection, SkipReason, Step, StepError};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    /// A fake process system for scoop tests.
+    struct FakeProcessSystem {
+        processes: Vec<Process>,
+        alive: Mutex<HashMap<u32, bool>>,
+        current_pid: u32,
+        signals: Arc<Mutex<Vec<(u32, bool)>>>,
+    }
+
+    impl FakeProcessSystem {
+        fn new() -> Self {
+            Self {
+                processes: Vec::new(),
+                alive: Mutex::new(HashMap::new()),
+                current_pid: 999,
+                signals: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn with_process(mut self, pid: u32, executable: impl Into<PathBuf>) -> Self {
+            self.processes.push(Process {
+                pid,
+                executable: executable.into(),
+            });
+            self.alive
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(pid, true);
+            self
+        }
+
+        fn with_current_pid(mut self, pid: u32) -> Self {
+            self.current_pid = pid;
+            self
+        }
+    }
+
+    impl ProcessSystem for FakeProcessSystem {
+        fn processes(&self) -> Vec<Process> {
+            self.processes.clone()
+        }
+
+        fn quit(&self, pid: u32) -> bool {
+            self.signals
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push((pid, false));
+            true
+        }
+
+        fn kill(&self, pid: u32) -> bool {
+            self.signals
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push((pid, true));
+            let mut alive = self
+                .alive
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            alive.insert(pid, false);
+            true
+        }
+
+        fn is_alive(&self, pid: u32) -> bool {
+            self.alive
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get(&pid)
+                .copied()
+                .unwrap_or(false)
+        }
+
+        fn current_pid(&self) -> u32 {
+            self.current_pid
+        }
+    }
+
+    /// A stub `scoop` that exits 0 for every command and logs invocations.
+    fn stub_scoop_always_ok() -> (std::path::PathBuf, std::path::PathBuf) {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "freshen-scoop-stop-{pid}-{id}",
+            pid = std::process::id(),
+            id = id
+        ));
+        std::fs::create_dir_all(&dir).unwrap_or_else(|error| {
+            panic!("failed to create stub directory {}: {error}", dir.display())
+        });
+        let log = dir.join("calls.log");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let script = "#!/bin/sh\n\
+                 {\n\
+                   printf '%s' scoop\n\
+                   for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
+                   printf '\\n'\n\
+                 } >> \"$FRESHEN_SCOOP_LOG\"\n\
+                 exit 0\n";
+            let stub = dir.join("scoop");
+            std::fs::write(&stub, script)
+                .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+                .unwrap_or_else(|error| panic!("failed to make stub executable: {error}"));
+        }
+
+        #[cfg(windows)]
+        {
+            let script = "@echo off\r\n>>\"%FRESHEN_SCOOP_LOG%\" echo scoop %*\r\nexit /b 0\r\n";
+            let stub = dir.join("scoop.cmd");
+            std::fs::write(&stub, script)
+                .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
+        }
+
+        (dir, log)
+    }
+
+    #[test]
+    fn stop_running_processes_stops_process_under_install_location() {
+        let fake = FakeProcessSystem::new()
+            .with_process(100, "/Users/Alice/scoop/apps/git/current/bin/git.exe")
+            .with_current_pid(999);
+        let signals = fake.signals.clone();
+
+        let step = ScoopStep {
+            install_locations: vec![PackageLocation {
+                name: "git".to_owned(),
+                install_location: PathBuf::from("/Users/Alice/scoop/apps/git/current"),
+            }],
+            process_system: Some(Box::new(fake)),
+        };
+
+        step.stop_running_processes(&RunOptions::new());
+
+        assert_eq!(
+            signals.lock().unwrap_or_else(|p| p.into_inner()).clone(),
+            [(100, false)]
+        );
+    }
+
+    #[test]
+    fn stop_running_processes_ignores_process_outside_install_location() {
+        let fake = FakeProcessSystem::new()
+            .with_process(100, "/Windows/System32/notepad.exe")
+            .with_current_pid(999);
+        let signals = fake.signals.clone();
+
+        let step = ScoopStep {
+            install_locations: vec![PackageLocation {
+                name: "git".to_owned(),
+                install_location: PathBuf::from("/Users/Alice/scoop/apps/git/current"),
+            }],
+            process_system: Some(Box::new(fake)),
+        };
+
+        step.stop_running_processes(&RunOptions::new());
+
+        assert!(
+            signals
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+                .is_empty(),
+            "no process should be stopped"
+        );
+    }
+
+    #[test]
+    fn stop_running_processes_force_kills_stuck_process() {
+        let fake = FakeProcessSystem::new()
+            .with_process(100, "/Users/Alice/scoop/apps/git/current/bin/git.exe")
+            .with_current_pid(999);
+        let signals = fake.signals.clone();
+
+        let step = ScoopStep {
+            install_locations: vec![PackageLocation {
+                name: "git".to_owned(),
+                install_location: PathBuf::from("/Users/Alice/scoop/apps/git/current"),
+            }],
+            process_system: Some(Box::new(fake)),
+        };
+
+        step.stop_running_processes(&RunOptions::new().with_force_kill(true));
+
+        let signals = signals.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        assert_eq!(signals, [(100, false), (100, true)], "quit then force-kill");
+    }
+
+    #[test]
+    fn stop_running_processes_never_stops_freshen_process() {
+        let fake = FakeProcessSystem::new()
+            .with_current_pid(999)
+            .with_process(999, "/Users/Alice/scoop/apps/git/current/bin/git.exe");
+        let signals = fake.signals.clone();
+
+        let step = ScoopStep {
+            install_locations: vec![PackageLocation {
+                name: "git".to_owned(),
+                install_location: PathBuf::from("/Users/Alice/scoop/apps/git/current"),
+            }],
+            process_system: Some(Box::new(fake)),
+        };
+
+        step.stop_running_processes(&RunOptions::new());
+
+        assert!(
+            signals
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+                .is_empty(),
+            "freshen process must never be stopped"
+        );
+    }
+
+    #[test]
+    fn run_with_options_stops_process_before_upgrading() {
+        let (dir, log) = stub_scoop_always_ok();
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous_path = std::env::var("PATH").ok();
+        let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
+        std::env::set_var("PATH", &dir);
+        std::env::set_var("FRESHEN_SCOOP_LOG", &log);
+
+        let fake = FakeProcessSystem::new()
+            .with_process(100, "/Users/Alice/scoop/apps/git/current/bin/git.exe")
+            .with_current_pid(999);
+        let signals = fake.signals.clone();
+
+        let step = ScoopStep {
+            install_locations: vec![PackageLocation {
+                name: "git".to_owned(),
+                install_location: PathBuf::from("/Users/Alice/scoop/apps/git/current"),
+            }],
+            process_system: Some(Box::new(fake)),
+        };
+
+        // Use a short stop timeout so the test does not wait 20 seconds when
+        // the fake process does not stop after the graceful quit.
+        std::env::set_var("DESKTOP_STOP_TIMEOUT", "1");
+        let result = step.run_with_options(&RunOptions::new());
+        std::env::remove_var("DESKTOP_STOP_TIMEOUT");
+
+        if let Some(previous) = previous_path {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(previous) = previous_log {
+            std::env::set_var("FRESHEN_SCOOP_LOG", previous);
+        } else {
+            std::env::remove_var("FRESHEN_SCOOP_LOG");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(result.is_ok(), "run should succeed: {result:?}");
+
+        assert_eq!(
+            signals.lock().unwrap_or_else(|p| p.into_inner()).clone(),
+            [(100, false)],
+            "process should be quit before upgrade"
+        );
+    }
+
+    #[test]
+    fn run_with_options_no_locations_means_no_stopping() {
+        let (dir, log) = stub_scoop_always_ok();
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous_path = std::env::var("PATH").ok();
+        let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
+        std::env::set_var("PATH", &dir);
+        std::env::set_var("FRESHEN_SCOOP_LOG", &log);
+
+        let fake = FakeProcessSystem::new()
+            .with_process(100, "/Users/Alice/scoop/apps/git/current/bin/git.exe")
+            .with_current_pid(999);
+        let signals = fake.signals.clone();
+
+        let step = ScoopStep {
+            install_locations: Vec::new(),
+            process_system: Some(Box::new(fake)),
+        };
+
+        let result = step.run_with_options(&RunOptions::new());
+
+        if let Some(previous) = previous_path {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(previous) = previous_log {
+            std::env::set_var("FRESHEN_SCOOP_LOG", previous);
+        } else {
+            std::env::remove_var("FRESHEN_SCOOP_LOG");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(result.is_ok());
+        assert!(
+            signals
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+                .is_empty(),
+            "no processes stopped when no install locations"
+        );
+    }
 
     fn stub_scoop_with_status_output(output: &str) -> std::path::PathBuf {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -285,7 +664,7 @@ mod tests {
         let options = RunOptions::new().with_filters(
             ItemFilters::new().with_packages(NameFilter::new().with_exclude(["git"])),
         );
-        let report = ScoopStep
+        let report = ScoopStep::new()
             .check_with_options(&options)
             .unwrap_or_else(|error| panic!("check should succeed: {error}"));
 
@@ -310,7 +689,7 @@ mod tests {
         let previous = std::env::var("PATH").ok();
         std::env::set_var("PATH", &dir);
 
-        let detection = ScoopStep
+        let detection = ScoopStep::new()
             .detect()
             .unwrap_or_else(|error| panic!("detect should succeed: {error}"));
 
@@ -340,7 +719,7 @@ mod tests {
         let previous = std::env::var("PATH").ok();
         std::env::set_var("PATH", &dir);
 
-        let detection = ScoopStep
+        let detection = ScoopStep::new()
             .detect()
             .unwrap_or_else(|error| panic!("detect should succeed: {error}"));
 
@@ -405,7 +784,7 @@ mod tests {
         std::env::set_var("PATH", &dir);
         std::env::set_var("FRESHEN_SCOOP_LOG", &log);
 
-        let result = ScoopStep.run();
+        let result = ScoopStep::new().run();
 
         if let Some(previous) = previous_path {
             std::env::set_var("PATH", previous);
@@ -488,7 +867,7 @@ mod tests {
         std::env::set_var("PATH", &dir);
         std::env::set_var("FRESHEN_SCOOP_LOG", &log);
 
-        let result = ScoopStep.run();
+        let result = ScoopStep::new().run();
 
         if let Some(previous) = previous_path {
             std::env::set_var("PATH", previous);
@@ -578,7 +957,7 @@ mod tests {
         std::env::set_var("FRESHEN_SCOOP_LOG", &log);
 
         let options = RunOptions::new().with_cleanup(true);
-        let result = ScoopStep.run_with_options(&options);
+        let result = ScoopStep::new().run_with_options(&options);
 
         if let Some(previous) = previous_path {
             std::env::set_var("PATH", previous);
@@ -622,7 +1001,7 @@ mod tests {
         std::env::set_var("FRESHEN_SCOOP_LOG", &log);
 
         let options = RunOptions::new();
-        let result = ScoopStep.run_with_options(&options);
+        let result = ScoopStep::new().run_with_options(&options);
 
         if let Some(previous) = previous_path {
             std::env::set_var("PATH", previous);
@@ -661,7 +1040,7 @@ mod tests {
         std::env::set_var("FRESHEN_SCOOP_LOG", &log);
 
         let options = RunOptions::new().with_cleanup(true);
-        let result = ScoopStep.run_with_options(&options);
+        let result = ScoopStep::new().run_with_options(&options);
 
         if let Some(previous) = previous_path {
             std::env::set_var("PATH", previous);
@@ -705,7 +1084,7 @@ mod tests {
         std::env::set_var("FRESHEN_SCOOP_LOG", &log);
 
         let options = RunOptions::new();
-        let result = ScoopStep.run_with_options(&options);
+        let result = ScoopStep::new().run_with_options(&options);
 
         if let Some(previous) = previous_path {
             std::env::set_var("PATH", previous);
@@ -734,7 +1113,7 @@ mod tests {
     /// platforms and the step is skipped there.
     #[test]
     fn platforms_is_windows_only() {
-        assert_eq!(ScoopStep.platforms(), &[Platform::Windows]);
+        assert_eq!(ScoopStep::new().platforms(), &[Platform::Windows]);
     }
 
     /// A missing scoop is reported as skipped with `NotInstalled`.
