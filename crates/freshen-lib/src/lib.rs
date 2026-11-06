@@ -40,6 +40,7 @@ pub mod nix;
 pub mod options;
 pub mod output;
 pub mod package_manager;
+pub mod package_processes;
 pub mod pacman;
 pub mod pacman_findings;
 pub mod platform;
