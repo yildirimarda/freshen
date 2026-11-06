@@ -272,7 +272,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Run PowerShell-based steps with a process-scoped execution policy (`-NoProfile -ExecutionPolicy Bypass` only for freshen's own invocation) and never change the machine policy, covered by tests of the generated command line Platform guard: this code is Windows-only. Put it behind `#[cfg(windows)]` with its tests and imports inside the gated module, and keep parsers and decision logic platform-neutral so they are tested on every OS; otherwise Linux and macOS CI fail with `unused_imports`/`dead_code` under `-D warnings`
 - [x] Add Docker Desktop on Windows (WSL2 backend) to the container runtime abstraction, covered by stub-based tests Platform guard: this code is Windows-only. Put it behind `#[cfg(windows)]` with its tests and imports inside the gated module, and keep parsers and decision logic platform-neutral so they are tested on every OS; otherwise Linux and macOS CI fail with `unused_imports`/`dead_code` under `-D warnings`
 - [x] Add Podman Desktop on Windows, including the interaction with `wsl --update`, covered by stub-based tests Platform guard: this code is Windows-only. Put it behind `#[cfg(windows)]` with its tests and imports inside the gated module, and keep parsers and decision logic platform-neutral so they are tested on every OS; otherwise Linux and macOS CI fail with `unused_imports`/`dead_code` under `-D warnings`
-- [ ] Add a Windows CI job running the unit tests and a smoke test against stub package managers, proposed under `ci-proposals/`
+- [x] Add a Windows CI job running the unit tests and a smoke test against stub package managers, proposed under `ci-proposals/`
 
 ## Milestone 7: Language and Developer Tooling
 
