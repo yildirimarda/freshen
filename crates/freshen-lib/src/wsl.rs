@@ -273,9 +273,9 @@ mod tests {
     };
     use crate::options::RunOptions;
     use crate::process::{CommandSpec, PATH_GUARD};
-    use crate::step::{Detection, Step};
     #[cfg(not(windows))]
     use crate::step::StepId;
+    use crate::step::{Detection, Step};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     /// Creates a stub `wsl` on a temp dir that logs its invocations to
