@@ -2284,6 +2284,8 @@ fn command_exists(program: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::DockerDesktopWindowsRuntime;
     use super::{
         detect_active_runtime, detect_compose_command, live_restore_warning,
         parse_compose_projects, parse_live_restore_enabled,
@@ -2295,8 +2297,6 @@ mod tests {
         PodmanRuntime, RancherDesktopRuntime, StandaloneContainer, COLIMA_START, COLIMA_STOP,
         DOCKER, PS_FORMAT,
     };
-    #[cfg(windows)]
-    use super::DockerDesktopWindowsRuntime;
     use crate::homebrew;
     use crate::options::RunOptions;
     use crate::platform::Platform;
