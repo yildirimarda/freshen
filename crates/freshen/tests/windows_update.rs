@@ -52,10 +52,10 @@ fn run(tools: &StubTools) -> Output {
 }
 
 /// Detection of the PSWindowsUpdate module.
-const WINDOWS_UPDATE_DETECT: &str = "pwsh -NoProfile -Command Get-Module -ListAvailable PSWindowsUpdate | Select-Object -ExpandProperty Name";
+const WINDOWS_UPDATE_DETECT: &str = "pwsh -NoProfile -ExecutionPolicy Bypass -Command Get-Module -ListAvailable PSWindowsUpdate | Select-Object -ExpandProperty Name";
 
 /// The `Get-WindowsUpdate` query.
-const WINDOWS_UPDATE_CHECK: &str = "pwsh -NoProfile -Command Import-Module PSWindowsUpdate; Get-WindowsUpdate | Select-Object Title, KB, Version, RebootRequired | ConvertTo-Json";
+const WINDOWS_UPDATE_CHECK: &str = "pwsh -NoProfile -ExecutionPolicy Bypass -Command Import-Module PSWindowsUpdate; Get-WindowsUpdate | Select-Object Title, KB, Version, RebootRequired | ConvertTo-Json";
 
 /// The PowerShell invocations of the run, without the quotes the Windows `.cmd`
 /// stub logs around an argument that contains spaces.

@@ -715,7 +715,18 @@ impl CommandSpec {
         let program = self.program.to_string_lossy().into_owned();
         #[cfg(windows)]
         let mut command = match crate::executable::resolve(&self.program) {
-            Some(path) => Command::new(path),
+            Some(path) => {
+                if crate::cmd::is_shim(path.to_string_lossy().as_ref()) {
+                    // `.cmd`/`.bat` shims are batch files interpreted by `cmd.exe`;
+                    // `CreateProcess` cannot run them directly, so launch them through
+                    // `cmd.exe /c`. Any remaining arguments are appended below.
+                    let mut command = Command::new("cmd");
+                    command.arg("/C").arg(&path);
+                    command
+                } else {
+                    Command::new(path)
+                }
+            }
             None => {
                 return Err(ProcessError::Spawn {
                     program: program.clone(),
