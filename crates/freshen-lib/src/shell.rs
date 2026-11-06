@@ -51,6 +51,7 @@ pub fn choose(pwsh_exists: bool, powershell_exists: bool) -> Option<PowerShell> 
 #[cfg(windows)]
 pub mod windows {
     use super::{choose, PowerShell};
+    use std::ffi::OsString;
 
     /// Probes whether `program` exists on `PATH`/`PATHEXT`.
     ///
@@ -72,9 +73,32 @@ pub mod windows {
         powershell_with(exists)
     }
 
+    /// Arguments for invoking PowerShell for freshen's own probes and steps:
+    /// `-NoProfile -ExecutionPolicy Bypass [-NonInteractive] -Command <script>`.
+    ///
+    /// `-ExecutionPolicy Bypass` is process-scoped: it applies only to this
+    /// PowerShell invocation and never changes the machine execution policy.
+    /// `-NoProfile` skips the user's profile so freshen's behaviour does not
+    /// depend on it. When `non_interactive` is set, `-NonInteractive` is added
+    /// so a prompt can never block freshen on its closed standard input.
+    #[must_use]
+    pub fn invocation_args(script: &str, non_interactive: bool) -> Vec<OsString> {
+        let mut args = Vec::with_capacity(6);
+        args.push(OsString::from("-NoProfile"));
+        args.push(OsString::from("-ExecutionPolicy"));
+        args.push(OsString::from("Bypass"));
+        if non_interactive {
+            args.push(OsString::from("-NonInteractive"));
+        }
+        args.push(OsString::from("-Command"));
+        args.push(OsString::from(script));
+        args
+    }
+
     #[cfg(test)]
     mod tests {
-        use super::{powershell_with, PowerShell};
+        use super::{invocation_args, powershell_with, PowerShell};
+        use std::ffi::OsStr;
 
         #[test]
         fn prefers_powershell_7_when_it_exists() {
@@ -98,6 +122,66 @@ pub mod windows {
         fn chooses_powershell_7_when_both_exist() {
             let probe = |_: &str| true;
             assert_eq!(powershell_with(probe), Some(PowerShell::Pwsh));
+        }
+
+        #[test]
+        fn invocation_args_uses_a_process_scoped_execution_policy() {
+            let args = invocation_args("Get-Date", false);
+            assert_eq!(
+                args.as_slice(),
+                [
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    "Get-Date",
+                ]
+                .map(OsStr::new)
+                .as_slice()
+            );
+        }
+
+        #[test]
+        fn invocation_args_adds_non_interactive_before_the_command() {
+            let args = invocation_args("Get-Date", true);
+            assert_eq!(
+                args.as_slice(),
+                [
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-NonInteractive",
+                    "-Command",
+                    "Get-Date",
+                ]
+                .map(OsStr::new)
+                .as_slice()
+            );
+        }
+
+        #[test]
+        fn invocation_args_never_changes_the_machine_policy() {
+            let args = invocation_args("anything", false);
+            // The generated invocation never carries a `Set-ExecutionPolicy`
+            // command, and the only `-ExecutionPolicy` value is `Bypass`, which
+            // applies to this process alone and never to the machine.
+            assert!(!args
+                .iter()
+                .any(|arg| arg == OsStr::new("Set-ExecutionPolicy")));
+            // Exactly one `-ExecutionPolicy` flag, set to `Bypass` for this
+            // process alone and never to the machine.
+            let policies: Vec<&OsStr> = args
+                .iter()
+                .zip(args.iter().skip(1))
+                .filter_map(|(key, value)| {
+                    if key == OsStr::new("-ExecutionPolicy") {
+                        Some(value.as_os_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(policies, vec![OsStr::new("Bypass")]);
         }
     }
 }

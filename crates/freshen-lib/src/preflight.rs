@@ -509,11 +509,10 @@ fn parse_windows_battery(output: &str) -> Option<BatteryStatus> {
 fn windows_battery() -> Option<BatteryStatus> {
     let powershell = crate::shell::windows::powershell();
     let mut command = Command::new(powershell.map_or("powershell", |shell| shell.command()));
-    command.args([
-        "-NoProfile",
-        "-Command",
+    command.args(crate::shell::windows::invocation_args(
         "Get-CimInstance Win32_Battery | ForEach-Object { \"$($_.EstimatedChargeRemaining);$($_.BatteryStatus)\" }",
-    ]);
+        false,
+    ));
     crate::locale::with_neutral_locale(&mut command);
     let output = command.output().ok()?;
     if !output.status.success() {
@@ -616,11 +615,10 @@ fn parse_windows_network_cost(output: &str) -> Option<bool> {
 fn windows_metered() -> Option<bool> {
     let powershell = crate::shell::windows::powershell();
     let mut command = Command::new(powershell.map_or("powershell", |shell| shell.command()));
-    command.args([
-        "-NoProfile",
-        "-Command",
+    command.args(crate::shell::windows::invocation_args(
         "Get-NetConnectionProfile | ForEach-Object { $_.NetworkCostType }",
-    ]);
+        false,
+    ));
     crate::locale::with_neutral_locale(&mut command);
     let output = command.output().ok()?;
     if !output.status.success() {
