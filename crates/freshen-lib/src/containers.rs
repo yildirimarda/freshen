@@ -2723,6 +2723,7 @@ mod tests {
         assert!(!runtime.triggers_restart("docker"));
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn docker_desktop_stops_before_casks_and_starts_after_them() {
         let registry = homebrew::register(register_for(
