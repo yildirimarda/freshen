@@ -288,6 +288,9 @@ pub fn detect_active_runtime(probe: &dyn ContainerRuntimeProbe) -> Option<Active
 
 fn kind_from_docker_host(host: &str) -> ContainerRuntimeKind {
     let lower = host.to_ascii_lowercase();
+    if lower.contains("podman_engine") {
+        return ContainerRuntimeKind::PodmanDesktop;
+    }
     if lower.contains("podman") {
         return ContainerRuntimeKind::Podman;
     }
@@ -329,6 +332,8 @@ fn kind_from_context(context: &str) -> Option<ContainerRuntimeKind> {
         Some(ContainerRuntimeKind::DockerDesktop)
     } else if name == "rancher-desktop" || name.starts_with("rancher-") {
         Some(ContainerRuntimeKind::RancherDesktop)
+    } else if name == "podman-desktop" {
+        Some(ContainerRuntimeKind::PodmanDesktop)
     } else if name == "podman" || name.starts_with("podman-") || name == "rootless" {
         Some(ContainerRuntimeKind::Podman)
     } else {
@@ -3459,6 +3464,10 @@ mod tests {
                 "npipe:////./pipe/docker_engine",
                 ContainerRuntimeKind::DockerDesktop,
             ),
+            (
+                "npipe:////./pipe/podman_engine",
+                ContainerRuntimeKind::PodmanDesktop,
+            ),
         ] {
             let probe = FakeProbe::default().with_var("DOCKER_HOST", host);
             let runtime = detected(&probe).unwrap_or_else(|| panic!("{host} was not detected"));
@@ -3478,6 +3487,7 @@ mod tests {
             ("desktop-windows", ContainerRuntimeKind::DockerDesktop),
             ("rancher-desktop", ContainerRuntimeKind::RancherDesktop),
             ("podman-machine-default", ContainerRuntimeKind::Podman),
+            ("podman-desktop", ContainerRuntimeKind::PodmanDesktop),
         ] {
             let probe = FakeProbe::default().with_context(context);
             let runtime = detected(&probe).unwrap_or_else(|| panic!("{context} was not detected"));

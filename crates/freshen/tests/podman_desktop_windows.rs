@@ -77,7 +77,7 @@ fn docker_host_identifies_podman_desktop_on_windows() {
     let output = tools
         .command()
         .env("DOCKER_HOST", "npipe:////./pipe/podman_engine")
-        .args(["--container-runtime", "podman-desktop", "--list-steps"])
+        .args(["--list-steps"])
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
 
@@ -103,7 +103,7 @@ fn docker_context_identifies_podman_desktop_on_windows() {
     let output = tools
         .command()
         .env_remove("DOCKER_HOST")
-        .args(["--container-runtime", "podman-desktop", "--list-steps"])
+        .args(["--list-steps"])
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
 
