@@ -278,7 +278,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 
 - [x] mise: report when a newer Node LTS major exists than the active one (`mise ls-remote node@lts`) without switching automatically, covered by recorded transcripts
 - [x] mise: add opt-in `--bump` flag with a warning that it replaces `lts`/`latest` with a fixed version, covered by tests
-- [ ] mise: reinstall global npm packages listed in `~/.default-npm-packages` after the Node version changed, covered by recorded transcripts
+- [x] mise: reinstall global npm packages listed in `~/.default-npm-packages` after the Node version changed, covered by recorded transcripts
 - [ ] mise: reinstall the Python default packages after the Python version changed, covered by recorded transcripts
 - [ ] mise: reinstall the Ruby default packages after the Ruby version changed, covered by recorded transcripts
 - [ ] uv: run `uv self update` when uv is not installed via a system package manager, covered by recorded transcripts

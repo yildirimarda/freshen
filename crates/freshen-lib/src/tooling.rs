@@ -10,6 +10,10 @@
 //! upgrade already replaced it. `brew list --formula mise` is the same probe
 //! the zsh script uses; when Homebrew itself is missing the self-update runs.
 
+use std::env;
+use std::fs;
+use std::path::Path;
+
 use crate::cleanup;
 use crate::homebrew::BREW;
 use crate::options::RunOptions;
@@ -301,7 +305,17 @@ impl Step for MiseStep {
             }
         }
 
+        let before_node = active_node_version();
+
         self.upgrade_tools(options, &mut failures);
+
+        let after_node = active_node_version();
+
+        if let (Some(before), Some(after)) = (&before_node, &after_node) {
+            if before != after {
+                reinstall_default_npm_packages();
+            }
+        }
 
         let prunable = prunable_tool_versions();
 
@@ -345,6 +359,43 @@ fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
     match failures.into_iter().next() {
         Some(error) => Err(error),
         None => Ok(()),
+    }
+}
+
+/// Reinstalls the global npm packages listed in `~/.default-npm-packages`
+/// into the Node version mise just installed.
+///
+/// The file follows the nvm convention: one package name per line, blank
+/// lines and `#` comments ignored. Best effort: a missing file, a missing
+/// `npm` or a failed install prints a warning and never fails the mise step.
+fn reinstall_default_npm_packages() {
+    let home = env::var("HOME").or_else(|_| env::var("USERPROFILE")).ok();
+    let Some(home) = home else {
+        return;
+    };
+    let path = Path::new(&home).join(".default-npm-packages");
+    let Ok(contents) = fs::read_to_string(&path) else {
+        return;
+    };
+
+    let packages: Vec<&str> = contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect();
+
+    if packages.is_empty() {
+        return;
+    }
+
+    human!("mise: reinstall global npm packages for the new Node version");
+    if let Err(error) = CommandSpec::new("npm")
+        .args(["install", "-g"])
+        .args(packages)
+        .retry_transient_network(NETWORK_RETRIES)
+        .run()
+    {
+        human!("warning: could not reinstall default npm packages: {error}");
     }
 }
 

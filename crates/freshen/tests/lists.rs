@@ -321,10 +321,14 @@ fn the_package_exclude_list_limits_the_mise_tool_upgrade() {
             support::StubOutput::stdout("20.18.0\n"),
             // The self-update (`mise self-update -y`).
             support::StubOutput::new(),
+            // The active version before the upgrade (`mise current node`).
+            support::StubOutput::stdout("20.0.0\n"),
             // The upgrade query (`mise outdated`) when a filter is set.
             support::StubOutput::stdout(outdated),
             // Per-tool upgrade (`mise upgrade node`).
             support::StubOutput::new(),
+            // The active version after the upgrade (`mise current node`).
+            support::StubOutput::stdout("20.0.0\n"),
             // The prune list (`mise ls --prunable --json`).
             support::StubOutput::stdout("{}"),
             // The prune (`mise prune -y`).
