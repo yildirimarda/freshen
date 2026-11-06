@@ -173,9 +173,15 @@ impl MiseStep {
     /// Without a filter every outdated tool is upgraded in one command, which
     /// is what the zsh script does. With a filter each selected tool is
     /// upgraded on its own, so a tool that is not in the lists stays untouched.
+    ///
+    /// With `--bump`, tools requested as `lts` or `latest` are pinned to a
+    /// fixed version instead of staying on a moving track, and a warning is
+    /// printed first.
     fn upgrade_tools(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
+        let bump = options.bump();
         let filter = options.filters().packages();
-        if filter.is_empty() {
+
+        if filter.is_empty() && !bump {
             human!("mise: upgrade (node and other tools)");
             if let Err(error) = CommandSpec::new("mise")
                 .arg("upgrade")
@@ -200,11 +206,10 @@ impl MiseStep {
             }
         };
 
-        let output_str = output.stdout();
-        let tools: Vec<String> = parse_mise_outdated(output_str)
-            .into_iter()
-            .filter(|item| filter.includes(item.name()))
-            .map(|item| item.name().to_owned())
+        let rows = parse_mise_outdated_rows(output.stdout());
+        let tools: Vec<&MiseOutdatedRow> = rows
+            .iter()
+            .filter(|row| filter.includes(row.name.as_str()))
             .collect();
 
         if tools.is_empty() {
@@ -212,14 +217,31 @@ impl MiseStep {
             return;
         }
 
-        for tool in tools {
-            human!("mise: upgrade {tool}");
-            if let Err(error) = CommandSpec::new("mise")
-                .args(["upgrade", &tool])
-                .retry_transient_network(NETWORK_RETRIES)
-                .run()
-            {
-                failures.push(StepError::run_from_process(MISE, &error));
+        if bump {
+            human!("warning: mise --bump replaces lts/latest with a fixed version");
+        }
+
+        for row in tools {
+            let name = row.name.as_str();
+            if bump && is_lts_or_latest(row.requested.as_deref()) {
+                let fixed = row.latest.as_str();
+                human!("mise: install {name}@{fixed}");
+                if let Err(error) = CommandSpec::new("mise")
+                    .args(["install", &format!("{name}@{fixed}")])
+                    .retry_transient_network(NETWORK_RETRIES)
+                    .run()
+                {
+                    failures.push(StepError::run_from_process(MISE, &error));
+                }
+            } else {
+                human!("mise: upgrade {name}");
+                if let Err(error) = CommandSpec::new("mise")
+                    .args(["upgrade", name])
+                    .retry_transient_network(NETWORK_RETRIES)
+                    .run()
+                {
+                    failures.push(StepError::run_from_process(MISE, &error));
+                }
             }
         }
     }
@@ -358,28 +380,53 @@ fn parse_uv_outdated_line(line: &str) -> Option<OutdatedItem> {
     )
 }
 
+/// One row of `mise outdated` output, including the requested version.
+#[derive(Debug, Clone)]
+struct MiseOutdatedRow {
+    name: String,
+    requested: Option<String>,
+    current: Option<String>,
+    latest: String,
+}
+
 /// Parses the table printed by `mise outdated`.
 ///
 /// The columns have been `name|tool|plugin`, `requested`, `current`, `latest`
-/// and (in newer versions) `source`; only name, current and latest matter here.
-/// A header row is recognised by its `requested` column and skipped. Older
-/// mise versions print `MISSING` instead of a version for a tool that is not
-/// installed yet, so that column is treated as unknown.
+/// and (in newer versions) `source`; only name, requested, current and latest
+/// matter here. A header row is recognised by its `requested` column and
+/// skipped. Older mise versions print `MISSING` instead of a version for a
+/// tool that is not installed yet, so that column is treated as unknown.
 fn parse_mise_outdated(output: &str) -> Vec<OutdatedItem> {
-    output
-        .lines()
-        .filter_map(parse_mise_outdated_line)
+    parse_mise_outdated_rows(output)
+        .into_iter()
+        .map(|row| {
+            let mut item = OutdatedItem::new(row.name).with_latest(row.latest);
+            if let Some(current) = row.current {
+                item = item.with_current(current);
+            }
+            item
+        })
         .collect()
 }
 
-fn parse_mise_outdated_line(line: &str) -> Option<OutdatedItem> {
+/// All rows of `mise outdated` output, keeping the requested version so the
+/// `--bump` flag can tell `lts`/`latest` requests apart from pinned ones.
+fn parse_mise_outdated_rows(output: &str) -> Vec<MiseOutdatedRow> {
+    output.lines().filter_map(parse_mise_outdated_row).collect()
+}
+
+fn parse_mise_outdated_row(line: &str) -> Option<MiseOutdatedRow> {
     let mut fields = line.split_whitespace();
     let name = fields.next()?;
-    let requested = fields.next()?;
+    let requested = fields.next().map(str::to_owned);
     let current = fields.next()?;
     let latest = fields.next()?;
 
-    if requested.eq_ignore_ascii_case("requested") || current.eq_ignore_ascii_case("current") {
+    if requested
+        .as_deref()
+        .is_some_and(|r| r.eq_ignore_ascii_case("requested"))
+        || current.eq_ignore_ascii_case("current")
+    {
         return None;
     }
 
@@ -389,12 +436,18 @@ fn parse_mise_outdated_line(line: &str) -> Option<OutdatedItem> {
         return None;
     }
 
-    let item = OutdatedItem::new(name).with_latest(latest);
-    if current.starts_with('[') || current.eq_ignore_ascii_case("missing") {
-        Some(item)
+    let current = if current.starts_with('[') || current.eq_ignore_ascii_case("missing") {
+        None
     } else {
-        Some(item.with_current(current))
-    }
+        Some(current.to_owned())
+    };
+
+    Some(MiseOutdatedRow {
+        name: name.to_owned(),
+        requested,
+        current,
+        latest: latest.to_owned(),
+    })
 }
 
 /// Whether `field` can be the version column of `mise outdated`.
@@ -407,6 +460,12 @@ fn looks_like_version(field: &str) -> bool {
             field.to_ascii_lowercase().as_str(),
             "latest" | "system" | "missing" | "unknown"
         )
+}
+
+/// Whether the tool was requested as `lts` or `latest`, meaning a plain
+/// `mise upgrade` keeps it on a moving track instead of a fixed version.
+fn is_lts_or_latest(requested: Option<&str>) -> bool {
+    requested.is_some_and(|r| r.eq_ignore_ascii_case("lts") || r.eq_ignore_ascii_case("latest"))
 }
 
 fn mise_installed_with_brew() -> bool {
@@ -506,8 +565,9 @@ fn version_key(version: &str) -> (u64, u64, u64) {
 #[cfg(test)]
 mod tests {
     use super::{
-        active_node_version, latest_lts_version, major_version, node_lts_outdated_item,
-        parse_mise_outdated, parse_uv_outdated, register, version_key, MISE, UV,
+        active_node_version, is_lts_or_latest, latest_lts_version, major_version,
+        node_lts_outdated_item, parse_mise_outdated, parse_uv_outdated, register, version_key,
+        MISE, UV,
     };
     use crate::containers;
     use crate::homebrew;
@@ -725,5 +785,16 @@ mod tests {
     #[test]
     fn active_node_version_returns_none_without_mise() {
         assert!(active_node_version().is_none());
+    }
+
+    #[test]
+    fn is_lts_or_latest_detects_moving_tracks() {
+        assert!(is_lts_or_latest(Some("lts")));
+        assert!(is_lts_or_latest(Some("latest")));
+        assert!(is_lts_or_latest(Some("LTS")));
+        assert!(is_lts_or_latest(Some("Latest")));
+        assert!(!is_lts_or_latest(Some("20")));
+        assert!(!is_lts_or_latest(Some("22.12.0")));
+        assert!(!is_lts_or_latest(None));
     }
 }
