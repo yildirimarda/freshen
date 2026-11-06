@@ -1,0 +1,49 @@
+name: windows
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Run freshen's unit tests and a smoke test against stub package managers on
+  # Windows. The smoke test exercises the `.cmd` stubs (choco, winget, scoop,
+  # mise, ...) that the stub harness writes on Windows, proving the Windows
+  # unit and integration tests pass on `windows-latest` instead of only
+  # compiling empty test crates there. No real package manager is touched:
+  # the binary is started with `PATH` pointing at the stub directory only.
+  windows:
+    name: windows (unit tests + stub smoke test)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins the exact channel (with rustfmt + clippy);
+      # the dtolnay/rust-toolchain action reads it from the checkout.
+      - name: Install toolchain (rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          components: rustfmt, clippy
+
+      - name: Rustfmt
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Unit tests
+        run: cargo test --all-features --lib --bins
+
+      # Smoke test: run the stub-based integration tests against canned
+      # `choco`, `winget`, `scoop` and `mise` executables on `PATH`. The
+      # stubs are `.cmd` scripts on Windows, so this also proves the
+      # Windows stub harness works end to end.
+      - name: Stub package manager smoke test
+        run: cargo test --all-features --tests
