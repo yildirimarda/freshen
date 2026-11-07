@@ -186,6 +186,7 @@ fn build_registry(runtime: Option<ContainerRuntimeKind>) -> Registry {
     registry = freshen_lib::cargo_update::register(registry);
     registry = freshen_lib::pnpm::register(registry);
     registry = freshen_lib::yarn::register(registry);
+    registry = freshen_lib::bun::register(registry);
     registry = freshen_lib::go::register(registry);
     registry = freshen_lib::appstore::register(registry);
     registry = freshen_lib::winget::register(registry);

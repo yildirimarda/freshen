@@ -10,6 +10,7 @@ pub mod appstore;
 pub mod apt;
 pub mod aur;
 pub mod bootc;
+pub mod bun;
 pub mod bundle_cleanup_packages;
 pub mod cargo_update;
 pub mod check;
