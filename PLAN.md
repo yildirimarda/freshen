@@ -286,7 +286,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add pipx (`pipx upgrade-all`), skipped when the tool is absent, covered by recorded transcripts
 - [x] Add a report-only `pip list --user --outdated` check that never upgrades anything, covered by recorded transcripts
 - [x] Add rustup (`rustup update`), skipped when the tool is absent, covered by recorded transcripts
-- [ ] Add `cargo install-update -a` when cargo-update is installed, skipped when the tool is absent, covered by recorded transcripts
+- [x] Add `cargo install-update -a` when cargo-update is installed, skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add Go: report outdated binaries installed with `go install` by comparing their module versions (`go list -m -u`), covered by recorded transcripts
 - [ ] Add an opt-in Go update path that reinstalls those binaries without changing the pinned Go toolchain, covered by tests
 - [ ] Add global npm packages (`npm outdated -g --json`, `npm update -g`), skipped when npm is absent or managed by mise, covered by recorded transcripts
