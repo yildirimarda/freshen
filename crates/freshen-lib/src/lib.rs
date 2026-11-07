@@ -48,6 +48,7 @@ pub mod pacman_findings;
 pub mod pip;
 pub mod pipx;
 pub mod platform;
+pub mod pnpm;
 pub mod policy;
 pub mod preflight;
 pub mod process;
