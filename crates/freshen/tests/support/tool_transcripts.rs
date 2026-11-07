@@ -633,6 +633,16 @@ pub fn pipx_transcript() -> Vec<&'static str> {
     pipx_steps().to_vec()
 }
 
+/// Named insertion: the report-only `pip list --user --outdated` check.
+pub fn pip_steps() -> &'static [&'static str] {
+    &["pip list --user --outdated"]
+}
+
+/// Named insertion: full pip transcript (report-only check).
+pub fn pip_transcript() -> Vec<&'static str> {
+    pip_steps().to_vec()
+}
+
 /// Named insertion: probe stub transcript.
 pub fn probe_transcript() -> Vec<&'static str> {
     let mut t = Vec::new();
