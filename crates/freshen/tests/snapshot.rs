@@ -232,6 +232,7 @@ esac"#,
         [
             "uv tool list",
             "uv tool list --outdated",
+            "uv self update",
             "uv tool upgrade --all",
             "uv cache prune"
         ]
