@@ -623,6 +623,16 @@ pub fn nix_collect_garbage_transcript() -> Vec<&'static str> {
     nix_collect_garbage_steps().to_vec()
 }
 
+/// Named insertion: the pipx upgrade-all step.
+pub fn pipx_steps() -> &'static [&'static str] {
+    &["pipx upgrade-all"]
+}
+
+/// Named insertion: full pipx transcript (upgrade-all).
+pub fn pipx_transcript() -> Vec<&'static str> {
+    pipx_steps().to_vec()
+}
+
 /// Named insertion: probe stub transcript.
 pub fn probe_transcript() -> Vec<&'static str> {
     let mut t = Vec::new();
