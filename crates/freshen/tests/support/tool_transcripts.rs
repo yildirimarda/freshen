@@ -653,6 +653,16 @@ pub fn cargo_update_transcript() -> Vec<&'static str> {
     cargo_update_steps().to_vec()
 }
 
+/// Named insertion: the `pnpm update -g` step.
+pub fn pnpm_steps() -> &'static [&'static str] {
+    &["pnpm update -g"]
+}
+
+/// Named insertion: full pnpm transcript (`pnpm update -g`).
+pub fn pnpm_transcript() -> Vec<&'static str> {
+    pnpm_steps().to_vec()
+}
+
 /// Named insertion: the `npm outdated -g --json` check before and after the
 /// `npm update -g` run (the runner re-checks when the before-check reports
 /// outdated packages).
