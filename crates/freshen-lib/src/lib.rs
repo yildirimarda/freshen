@@ -78,6 +78,7 @@ pub mod sudo;
 pub mod system;
 pub mod termux;
 pub mod tooling;
+pub mod volta;
 pub mod warnings;
 pub mod windows_duplicates;
 pub mod windows_update;
