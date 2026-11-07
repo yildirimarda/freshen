@@ -61,13 +61,122 @@ fn uv_upgrades_tools_and_prunes_the_cache() {
 }
 
 #[test]
+fn uv_self_updates_when_not_installed_with_a_system_package_manager() {
+    let tools = StubTools::new(&["uv"]);
+    tools.set_responses(
+        "uv",
+        &uv_responses(&[
+            // The `run` before-check (`uv tool list --outdated`).
+            StubOutput::new(),
+            // The self-update (`uv self update`).
+            StubOutput::new(),
+            // The upgrade (`uv tool upgrade --all`).
+            StubOutput::new(),
+            // The cache prune (`uv cache prune`).
+            StubOutput::new(),
+        ]),
+    );
+
+    let output = run(&tools, "uv");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        support::uv_transcript()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
+    );
+    assert!(
+        stdout(&output).contains("uv: self update"),
+        "output: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn uv_installed_with_brew_is_not_self_updated() {
+    let tools = StubTools::new(&["uv", "brew"]);
+    tools.set_responses("brew", &[StubOutput::new()]);
+    tools.set_responses(
+        "uv",
+        &uv_responses(&[
+            // The `run` before-check (`uv tool list --outdated`).
+            StubOutput::new(),
+            // The upgrade (`uv tool upgrade --all`).
+            StubOutput::new(),
+            // The cache prune (`uv cache prune`).
+            StubOutput::new(),
+        ]),
+    );
+
+    let output = run(&tools, "uv");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        vec![
+            "uv tool list --outdated".to_string(),
+            "brew list --formula uv".to_string(),
+            "uv tool upgrade --all".to_string(),
+            "uv cache prune".to_string(),
+        ]
+    );
+    assert!(
+        !stdout(&output).contains("uv: self update"),
+        "self update must not run when brew owns uv: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn uv_installed_with_dpkg_is_not_self_updated() {
+    let tools = StubTools::new(&["uv", "dpkg"]);
+    tools.set_responses("dpkg", &[StubOutput::new()]);
+    tools.set_responses(
+        "uv",
+        &uv_responses(&[
+            // The `run` before-check (`uv tool list --outdated`).
+            StubOutput::new(),
+            // The upgrade (`uv tool upgrade --all`).
+            StubOutput::new(),
+            // The cache prune (`uv cache prune`).
+            StubOutput::new(),
+        ]),
+    );
+
+    let output = run(&tools, "uv");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        vec![
+            "uv tool list --outdated".to_string(),
+            "dpkg -s uv".to_string(),
+            "uv tool upgrade --all".to_string(),
+            "uv cache prune".to_string(),
+        ]
+    );
+    assert!(
+        !stdout(&output).contains("uv: self update"),
+        "self update must not run when dpkg owns uv: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
 fn a_failing_uv_upgrade_still_prunes_the_cache_and_fails_the_step() {
     let tools = StubTools::new(&["uv"]);
     tools.set_responses(
         "uv",
         &uv_responses(&[
+            // The `run` before-check (`uv tool list --outdated`).
             StubOutput::new(),
+            // The self-update (`uv self update`).
+            StubOutput::new(),
+            // The upgrade (`uv tool upgrade --all`) fails.
             StubOutput::new().with_status(1),
+            // The cache prune still runs.
             StubOutput::new(),
         ]),
     );

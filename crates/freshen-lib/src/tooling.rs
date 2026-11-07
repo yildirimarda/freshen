@@ -2,9 +2,12 @@
 //!
 //! The zsh implementation updates uv's installed tools and prunes its cache,
 //! then self-updates mise unless Homebrew owns it, upgrades every mise-managed
-//! tool and prunes unused versions. Both blocks keep going after a failed
-//! command and record the failure at the end, which is what the two steps here
-//! do: every command runs, and the step reports the first failure.
+//! tool and prunes unused versions. The uv block also self-updates uv itself
+//! unless a system package manager owns the uv installation, so the package
+//! manager's own upgrade keeps uv current instead of `uv self update` fighting
+//! it. Both blocks keep going after a failed command and record the failure at
+//! the end, which is what the two steps here do: every command runs, and the
+//! step reports the first failure.
 //!
 //! mise is skipped when it is installed through Homebrew because the formula
 //! upgrade already replaced it. `brew list --formula mise` is the same probe
@@ -132,6 +135,17 @@ impl Step for UvStep {
 
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
         let mut failures = Vec::new();
+
+        if !uv_installed_with_system_package_manager() {
+            human!("uv: self update");
+            if let Err(error) = CommandSpec::new("uv")
+                .args(["self", "update"])
+                .retry_transient_network(NETWORK_RETRIES)
+                .run()
+            {
+                human!("warning: uv self update skipped/failed: {error}");
+            }
+        }
 
         self.upgrade_tools(options, &mut failures);
 
@@ -665,6 +679,72 @@ fn mise_installed_with_brew() -> bool {
             .args(["list", "--formula", "mise"])
             .run()
             .is_ok()
+}
+
+/// Whether uv is owned by a system package manager, in which case that
+/// manager's own upgrade keeps uv current and `uv self update` is skipped so
+/// the two do not fight over the uv installation. A missing probe command is
+/// treated as "that manager is not involved", so only managers actually
+/// present on `PATH` are consulted.
+fn uv_installed_with_system_package_manager() -> bool {
+    uv_installed_with_brew()
+        || uv_installed_with_dpkg()
+        || uv_installed_with_dnf()
+        || uv_installed_with_pacman()
+        || uv_installed_with_winget()
+        || uv_installed_with_choco()
+        || uv_installed_with_scoop()
+}
+
+/// Whether Homebrew owns the uv installation (`brew list --formula uv`).
+fn uv_installed_with_brew() -> bool {
+    command_exists("brew")
+        && CommandSpec::new("brew")
+            .args(["list", "--formula", "uv"])
+            .run()
+            .is_ok()
+}
+
+/// Whether dpkg (and therefore apt on Debian/Ubuntu) owns the uv installation.
+fn uv_installed_with_dpkg() -> bool {
+    command_exists("dpkg") && CommandSpec::new("dpkg").args(["-s", "uv"]).run().is_ok()
+}
+
+/// Whether dnf owns the uv installation.
+fn uv_installed_with_dnf() -> bool {
+    command_exists("dnf")
+        && CommandSpec::new("dnf")
+            .args(["list", "installed", "uv"])
+            .run()
+            .is_ok()
+}
+
+/// Whether pacman owns the uv installation.
+fn uv_installed_with_pacman() -> bool {
+    command_exists("pacman") && CommandSpec::new("pacman").args(["-Q", "uv"]).run().is_ok()
+}
+
+/// Whether winget owns the uv installation.
+fn uv_installed_with_winget() -> bool {
+    command_exists("winget")
+        && CommandSpec::new("winget")
+            .args(["list", "uv"])
+            .run()
+            .is_ok()
+}
+
+/// Whether Chocolatey owns the uv installation.
+fn uv_installed_with_choco() -> bool {
+    command_exists("choco")
+        && CommandSpec::new("choco")
+            .args(["list", "--local-only", "uv"])
+            .run()
+            .is_ok()
+}
+
+/// Whether Scoop owns the uv installation.
+fn uv_installed_with_scoop() -> bool {
+    command_exists("scoop") && CommandSpec::new("scoop").args(["list", "uv"]).run().is_ok()
 }
 
 fn detect_tool(tool: &str) -> Detection {
