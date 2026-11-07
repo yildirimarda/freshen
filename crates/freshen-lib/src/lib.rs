@@ -41,6 +41,7 @@ pub mod macos_updates;
 pub mod microsoft_store;
 mod network;
 pub mod nix;
+pub mod nvm;
 pub mod options;
 pub mod output;
 pub mod package_manager;
