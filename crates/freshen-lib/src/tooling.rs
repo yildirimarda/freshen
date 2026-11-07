@@ -311,12 +311,22 @@ impl Step for MiseStep {
         } else {
             None
         };
+        let before_ruby = if ruby_defaults_configured() {
+            active_ruby_version()
+        } else {
+            None
+        };
 
         self.upgrade_tools(options, &mut failures);
 
         let after_node = active_node_version();
         let after_python = if python_defaults_configured() {
             active_python_version()
+        } else {
+            None
+        };
+        let after_ruby = if ruby_defaults_configured() {
+            active_ruby_version()
         } else {
             None
         };
@@ -330,6 +340,12 @@ impl Step for MiseStep {
         if let (Some(before), Some(after)) = (&before_python, &after_python) {
             if before != after {
                 reinstall_default_python_packages();
+            }
+        }
+
+        if let (Some(before), Some(after)) = (&before_ruby, &after_ruby) {
+            if before != after {
+                reinstall_default_ruby_packages();
             }
         }
 
@@ -460,6 +476,67 @@ fn reinstall_default_python_packages() {
     {
         human!("warning: could not reinstall default python packages: {error}");
     }
+}
+
+/// Whether `~/.default-ruby-packages` exists, meaning there are default
+/// packages that might need reinstalling after a Ruby version change.
+fn ruby_defaults_configured() -> bool {
+    let home = env::var("HOME").or_else(|_| env::var("USERPROFILE")).ok();
+    let Some(home) = home else {
+        return false;
+    };
+    fs::metadata(Path::new(&home).join(".default-ruby-packages")).is_ok()
+}
+
+/// Reinstalls the Ruby packages listed in `~/.default-ruby-packages`
+/// into the Ruby version mise just installed.
+///
+/// The file follows the nvm convention: one package name per line, blank
+/// lines and `#` comments ignored. Best effort: a missing file, a missing
+/// `gem` or a failed install prints a warning and never fails the mise step.
+fn reinstall_default_ruby_packages() {
+    let home = env::var("HOME").or_else(|_| env::var("USERPROFILE")).ok();
+    let Some(home) = home else {
+        return;
+    };
+    let path = Path::new(&home).join(".default-ruby-packages");
+    let Ok(contents) = fs::read_to_string(&path) else {
+        return;
+    };
+
+    let packages: Vec<&str> = contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect();
+
+    if packages.is_empty() {
+        return;
+    }
+
+    human!("mise: reinstall default ruby packages for the new Ruby version");
+    if let Err(error) = CommandSpec::new("gem")
+        .args(["install"])
+        .args(packages)
+        .retry_transient_network(NETWORK_RETRIES)
+        .run()
+    {
+        human!("warning: could not reinstall default ruby packages: {error}");
+    }
+}
+
+/// The active Ruby version from `mise current ruby`, when ruby is installed.
+#[must_use]
+fn active_ruby_version() -> Option<String> {
+    let Ok(output) = CommandSpec::new("mise")
+        .args(["current", "ruby"])
+        .neutral_locale()
+        .run()
+    else {
+        return None;
+    };
+    let version = output.stdout().trim().to_owned();
+    (!version.is_empty()).then_some(version)
 }
 
 /// Parses `uv tool list --outdated` output.
