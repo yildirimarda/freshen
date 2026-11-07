@@ -663,6 +663,16 @@ pub fn pnpm_transcript() -> Vec<&'static str> {
     pnpm_steps().to_vec()
 }
 
+/// Named insertion: the `yarn global upgrade` step.
+pub fn yarn_steps() -> &'static [&'static str] {
+    &["yarn global upgrade"]
+}
+
+/// Named insertion: full yarn transcript (`yarn global upgrade`).
+pub fn yarn_transcript() -> Vec<&'static str> {
+    yarn_steps().to_vec()
+}
+
 /// Named insertion: the `npm outdated -g --json` check before and after the
 /// `npm update -g` run (the runner re-checks when the before-check reports
 /// outdated packages).

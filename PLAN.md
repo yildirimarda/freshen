@@ -291,7 +291,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add an opt-in Go update path that reinstalls those binaries without changing the pinned Go toolchain, covered by tests
 - [x] Add global npm packages (`npm outdated -g --json`, `npm update -g`), skipped when npm is absent or managed by mise, covered by recorded transcripts
 - [x] Add global pnpm packages (`pnpm update -g`), skipped when the tool is absent, covered by recorded transcripts
-- [ ] Add global yarn packages (`yarn global upgrade`, classic yarn only), skipped when the tool is absent, covered by recorded transcripts
+- [x] Add global yarn packages (`yarn global upgrade`, classic yarn only), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add global bun packages (`bun update -g`), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add asdf plugin updates (`asdf plugin update --all`), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add a report of asdf tools with newer versions without changing the versions pinned in `.tool-versions`, covered by recorded transcripts
