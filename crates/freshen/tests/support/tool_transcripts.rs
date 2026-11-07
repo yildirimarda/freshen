@@ -683,6 +683,16 @@ pub fn bun_transcript() -> Vec<&'static str> {
     bun_steps().to_vec()
 }
 
+/// Named insertion: the `asdf plugin update --all` step.
+pub fn asdf_steps() -> &'static [&'static str] {
+    &["asdf plugin update --all"]
+}
+
+/// Named insertion: full asdf transcript (`asdf plugin update --all`).
+pub fn asdf_transcript() -> Vec<&'static str> {
+    asdf_steps().to_vec()
+}
+
 /// Named insertion: the `npm outdated -g --json` check before and after the
 /// `npm update -g` run (the runner re-checks when the before-check reports
 /// outdated packages).

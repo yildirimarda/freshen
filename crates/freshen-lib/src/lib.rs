@@ -8,6 +8,7 @@ pub mod apk;
 pub mod apps;
 pub mod appstore;
 pub mod apt;
+pub mod asdf;
 pub mod aur;
 pub mod bootc;
 pub mod bun;
