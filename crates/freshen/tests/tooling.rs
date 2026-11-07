@@ -1030,3 +1030,174 @@ fn a_failing_npm_reinstall_is_only_a_warning() {
         tools.step_calls()
     );
 }
+
+/// Runs the mise step with a Python version that goes from 3.11.0 to `after`,
+/// probing both the Node and Python versions (the run always probes Node).
+///
+/// `~/.default-python-packages` lives in the stub home directory, so no test
+/// touches the real one.
+fn run_python_upgrade(tools: &StubTools, after: &str) -> Output {
+    tools.set_responses(
+        "mise",
+        &mise_responses(&[
+            // The `check()` query (`mise outdated`).
+            StubOutput::new(),
+            // The active version for the node LTS check (`mise current node`).
+            StubOutput::stdout("20.0.0\n"),
+            // The available LTS versions (`mise ls-remote node@lts`).
+            StubOutput::new(),
+            // The self-update (`mise self-update -y`, brew is not stubbed).
+            StubOutput::new(),
+            // The active Node version before the upgrade (`mise current node`).
+            StubOutput::stdout("20.0.0\n"),
+            // The active Python version before the upgrade (`mise current python`).
+            StubOutput::stdout("3.11.0\n"),
+            // The upgrade (`mise upgrade`).
+            StubOutput::new(),
+            // The active Node version after the upgrade (`mise current node`).
+            StubOutput::stdout("20.0.0\n"),
+            // The active Python version after the upgrade (`mise current python`).
+            StubOutput::stdout(format!("{after}\n")),
+            // The prune list (`mise ls --prunable --json`).
+            StubOutput::stdout("{}"),
+            // The prune (`mise prune -y`).
+            StubOutput::new(),
+        ]),
+    );
+    run(tools, "mise")
+}
+
+/// Runs the mise step when `~/.default-python-packages` does not exist, so no
+/// Python version is probed at all.
+fn run_python_upgrade_without_defaults(tools: &StubTools, _after: &str) -> Output {
+    tools.set_responses(
+        "mise",
+        &mise_responses(&[
+            // The `check()` query (`mise outdated`).
+            StubOutput::new(),
+            // The active version for the node LTS check (`mise current node`).
+            StubOutput::stdout("20.0.0\n"),
+            // The available LTS versions (`mise ls-remote node@lts`).
+            StubOutput::new(),
+            // The self-update (`mise self-update -y`, brew is not stubbed).
+            StubOutput::new(),
+            // The active Node version before the upgrade (`mise current node`).
+            StubOutput::stdout("20.0.0\n"),
+            // The upgrade (`mise upgrade`).
+            StubOutput::new(),
+            // The active Node version after the upgrade (`mise current node`).
+            StubOutput::stdout("20.0.0\n"),
+            // The prune list (`mise ls --prunable --json`).
+            StubOutput::stdout("{}"),
+            // The prune (`mise prune -y`).
+            StubOutput::new(),
+        ]),
+    );
+    run(tools, "mise")
+}
+
+fn write_default_python_packages(tools: &StubTools, contents: &str) {
+    let path = tools.home().join(".default-python-packages");
+    std::fs::write(&path, contents)
+        .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+}
+
+fn pip_calls(tools: &StubTools) -> Vec<String> {
+    tools
+        .step_calls()
+        .into_iter()
+        .filter(|call| call.starts_with("pip"))
+        .collect()
+}
+
+#[test]
+fn a_python_version_change_reinstalls_the_default_python_packages() {
+    let tools = StubTools::new(&["mise", "pip"]);
+    write_default_python_packages(&tools, "# default python\ntypescript-stubs\n\n  black  \n");
+
+    let output = run_python_upgrade(&tools, "3.12.0");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        vec![
+            "mise outdated",
+            "mise current node",
+            "mise ls-remote node@lts",
+            "mise self-update -y",
+            "mise current node",
+            "mise current python",
+            "mise upgrade",
+            "mise current node",
+            "mise current python",
+            "pip install typescript-stubs black",
+            "mise ls --prunable --json",
+            "mise prune -y",
+        ]
+    );
+}
+
+#[test]
+fn an_unchanged_python_version_does_not_reinstall_the_default_python_packages() {
+    let tools = StubTools::new(&["mise", "pip"]);
+    write_default_python_packages(&tools, "black\n");
+
+    let output = run_python_upgrade(&tools, "3.11.0");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        pip_calls(&tools).is_empty(),
+        "calls: {:?}",
+        tools.step_calls()
+    );
+}
+
+#[test]
+fn a_missing_default_python_packages_file_is_not_an_error() {
+    let tools = StubTools::new(&["mise", "pip"]);
+
+    let output = run_python_upgrade_without_defaults(&tools, "3.12.0");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        pip_calls(&tools).is_empty(),
+        "calls: {:?}",
+        tools.step_calls()
+    );
+}
+
+#[test]
+fn a_default_python_packages_file_with_only_comments_installs_nothing() {
+    let tools = StubTools::new(&["mise", "pip"]);
+    write_default_python_packages(&tools, "# nothing yet\n\n   \n");
+
+    let output = run_python_upgrade(&tools, "3.12.0");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        pip_calls(&tools).is_empty(),
+        "calls: {:?}",
+        tools.step_calls()
+    );
+}
+
+#[test]
+fn a_failing_pip_reinstall_is_only_a_warning() {
+    let tools = StubTools::new(&["mise", "pip"]);
+    write_default_python_packages(&tools, "black\n");
+    tools.set_responses("pip", &[StubOutput::new().with_status(1)]);
+
+    let output = run_python_upgrade(&tools, "3.12.0");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("warning: could not reinstall default python packages"),
+        "stdout: {}",
+        stdout(&output)
+    );
+    assert!(
+        tools.step_calls().contains(&"mise prune -y".to_owned()),
+        "the prune must still run: {:?}",
+        tools.step_calls()
+    );
+}
