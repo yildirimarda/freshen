@@ -643,6 +643,16 @@ pub fn rustup_transcript() -> Vec<&'static str> {
     rustup_steps().to_vec()
 }
 
+/// Named insertion: the `cargo install-update -a` step.
+pub fn cargo_update_steps() -> &'static [&'static str] {
+    &["cargo install-update -a"]
+}
+
+/// Named insertion: full cargo-update transcript (`cargo install-update -a`).
+pub fn cargo_update_transcript() -> Vec<&'static str> {
+    cargo_update_steps().to_vec()
+}
+
 /// Named insertion: the report-only `pip list --user --outdated` check.
 pub fn pip_steps() -> &'static [&'static str] {
     &["pip list --user --outdated"]
