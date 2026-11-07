@@ -231,6 +231,7 @@ pub struct RunOptions {
     restart_services: bool,
     restart_apps: bool,
     bump: bool,
+    go_update: bool,
 }
 
 impl RunOptions {
@@ -420,6 +421,15 @@ impl RunOptions {
         self
     }
 
+    /// Sets `--reinstall-go`: reinstall outdated `go install` binaries instead
+    /// of only reporting them. Without the flag the Go step is check-only and
+    /// never changes the pinned Go toolchain.
+    #[must_use]
+    pub fn with_go_update(mut self, install: bool) -> Self {
+        self.go_update = install;
+        self
+    }
+
     /// Returns `true` when `--dry-run` is set.
     #[must_use]
     pub fn is_dry_run(&self) -> bool {
@@ -595,6 +605,13 @@ impl RunOptions {
         self.bump
     }
 
+    /// Returns `true` when `--reinstall-go` asks to reinstall outdated `go
+    /// install` binaries.
+    #[must_use]
+    pub fn go_update(&self) -> bool {
+        self.go_update
+    }
+
     /// Builds the ordered list of steps this run should execute on `platform`.
     ///
     /// Unknown ids in either flag are an error, and an `--only` id that is not
@@ -715,6 +732,7 @@ mod tests {
         assert_eq!(options.wsl_distro(), None);
         assert!(!options.restart_services());
         assert!(!options.bump());
+        assert!(!options.go_update());
         assert!(options.selection().is_empty());
         assert_eq!(options.step_timeout(), None);
         assert_eq!(options.global_timeout(), None);
@@ -741,6 +759,7 @@ mod tests {
             .with_install_macos_updates(true)
             .with_install_wsl_updates(true)
             .with_bump(true)
+            .with_go_update(true)
             .with_step_timeout(Some(std::time::Duration::from_secs(60)))
             .with_global_timeout(Some(std::time::Duration::from_secs(600)))
             .with_snapshot_retention(4)
@@ -753,6 +772,7 @@ mod tests {
         assert!(options.install_macos_updates());
         assert!(options.install_wsl_updates());
         assert!(options.bump());
+        assert!(options.go_update());
         assert_eq!(options.snapshot_retention(), 4);
         assert_eq!(options.jobs(), 3);
         assert_eq!(

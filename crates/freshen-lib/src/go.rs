@@ -6,10 +6,13 @@
 //! requires a module context (a `go.mod` in the current directory), which is
 //! where the binaries installed with `go install` are tracked.
 //!
-//! The step is skipped entirely when `go` is absent, so it is safe to register
-//! on every machine. Go installs user-level binaries, so it must never run as
-//! root.
+//! Reinstalling is opt-in: `--reinstall-go` runs `go install <module>@<latest>`
+//! for each outdated binary. Without the flag the step only reports outdated
+//! binaries and never touches the pinned Go toolchain. The step is skipped
+//! entirely when `go` is absent, so it is safe to register on every machine.
+//! Go installs user-level binaries, so it must never run as root.
 
+use crate::options::RunOptions;
 use crate::output::human;
 use crate::platform::Platform;
 use crate::process::{CommandSpec, NETWORK_RETRIES};
@@ -67,6 +70,12 @@ impl GoStep {
             }
         }
     }
+
+    /// Whether the opt-in flag that permits reinstalling outdated binaries is
+    /// set.
+    fn update_enabled(options: &RunOptions) -> bool {
+        options.go_update()
+    }
 }
 
 impl Step for GoStep {
@@ -86,7 +95,18 @@ impl Step for GoStep {
         self.check_modules()
     }
 
+    /// Reinstalls outdated binaries only when `--reinstall-go` is given.
+    /// Without the flag the step reports what is outdated and changes nothing,
+    /// so the pinned Go toolchain is never touched.
     fn run(&self) -> Result<(), StepError> {
+        self.run_with_options(&RunOptions::new())
+    }
+
+    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
+        if !Self::update_enabled(options) {
+            human!("go: outdated binaries available; nothing reinstalled (use --reinstall-go)");
+            return Ok(());
+        }
         let mut failures = Vec::new();
         self.upgrade(&mut failures);
         finish(failures)
