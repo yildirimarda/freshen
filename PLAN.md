@@ -282,7 +282,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] mise: reinstall the Python default packages after the Python version changed, covered by recorded transcripts
 - [x] mise: reinstall the Ruby default packages after the Ruby version changed, covered by recorded transcripts
 - [x] uv: run `uv self update` when uv is not installed via a system package manager, covered by recorded transcripts
-- [ ] uv: run `uv python upgrade` for managed interpreters, covered by recorded transcripts
+- [x] uv: run `uv python upgrade` for managed interpreters, covered by recorded transcripts
 - [ ] Add pipx (`pipx upgrade-all`), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add a report-only `pip list --user --outdated` check that never upgrades anything, covered by recorded transcripts
 - [ ] Add rustup (`rustup update`), skipped when the tool is absent, covered by recorded transcripts
