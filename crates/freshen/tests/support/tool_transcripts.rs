@@ -673,6 +673,16 @@ pub fn yarn_transcript() -> Vec<&'static str> {
     yarn_steps().to_vec()
 }
 
+/// Named insertion: the `bun update -g` step.
+pub fn bun_steps() -> &'static [&'static str] {
+    &["bun update -g"]
+}
+
+/// Named insertion: full bun transcript (`bun update -g`).
+pub fn bun_transcript() -> Vec<&'static str> {
+    bun_steps().to_vec()
+}
+
 /// Named insertion: the `npm outdated -g --json` check before and after the
 /// `npm update -g` run (the runner re-checks when the before-check reports
 /// outdated packages).
