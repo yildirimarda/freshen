@@ -33,13 +33,15 @@ use crate::warnings::{prunable_tool_versions, warn_about_stale_tool_processes};
 pub const UV: StepId = "uv";
 /// mise itself and every tool it manages.
 pub const MISE: StepId = "mise";
+/// Global npm packages.
+pub const NPM: StepId = "npm";
 
 const TOOLING_PLATFORMS: [Platform; 3] = [Platform::Macos, Platform::Linux, Platform::Windows];
 
-/// Registers the uv and mise steps, after the Homebrew and container steps.
+/// Registers the uv, mise and npm steps, after the Homebrew and container steps.
 #[must_use]
 pub fn register(registry: Registry) -> Registry {
-    registry.with(UvStep).with(MiseStep)
+    registry.with(UvStep).with(MiseStep).with(NpmStep)
 }
 
 struct UvStep;
@@ -420,6 +422,65 @@ impl Step for MiseStep {
     }
 }
 
+struct NpmStep;
+
+impl NpmStep {
+    /// Reports the global packages `npm outdated -g --json` lists as outdated.
+    fn check_packages(&self) -> Result<CheckReport, StepError> {
+        let output = CommandSpec::new("npm")
+            .args(["outdated", "-g", "--json"])
+            .neutral_locale()
+            .retry_transient_network(NETWORK_RETRIES)
+            .run()
+            .map_err(|error| StepError::check_from_process(NPM, &error))?;
+        Ok(parse_npm_outdated(output.stdout()))
+    }
+
+    /// Upgrades every outdated global package with `npm update -g`.
+    fn update_packages(&self, failures: &mut Vec<StepError>) {
+        human!("npm: update -g");
+        if let Err(error) = CommandSpec::new("npm")
+            .args(["update", "-g"])
+            .retry_transient_network(NETWORK_RETRIES)
+            .run()
+        {
+            failures.push(StepError::run_from_process(NPM, &error));
+        }
+    }
+}
+
+impl Step for NpmStep {
+    fn id(&self) -> StepId {
+        NPM
+    }
+
+    fn display_name(&self) -> &str {
+        "npm"
+    }
+
+    fn detect(&self) -> Result<Detection, StepError> {
+        Ok(detect_npm())
+    }
+
+    fn check(&self) -> Result<CheckReport, StepError> {
+        self.check_packages()
+    }
+
+    fn run(&self) -> Result<(), StepError> {
+        let mut failures = Vec::new();
+        self.update_packages(&mut failures);
+        finish(failures)
+    }
+
+    fn platforms(&self) -> &'static [Platform] {
+        &TOOLING_PLATFORMS
+    }
+
+    fn is_user_level(&self) -> bool {
+        true
+    }
+}
+
 fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
     match failures.into_iter().next() {
         Some(error) => Err(error),
@@ -778,6 +839,55 @@ fn command_exists(program: &str) -> bool {
     crate::executable::command_exists(program)
 }
 
+/// Whether `npm` is installed and not managed by mise.
+///
+/// npm is skipped when it is absent, and when mise manages Node: in that case
+/// npm ships with Node and `mise upgrade` keeps it current, so the standalone
+/// npm step is redundant.
+fn detect_npm() -> Detection {
+    if !command_exists("npm") {
+        return Detection::NotInstalled;
+    }
+    if command_exists("mise") && active_node_version().is_some_and(|version| !version.is_empty()) {
+        return Detection::NotInstalled;
+    }
+    Detection::Installed
+}
+
+/// Parses the JSON object `npm outdated -g --json` prints.
+///
+/// Every entry names an outdated global package, with its `current` and
+/// `latest` versions. A package whose current version already equals its latest
+/// is not outdated.
+fn parse_npm_outdated(stdout: &str) -> CheckReport {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(stdout) else {
+        return CheckReport::up_to_date();
+    };
+    let Some(object) = value.as_object() else {
+        return CheckReport::up_to_date();
+    };
+    let mut items = Vec::new();
+    for (name, info) in object {
+        let Some(info) = info.as_object() else {
+            continue;
+        };
+        let current = info.get("current").and_then(|value| value.as_str());
+        let latest = info.get("latest").and_then(|value| value.as_str());
+        let Some(latest) = latest else {
+            continue;
+        };
+        if current != Some(latest) {
+            let mut item = OutdatedItem::new(name);
+            if let Some(current) = current {
+                item = item.with_current(current);
+            }
+            item = item.with_latest(latest);
+            items.push(item);
+        }
+    }
+    CheckReport::from_items(items)
+}
+
 /// Whether a newer Node LTS major exists than the active one, without
 /// switching to it.
 ///
@@ -870,8 +980,8 @@ fn version_key(version: &str) -> (u64, u64, u64) {
 mod tests {
     use super::{
         active_node_version, is_lts_or_latest, latest_lts_version, major_version,
-        node_lts_outdated_item, parse_mise_outdated, parse_uv_outdated, register, version_key,
-        MISE, UV,
+        node_lts_outdated_item, parse_mise_outdated, parse_npm_outdated, parse_uv_outdated,
+        register, version_key, MISE, NPM, UV,
     };
     use crate::containers;
     use crate::homebrew;
@@ -896,7 +1006,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_runs_uv_and_mise_last() {
+    fn registry_runs_uv_mise_and_npm_last() {
         assert_eq!(
             ordered_ids(Platform::Macos),
             [
@@ -915,6 +1025,7 @@ mod tests {
                 "docker",
                 "uv",
                 "mise",
+                "npm",
             ]
         );
         assert_eq!(
@@ -934,13 +1045,26 @@ mod tests {
                 "docker",
                 "uv",
                 "mise",
+                "npm",
             ]
         );
         assert_eq!(
             ordered_ids(Platform::Windows),
-            ["uv", "mise"],
+            ["uv", "mise", "npm"],
             "Homebrew and container steps do not run on Windows"
         );
+    }
+
+    #[test]
+    fn uv_mise_and_npm_run_on_every_supported_platform() {
+        let registry = register(Registry::new());
+        for id in [UV, MISE, NPM] {
+            let step = registry
+                .steps()
+                .find(|step| step.id() == id)
+                .unwrap_or_else(|| panic!("{id} is not registered"));
+            assert_eq!(step.platforms(), Platform::ALL.as_slice(), "{id}");
+        }
     }
 
     #[test]
@@ -957,18 +1081,6 @@ mod tests {
 
         assert_eq!(prerequisite_ids(UV), ["brew"]);
         assert_eq!(prerequisite_ids(MISE), ["brew"]);
-    }
-
-    #[test]
-    fn uv_and_mise_run_on_every_supported_platform() {
-        let registry = register(Registry::new());
-        for id in [UV, MISE] {
-            let step = registry
-                .steps()
-                .find(|step| step.id() == id)
-                .unwrap_or_else(|| panic!("{id} is not registered"));
-            assert_eq!(step.platforms(), Platform::ALL.as_slice(), "{id}");
-        }
     }
 
     #[test]
@@ -1100,5 +1212,62 @@ mod tests {
         assert!(!is_lts_or_latest(Some("20")));
         assert!(!is_lts_or_latest(Some("22.12.0")));
         assert!(!is_lts_or_latest(None));
+    }
+
+    #[test]
+    fn parse_npm_outdated_reports_outdated_packages() {
+        let report = parse_npm_outdated(
+            "{\
+            \n  \"typescript\": {\
+            \n    \"current\": \"5.4.0\",\
+            \n    \"wanted\": \"5.5.0\",\
+            \n    \"latest\": \"5.5.0\"\
+            \n  },\
+            \n  \"left-pad\": {\
+            \n    \"current\": \"1.0.0\",\
+            \n    \"latest\": \"2.0.0\"\
+            \n  }\
+            \n}",
+        );
+
+        assert!(!report.is_up_to_date());
+        assert_eq!(report.pending(), 2);
+        let by_name = |name: &str| {
+            report
+                .items()
+                .iter()
+                .find(|item| item.name() == name)
+                .unwrap_or_else(|| panic!("{name} is not reported"))
+        };
+        let typescript = by_name("typescript");
+        assert_eq!(typescript.current(), Some("5.4.0"));
+        assert_eq!(typescript.latest(), Some("5.5.0"));
+        let left_pad = by_name("left-pad");
+        assert_eq!(left_pad.current(), Some("1.0.0"));
+        assert_eq!(left_pad.latest(), Some("2.0.0"));
+    }
+
+    #[test]
+    fn parse_npm_outdated_ignores_packages_that_are_current() {
+        let report = parse_npm_outdated(
+            "{\
+            \n  \"current-pkg\": {\
+            \n    \"current\": \"1.0.0\",\
+            \n    \"latest\": \"1.0.0\"\
+            \n  },\
+            \n  \"no-latest\": {\
+            \n    \"current\": \"1.0.0\"\
+            \n  }\
+            \n}",
+        );
+
+        assert!(report.is_up_to_date());
+        assert_eq!(report.pending(), 0);
+    }
+
+    #[test]
+    fn parse_npm_outdated_treats_empty_output_as_up_to_date() {
+        assert!(parse_npm_outdated("{}").is_up_to_date());
+        assert!(parse_npm_outdated("not json at all").is_up_to_date());
     }
 }

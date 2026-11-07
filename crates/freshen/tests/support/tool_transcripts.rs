@@ -653,6 +653,32 @@ pub fn cargo_update_transcript() -> Vec<&'static str> {
     cargo_update_steps().to_vec()
 }
 
+/// Named insertion: the `npm outdated -g --json` check before and after the
+/// `npm update -g` run (the runner re-checks when the before-check reports
+/// outdated packages).
+pub fn npm_steps() -> &'static [&'static str] {
+    &[
+        "npm outdated -g --json",
+        "npm update -g",
+        "npm outdated -g --json",
+    ]
+}
+
+/// Named insertion: full npm transcript (check, update, re-check).
+pub fn npm_transcript() -> Vec<&'static str> {
+    npm_steps().to_vec()
+}
+
+/// Named insertion: the up-to-date `npm outdated -g --json` check.
+pub fn npm_up_to_date_steps() -> &'static [&'static str] {
+    &["npm outdated -g --json"]
+}
+
+/// Named insertion: full npm up-to-date transcript (a single check).
+pub fn npm_up_to_date_transcript() -> Vec<&'static str> {
+    npm_up_to_date_steps().to_vec()
+}
+
 /// Named insertion: the `go list -m -u` check step.
 pub fn go_steps() -> &'static [&'static str] {
     &["go list -m -u"]

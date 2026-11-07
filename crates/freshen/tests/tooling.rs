@@ -1497,3 +1497,137 @@ fn a_failing_gem_reinstall_is_only_a_warning() {
         tools.step_calls()
     );
 }
+
+const NPM_OUTDATED: &str = "{\
+  \"typescript\": {\
+    \"current\": \"5.4.0\",\
+    \"wanted\": \"5.5.0\",\
+    \"latest\": \"5.5.0\",\
+    \"dependent\": \"global\",\
+    \"location\": \"/usr/lib/node_modules/typescript\"\
+  },\
+  \"left-pad\": {\
+    \"current\": \"1.0.0\",\
+    \"wanted\": \"2.0.0\",\
+    \"latest\": \"2.0.0\",\
+    \"dependent\": \"global\",\
+    \"location\": \"/usr/lib/node_modules/left-pad\"\
+  }\
+}";
+
+const NPM_UP_TO_DATE: &str = "{}";
+
+#[test]
+fn npm_updates_global_packages() {
+    let tools = StubTools::new(&["npm"]);
+    tools.set_responses(
+        "npm",
+        &[
+            // The check-before query (`npm outdated -g --json`).
+            StubOutput::stdout(NPM_OUTDATED),
+            // The upgrade (`npm update -g`).
+            StubOutput::new(),
+            // The check-after query (`npm outdated -g --json`).
+            StubOutput::stdout(NPM_UP_TO_DATE),
+        ],
+    );
+
+    let output = run(&tools, "npm");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        vec![
+            "npm outdated -g --json".to_string(),
+            "npm update -g".to_string(),
+            "npm outdated -g --json".to_string(),
+        ]
+    );
+    let text = stdout(&output);
+    assert!(text.contains("npm:"), "output: {text}");
+    assert!(text.contains("typescript 5.4.0 -> 5.5.0"), "output: {text}");
+    assert!(text.contains("left-pad 1.0.0 -> 2.0.0"), "output: {text}");
+}
+
+#[test]
+fn npm_up_to_date_is_not_updated() {
+    let tools = StubTools::new(&["npm"]);
+    tools.set_responses("npm", &[StubOutput::stdout(NPM_UP_TO_DATE)]);
+
+    let output = tools
+        .command()
+        .args(["--check", "--only", "npm"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        vec!["npm outdated -g --json".to_string()]
+    );
+    assert_eq!(stdout(&output), "Everything is up to date.\n");
+}
+
+#[test]
+fn npm_absent_is_skipped_without_calling_anything() {
+    let tools = StubTools::new(&[]);
+
+    let output = run(&tools, "npm");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(tools.step_calls().is_empty());
+    assert!(
+        stdout(&output).contains("0 ok, 0 planned, 1 skipped, 0 failed"),
+        "summary: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn npm_managed_by_mise_is_skipped() {
+    let tools = StubTools::new(&["mise", "npm"]);
+    tools.set_responses("mise", &[StubOutput::stdout("20.0.0\n")]);
+
+    let output = run(&tools, "npm");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(tools.step_calls(), vec!["mise current node".to_string()]);
+    assert!(
+        !tools
+            .step_calls()
+            .iter()
+            .any(|call| call.starts_with("npm")),
+        "npm must not run when mise manages node: {:?}",
+        tools.step_calls()
+    );
+    assert!(
+        stdout(&output).contains("skipped"),
+        "npm must be reported as skipped: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn npm_check_reports_outdated_packages_and_exits_2() {
+    let tools = StubTools::new(&["npm"]);
+    tools.set_responses("npm", &[StubOutput::stdout(NPM_OUTDATED)]);
+
+    let output = tools
+        .command()
+        .args(["--check", "--only", "npm"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert_eq!(output.status.code(), Some(2), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        vec!["npm outdated -g --json".to_string()]
+    );
+    let text = stdout(&output);
+    assert!(text.contains("npm:"), "output: {text}");
+    assert!(text.contains("typescript 5.4.0 -> 5.5.0"), "output: {text}");
+    assert!(
+        text.contains("2 update(s) pending across 1 step(s)."),
+        "output: {text}"
+    );
+}
