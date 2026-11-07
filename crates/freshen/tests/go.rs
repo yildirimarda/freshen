@@ -12,10 +12,14 @@ use std::process::Output;
 
 use support::{StubOutput, StubTools};
 
-fn run(tools: &StubTools) -> Output {
+fn run(tools: &StubTools, reinstall: bool) -> Output {
+    let mut args = vec!["--only", "go"];
+    if reinstall {
+        args.push("--reinstall-go");
+    }
     tools
         .command()
-        .args(["--only", "go"])
+        .args(&args)
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
 }
@@ -81,7 +85,7 @@ fn go_check_reports_up_to_date_without_outdated() {
 fn go_skips_when_go_is_absent() {
     let tools = StubTools::new(&[]);
 
-    let output = run(&tools);
+    let output = run(&tools, false);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(tools.step_calls().is_empty());
@@ -105,7 +109,7 @@ fn a_failing_go_list_fails_the_step() {
         ],
     );
 
-    let output = run(&tools);
+    let output = run(&tools, true);
 
     assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
     assert_eq!(tools.calls(), vec!["go list -m -u", "go list -m -u"]);
@@ -129,7 +133,7 @@ fn go_run_installs_outdated_modules() {
         ],
     );
 
-    let output = run(&tools);
+    let output = run(&tools, true);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
@@ -140,5 +144,35 @@ fn go_run_installs_outdated_modules() {
             "go install example.com/old@v1.1.0",
             "go list -m -u",
         ]
+    );
+}
+
+#[test]
+fn go_run_without_the_opt_in_does_not_reinstall() {
+    let tools = StubTools::new(&["go"]);
+    tools.set_responses(
+        "go",
+        &[
+            outdated_response(), // go list -m -u (before)
+            outdated_response(), // go list -m -u (after, for the version diff)
+        ],
+    );
+
+    let output = run(&tools, false);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.calls(),
+        vec!["go list -m -u", "go list -m -u"],
+        "calls: {:?}",
+        tools.calls()
+    );
+    assert!(
+        !tools
+            .calls()
+            .iter()
+            .any(|call| call.starts_with("go install")),
+        "no binary may be reinstalled without --reinstall-go: {:?}",
+        tools.calls()
     );
 }
