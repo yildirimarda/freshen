@@ -1201,3 +1201,145 @@ fn a_failing_pip_reinstall_is_only_a_warning() {
         tools.step_calls()
     );
 }
+
+/// Runs the mise step with a Ruby version that goes from 3.2.0 to `after`,
+/// probing both the Node and Ruby versions (the run always probes Node).
+///
+/// `~/.default-ruby-packages` lives in the stub home directory, so no test
+/// touches the real one.
+fn run_ruby_upgrade(tools: &StubTools, after: &str) -> Output {
+    tools.set_responses(
+        "mise",
+        &mise_responses(&[
+            // The `check()` query (`mise outdated`).
+            StubOutput::new(),
+            // The active version for the node LTS check (`mise current node`).
+            StubOutput::stdout("20.0.0\n"),
+            // The available LTS versions (`mise ls-remote node@lts`).
+            StubOutput::new(),
+            // The self-update (`mise self-update -y`, brew is not stubbed).
+            StubOutput::new(),
+            // The active Node version before the upgrade (`mise current node`).
+            StubOutput::stdout("20.0.0\n"),
+            // The active Ruby version before the upgrade (`mise current ruby`).
+            StubOutput::stdout("3.2.0\n"),
+            // The upgrade (`mise upgrade`).
+            StubOutput::new(),
+            // The active Node version after the upgrade (`mise current node`).
+            StubOutput::stdout("20.0.0\n"),
+            // The active Ruby version after the upgrade (`mise current ruby`).
+            StubOutput::stdout(format!("{after}\n")),
+            // The prune list (`mise ls --prunable --json`).
+            StubOutput::stdout("{}"),
+            // The prune (`mise prune -y`).
+            StubOutput::new(),
+        ]),
+    );
+    run(tools, "mise")
+}
+
+fn write_default_ruby_packages(tools: &StubTools, contents: &str) {
+    let path = tools.home().join(".default-ruby-packages");
+    std::fs::write(&path, contents)
+        .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+}
+
+fn gem_calls(tools: &StubTools) -> Vec<String> {
+    tools
+        .step_calls()
+        .into_iter()
+        .filter(|call| call.starts_with("gem"))
+        .collect()
+}
+
+#[test]
+fn a_ruby_version_change_reinstalls_the_default_ruby_packages() {
+    let tools = StubTools::new(&["mise", "gem"]);
+    write_default_ruby_packages(&tools, "# default ruby\nrubocop\n\n  bundler  \n");
+
+    let output = run_ruby_upgrade(&tools, "3.3.0");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        vec![
+            "mise outdated",
+            "mise current node",
+            "mise ls-remote node@lts",
+            "mise self-update -y",
+            "mise current node",
+            "mise current ruby",
+            "mise upgrade",
+            "mise current node",
+            "mise current ruby",
+            "gem install rubocop bundler",
+            "mise ls --prunable --json",
+            "mise prune -y",
+        ]
+    );
+}
+
+#[test]
+fn an_unchanged_ruby_version_does_not_reinstall_the_default_ruby_packages() {
+    let tools = StubTools::new(&["mise", "gem"]);
+    write_default_ruby_packages(&tools, "rubocop\n");
+
+    let output = run_ruby_upgrade(&tools, "3.2.0");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        gem_calls(&tools).is_empty(),
+        "calls: {:?}",
+        tools.step_calls()
+    );
+}
+
+#[test]
+fn a_missing_default_ruby_packages_file_is_not_an_error() {
+    let tools = StubTools::new(&["mise", "gem"]);
+
+    let output = run_ruby_upgrade(&tools, "3.3.0");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        gem_calls(&tools).is_empty(),
+        "calls: {:?}",
+        tools.step_calls()
+    );
+}
+
+#[test]
+fn a_default_ruby_packages_file_with_only_comments_installs_nothing() {
+    let tools = StubTools::new(&["mise", "gem"]);
+    write_default_ruby_packages(&tools, "# nothing yet\n\n   \n");
+
+    let output = run_ruby_upgrade(&tools, "3.3.0");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        gem_calls(&tools).is_empty(),
+        "calls: {:?}",
+        tools.step_calls()
+    );
+}
+
+#[test]
+fn a_failing_gem_reinstall_is_only_a_warning() {
+    let tools = StubTools::new(&["mise", "gem"]);
+    write_default_ruby_packages(&tools, "rubocop\n");
+    tools.set_responses("gem", &[StubOutput::new().with_status(1)]);
+
+    let output = run_ruby_upgrade(&tools, "3.3.0");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("warning: could not reinstall default ruby packages"),
+        "stdout: {}",
+        stdout(&output)
+    );
+    assert!(
+        tools.step_calls().contains(&"mise prune -y".to_owned()),
+        "the prune must still run: {:?}",
+        tools.step_calls()
+    );
+}
