@@ -183,6 +183,7 @@ fn build_registry(runtime: Option<ContainerRuntimeKind>) -> Registry {
     registry = freshen_lib::pip::register(registry);
     registry = freshen_lib::pipx::register(registry);
     registry = freshen_lib::rustup::register(registry);
+    registry = freshen_lib::cargo_update::register(registry);
     registry = freshen_lib::appstore::register(registry);
     registry = freshen_lib::winget::register(registry);
     registry = freshen_lib::chocolatey::register(registry);
