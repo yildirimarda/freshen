@@ -623,6 +623,16 @@ pub fn nix_collect_garbage_transcript() -> Vec<&'static str> {
     nix_collect_garbage_steps().to_vec()
 }
 
+/// Named insertion: the `asdf plugin update --all` step.
+pub fn asdf_steps() -> &'static [&'static str] {
+    &["asdf plugin update --all"]
+}
+
+/// Named insertion: full asdf transcript (plugin update --all).
+pub fn asdf_transcript() -> Vec<&'static str> {
+    asdf_steps().to_vec()
+}
+
 /// Named insertion: the pipx upgrade-all step.
 pub fn pipx_steps() -> &'static [&'static str] {
     &["pipx upgrade-all"]
