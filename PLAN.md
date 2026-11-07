@@ -288,7 +288,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add rustup (`rustup update`), skipped when the tool is absent, covered by recorded transcripts
 - [x] Add `cargo install-update -a` when cargo-update is installed, skipped when the tool is absent, covered by recorded transcripts
 - [x] Add Go: report outdated binaries installed with `go install` by comparing their module versions (`go list -m -u`), covered by recorded transcripts
-- [ ] Add an opt-in Go update path that reinstalls those binaries without changing the pinned Go toolchain, covered by tests
+- [x] Add an opt-in Go update path that reinstalls those binaries without changing the pinned Go toolchain, covered by tests
 - [ ] Add global npm packages (`npm outdated -g --json`, `npm update -g`), skipped when npm is absent or managed by mise, covered by recorded transcripts
 - [ ] Add global pnpm packages (`pnpm update -g`), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add global yarn packages (`yarn global upgrade`, classic yarn only), skipped when the tool is absent, covered by recorded transcripts
