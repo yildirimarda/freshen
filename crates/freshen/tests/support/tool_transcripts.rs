@@ -633,6 +633,16 @@ pub fn pipx_transcript() -> Vec<&'static str> {
     pipx_steps().to_vec()
 }
 
+/// Named insertion: the rustup update step.
+pub fn rustup_steps() -> &'static [&'static str] {
+    &["rustup update"]
+}
+
+/// Named insertion: full rustup transcript (update).
+pub fn rustup_transcript() -> Vec<&'static str> {
+    rustup_steps().to_vec()
+}
+
 /// Named insertion: the report-only `pip list --user --outdated` check.
 pub fn pip_steps() -> &'static [&'static str] {
     &["pip list --user --outdated"]

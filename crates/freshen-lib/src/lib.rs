@@ -57,6 +57,7 @@ pub mod restarted_services;
 pub mod restored_windows;
 pub mod rpm_ostree;
 pub mod runner;
+pub mod rustup;
 pub mod scoop;
 pub mod service_restart;
 pub mod services_needing_restart;
