@@ -43,6 +43,7 @@ pub mod package_manager;
 pub mod package_processes;
 pub mod pacman;
 pub mod pacman_findings;
+pub mod pip;
 pub mod pipx;
 pub mod platform;
 pub mod policy;
