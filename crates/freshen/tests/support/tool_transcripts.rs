@@ -1,11 +1,12 @@
 #![allow(unused)]
 //! Shared transcript helpers for uv, mise and tooling stub tests.
 
-/// Named insertion: uv query, self-update, upgrade and prune steps.
+/// Named insertion: uv query, self-update, python upgrade, upgrade and prune steps.
 pub fn uv_steps() -> &'static [&'static str] {
     &[
         "uv tool list --outdated",
         "uv self update",
+        "uv python upgrade",
         "uv tool upgrade --all",
         "uv cache prune",
     ]
@@ -191,6 +192,7 @@ pub fn uv_network_retry_transcript() -> Vec<&'static str> {
     let mut t = Vec::new();
     t.extend_from_slice(&["uv tool list --outdated"]);
     t.extend_from_slice(&["uv self update"]);
+    t.extend_from_slice(&["uv python upgrade"]);
     t.extend_from_slice(&["uv tool upgrade --all"]);
     t.extend_from_slice(&["uv tool upgrade --all"]);
     t
@@ -201,6 +203,7 @@ pub fn uv_network_transcript() -> Vec<&'static str> {
     let mut t = Vec::new();
     t.extend_from_slice(&["uv tool list --outdated"]);
     t.extend_from_slice(&["uv self update"]);
+    t.extend_from_slice(&["uv python upgrade"]);
     t.extend_from_slice(&["uv tool upgrade --all"]);
     t
 }

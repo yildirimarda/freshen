@@ -22,11 +22,13 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
-fn uv_responses(attempt: StubOutput) -> [StubOutput; 4] {
+fn uv_responses(attempt: StubOutput) -> [StubOutput; 5] {
     // The pre-upgrade snapshot (`uv tool list`) consumes the first response,
-    // then the `run` before-check (`uv tool list --outdated`) and `uv self
-    // update` each consume one, leaving `attempt` for `uv tool upgrade --all`.
+    // then the `run` before-check (`uv tool list --outdated`), `uv self
+    // update` and `uv python upgrade` each consume one, leaving `attempt` for
+    // `uv tool upgrade --all`.
     [
+        StubOutput::new(),
         StubOutput::new(),
         StubOutput::new(),
         StubOutput::new(),

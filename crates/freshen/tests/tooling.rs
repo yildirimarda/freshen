@@ -45,7 +45,12 @@ fn uv_upgrades_tools_and_prunes_the_cache() {
     let tools = StubTools::new(&["uv"]);
     tools.set_responses(
         "uv",
-        &uv_responses(&[StubOutput::new(), StubOutput::new(), StubOutput::new()]),
+        &uv_responses(&[
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::new(),
+        ]),
     );
 
     let output = run(&tools, "uv");
@@ -69,6 +74,8 @@ fn uv_self_updates_when_not_installed_with_a_system_package_manager() {
             // The `run` before-check (`uv tool list --outdated`).
             StubOutput::new(),
             // The self-update (`uv self update`).
+            StubOutput::new(),
+            // The Python interpreter upgrade (`uv python upgrade`).
             StubOutput::new(),
             // The upgrade (`uv tool upgrade --all`).
             StubOutput::new(),
@@ -118,6 +125,7 @@ fn uv_installed_with_brew_is_not_self_updated() {
         vec![
             "uv tool list --outdated".to_string(),
             "brew list --formula uv".to_string(),
+            "uv python upgrade".to_string(),
             "uv tool upgrade --all".to_string(),
             "uv cache prune".to_string(),
         ]
@@ -153,6 +161,7 @@ fn uv_installed_with_dpkg_is_not_self_updated() {
         vec![
             "uv tool list --outdated".to_string(),
             "dpkg -s uv".to_string(),
+            "uv python upgrade".to_string(),
             "uv tool upgrade --all".to_string(),
             "uv cache prune".to_string(),
         ]
@@ -173,6 +182,8 @@ fn a_failing_uv_upgrade_still_prunes_the_cache_and_fails_the_step() {
             // The `run` before-check (`uv tool list --outdated`).
             StubOutput::new(),
             // The self-update (`uv self update`).
+            StubOutput::new(),
+            // The Python interpreter upgrade (`uv python upgrade`).
             StubOutput::new(),
             // The upgrade (`uv tool upgrade --all`) fails.
             StubOutput::new().with_status(1),
@@ -198,6 +209,40 @@ fn a_failing_uv_upgrade_still_prunes_the_cache_and_fails_the_step() {
     assert!(
         stdout(&output).contains("1 failed"),
         "summary: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn uv_python_upgrades_managed_interpreters() {
+    let tools = StubTools::new(&["uv"]);
+    tools.set_responses(
+        "uv",
+        &uv_responses(&[
+            // The self-update (`uv self update`).
+            StubOutput::new(),
+            // The Python interpreter upgrade (`uv python upgrade`).
+            StubOutput::new(),
+            // The upgrade (`uv tool upgrade --all`).
+            StubOutput::new(),
+            // The cache prune (`uv cache prune`).
+            StubOutput::new(),
+        ]),
+    );
+
+    let output = run(&tools, "uv");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        tools
+            .step_calls()
+            .contains(&"uv python upgrade".to_string()),
+        "calls: {:?}",
+        tools.step_calls()
+    );
+    assert!(
+        stdout(&output).contains("uv: python upgrade"),
+        "output: {}",
         stdout(&output)
     );
 }

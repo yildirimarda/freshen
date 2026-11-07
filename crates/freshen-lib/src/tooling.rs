@@ -5,9 +5,10 @@
 //! tool and prunes unused versions. The uv block also self-updates uv itself
 //! unless a system package manager owns the uv installation, so the package
 //! manager's own upgrade keeps uv current instead of `uv self update` fighting
-//! it. Both blocks keep going after a failed command and record the failure at
-//! the end, which is what the two steps here do: every command runs, and the
-//! step reports the first failure.
+//! it. It also upgrades the Python interpreters managed by uv (`uv python
+//! upgrade`) so managed interpreters stay current. Both blocks keep going after
+//! a failed command and record the failure at the end, which is what the two
+//! steps here do: every command runs, and the step reports the first failure.
 //!
 //! mise is skipped when it is installed through Homebrew because the formula
 //! upgrade already replaced it. `brew list --formula mise` is the same probe
@@ -99,6 +100,22 @@ impl UvStep {
             }
         }
     }
+
+    /// Upgrades the Python interpreters managed by uv (`uv python upgrade`).
+    ///
+    /// Managed interpreters are those installed with `uv python install`. The
+    /// command is a no-op when uv does not manage any Python installation, so
+    /// it runs unconditionally after `uv self update`.
+    fn upgrade_pythons(&self, failures: &mut Vec<StepError>) {
+        human!("uv: python upgrade");
+        if let Err(error) = CommandSpec::new("uv")
+            .args(["python", "upgrade"])
+            .retry_transient_network(NETWORK_RETRIES)
+            .run()
+        {
+            failures.push(StepError::run_from_process(UV, &error));
+        }
+    }
 }
 
 impl Step for UvStep {
@@ -146,6 +163,8 @@ impl Step for UvStep {
                 human!("warning: uv self update skipped/failed: {error}");
             }
         }
+
+        self.upgrade_pythons(&mut failures);
 
         self.upgrade_tools(options, &mut failures);
 

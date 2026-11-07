@@ -276,6 +276,8 @@ fn the_package_exclude_list_limits_the_uv_tool_upgrade() {
             support::StubOutput::stdout(outdated),
             support::StubOutput::stdout(outdated),
             support::StubOutput::stdout(outdated),
+            // The Python interpreter upgrade (`uv python upgrade`).
+            support::StubOutput::stdout(outdated),
         ],
     );
     write_config(&tools.config_path(), "[exclude]\npackages = [\"black\"]\n");
