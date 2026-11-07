@@ -29,6 +29,7 @@ mod executable;
 pub mod exit;
 pub mod firmware;
 pub mod flatpak;
+pub mod go;
 pub mod homebrew;
 pub mod left_running_apps;
 pub mod listing;

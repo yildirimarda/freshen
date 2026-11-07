@@ -653,6 +653,16 @@ pub fn cargo_update_transcript() -> Vec<&'static str> {
     cargo_update_steps().to_vec()
 }
 
+/// Named insertion: the `go list -m -u` check step.
+pub fn go_steps() -> &'static [&'static str] {
+    &["go list -m -u"]
+}
+
+/// Named insertion: full Go transcript (`go list -m -u`).
+pub fn go_transcript() -> Vec<&'static str> {
+    go_steps().to_vec()
+}
+
 /// Named insertion: the report-only `pip list --user --outdated` check.
 pub fn pip_steps() -> &'static [&'static str] {
     &["pip list --user --outdated"]
