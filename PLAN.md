@@ -284,7 +284,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] uv: run `uv self update` when uv is not installed via a system package manager, covered by recorded transcripts
 - [x] uv: run `uv python upgrade` for managed interpreters, covered by recorded transcripts
 - [x] Add pipx (`pipx upgrade-all`), skipped when the tool is absent, covered by recorded transcripts
-- [ ] Add a report-only `pip list --user --outdated` check that never upgrades anything, covered by recorded transcripts
+- [x] Add a report-only `pip list --user --outdated` check that never upgrades anything, covered by recorded transcripts
 - [ ] Add rustup (`rustup update`), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add `cargo install-update -a` when cargo-update is installed, skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add Go: report outdated binaries installed with `go install` by comparing their module versions (`go list -m -u`), covered by recorded transcripts
