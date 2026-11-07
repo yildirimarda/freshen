@@ -199,6 +199,7 @@ fn nvm_run_skips_self_update_when_mise_manages_node() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn nvm_run_self_updates_when_not_managed_by_brew_or_mise() {
     let tools = StubTools::new(&["nvm", "sh"]);
@@ -227,6 +228,35 @@ fn nvm_run_self_updates_when_not_managed_by_brew_or_mise() {
     assert!(
         text.contains("nvm: self-update"),
         "missing self-update line: {text}"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn nvm_run_skips_self_update_when_not_managed_on_windows() {
+    let tools = StubTools::new(&["nvm"]);
+    // Neither brew nor mise is installed, and nvm's self-update re-runs the
+    // Unix install script, which does not apply on Windows.
+    tools.set_responses(
+        "nvm",
+        &[
+            StubOutput::stdout("22.12.0\n"),
+            StubOutput::stdout("18.20.0\n20.18.0\n22.12.0\n"),
+        ],
+    );
+
+    let output = run(&tools, "nvm");
+
+    assert!(output.status.success(), "stderr: {}", stdout(&output));
+    assert!(
+        !tools.step_calls().iter().any(|call| call.starts_with("sh")),
+        "nvm must not be self-updated with the Unix install script on Windows: {:?}",
+        tools.step_calls()
+    );
+    let text = stdout(&output);
+    assert!(
+        text.contains("nvm self-update skipped"),
+        "missing skip message: {text}"
     );
 }
 

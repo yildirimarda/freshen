@@ -37,6 +37,11 @@ impl NvmStep {
     /// Upgrades nvm itself by re-running its install script.
     ///
     /// Best effort: a failure prints a warning and never fails the nvm step.
+    ///
+    /// The install script is a Unix shell script, so self-update is only
+    /// attempted on Unix. On Windows nvm is maintained by a different toolchain
+    /// and is not self-updated here.
+    #[cfg(unix)]
     fn update_nvm_itself(&self, failures: &mut Vec<StepError>) {
         human!("nvm: self-update");
         let script = format!("curl -o- {} | bash", NVM_INSTALL_SCRIPT);
@@ -49,6 +54,13 @@ impl NvmStep {
             failures.push(StepError::run_from_process(NVM, &error));
             human!("warning: nvm self-update skipped/failed: {error}");
         }
+    }
+
+    /// nvm's self-update re-runs the Unix install script, which is not
+    /// applicable on Windows, so there is nothing to do here.
+    #[cfg(not(unix))]
+    fn update_nvm_itself(&self, _failures: &mut Vec<StepError>) {
+        human!("warning: nvm self-update skipped: not supported on this platform");
     }
 }
 
@@ -218,7 +230,9 @@ fn version_key(version: &str) -> (u64, u64, u64) {
 }
 
 /// The nvm install script, used to upgrade nvm itself when neither Homebrew
-/// nor mise owns the installation.
+/// nor mise owns the installation. The script is a Unix shell script, so it is
+/// only referenced on Unix platforms.
+#[cfg(unix)]
 const NVM_INSTALL_SCRIPT: &str = "https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh";
 
 #[cfg(test)]
