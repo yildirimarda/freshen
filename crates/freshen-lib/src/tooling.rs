@@ -306,14 +306,30 @@ impl Step for MiseStep {
         }
 
         let before_node = active_node_version();
+        let before_python = if python_defaults_configured() {
+            active_python_version()
+        } else {
+            None
+        };
 
         self.upgrade_tools(options, &mut failures);
 
         let after_node = active_node_version();
+        let after_python = if python_defaults_configured() {
+            active_python_version()
+        } else {
+            None
+        };
 
         if let (Some(before), Some(after)) = (&before_node, &after_node) {
             if before != after {
                 reinstall_default_npm_packages();
+            }
+        }
+
+        if let (Some(before), Some(after)) = (&before_python, &after_python) {
+            if before != after {
+                reinstall_default_python_packages();
             }
         }
 
@@ -396,6 +412,53 @@ fn reinstall_default_npm_packages() {
         .run()
     {
         human!("warning: could not reinstall default npm packages: {error}");
+    }
+}
+
+/// Whether `~/.default-python-packages` exists, meaning there are default
+/// packages that might need reinstalling after a Python version change.
+fn python_defaults_configured() -> bool {
+    let home = env::var("HOME").or_else(|_| env::var("USERPROFILE")).ok();
+    let Some(home) = home else {
+        return false;
+    };
+    fs::metadata(Path::new(&home).join(".default-python-packages")).is_ok()
+}
+
+/// Reinstalls the Python packages listed in `~/.default-python-packages`
+/// into the Python version mise just installed.
+///
+/// The file follows the nvm convention: one package name per line, blank
+/// lines and `#` comments ignored. Best effort: a missing file, a missing
+/// `pip` or a failed install prints a warning and never fails the mise step.
+fn reinstall_default_python_packages() {
+    let home = env::var("HOME").or_else(|_| env::var("USERPROFILE")).ok();
+    let Some(home) = home else {
+        return;
+    };
+    let path = Path::new(&home).join(".default-python-packages");
+    let Ok(contents) = fs::read_to_string(&path) else {
+        return;
+    };
+
+    let packages: Vec<&str> = contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect();
+
+    if packages.is_empty() {
+        return;
+    }
+
+    human!("mise: reinstall default python packages for the new Python version");
+    if let Err(error) = CommandSpec::new("pip")
+        .args(["install"])
+        .args(packages)
+        .retry_transient_network(NETWORK_RETRIES)
+        .run()
+    {
+        human!("warning: could not reinstall default python packages: {error}");
     }
 }
 
@@ -577,6 +640,20 @@ fn node_lts_outdated_item() -> Option<OutdatedItem> {
 fn active_node_version() -> Option<String> {
     let Ok(output) = CommandSpec::new("mise")
         .args(["current", "node"])
+        .neutral_locale()
+        .run()
+    else {
+        return None;
+    };
+    let version = output.stdout().trim().to_owned();
+    (!version.is_empty()).then_some(version)
+}
+
+/// The active Python version from `mise current python`, when python is installed.
+#[must_use]
+fn active_python_version() -> Option<String> {
+    let Ok(output) = CommandSpec::new("mise")
+        .args(["current", "python"])
         .neutral_locale()
         .run()
     else {
