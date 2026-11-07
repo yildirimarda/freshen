@@ -295,7 +295,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add global bun packages (`bun update -g`), skipped when the tool is absent, covered by recorded transcripts
 - [x] Add asdf plugin updates (`asdf plugin update --all`), skipped when the tool is absent, covered by recorded transcripts
 - [x] Add a report of asdf tools with newer versions without changing the versions pinned in `.tool-versions`, covered by recorded transcripts
-- [ ] Add nvm: report when a newer Node LTS exists than the one in use, and update nvm itself only when it is not managed by brew or mise, covered by recorded transcripts
+- [x] Add nvm: report when a newer Node LTS exists than the one in use, and update nvm itself only when it is not managed by brew or mise, covered by recorded transcripts
 - [ ] Add fnm: report when a newer Node LTS exists than the one in use, and update fnm itself only when it is not managed by brew or mise, covered by recorded transcripts
 - [ ] Add volta: report when a newer Node LTS exists than the one in use, and update volta itself only when it is not managed by brew or mise, covered by recorded transcripts
 - [ ] Add pyenv: update pyenv and its plugins and report newer Python versions without installing them, covered by recorded transcripts
