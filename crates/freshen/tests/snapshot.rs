@@ -233,6 +233,7 @@ esac"#,
             "uv tool list",
             "uv tool list --outdated",
             "uv self update",
+            "uv python upgrade",
             "uv tool upgrade --all",
             "uv cache prune"
         ]
