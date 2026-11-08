@@ -185,6 +185,7 @@ fn build_registry(runtime: Option<ContainerRuntimeKind>) -> Registry {
     registry = freshen_lib::conda::register(registry);
     registry = freshen_lib::mamba::register(registry);
     registry = freshen_lib::nvm::register(registry);
+    registry = freshen_lib::nvim::register(registry);
     registry = freshen_lib::fnm::register(registry);
     registry = freshen_lib::volta::register(registry);
     registry = freshen_lib::pip::register(registry);

@@ -100,6 +100,12 @@ pub struct Cli {
     #[arg(long)]
     pub install_wsl_updates: bool,
 
+    /// Sync lazy.nvim plugins with `nvim --headless "+Lazy! sync" +qa`
+    /// instead of only reporting that the sync is available. Syncing plugins
+    /// can modify the user's neovim config, so the step is opt-in.
+    #[arg(long)]
+    pub install_nvim_lazy: bool,
+
     /// Run the Linux package-manager steps inside this WSL distribution on
     /// Windows (for example `--wsl-distro Ubuntu`). Implies the steps are
     /// detected through `wsl` and executed as `wsl -d <distro> <command>`.
@@ -263,6 +269,7 @@ impl Cli {
             .with_install_macos_updates(self.install_macos_updates)
             .with_install_firmware_updates(self.install_firmware_updates)
             .with_install_wsl_updates(self.install_wsl_updates)
+            .with_install_nvim_lazy(self.install_nvim_lazy)
             .with_wsl_distro(self.wsl_distro.clone())
             .with_restart_services(self.restart_services)
             .with_restart_apps(self.restart_apps)

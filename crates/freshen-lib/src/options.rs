@@ -215,6 +215,7 @@ pub struct RunOptions {
     install_macos_updates: bool,
     install_firmware_updates: bool,
     install_wsl_updates: bool,
+    install_nvim_lazy: bool,
     wsl_distro: Option<String>,
     selection: StepSelection,
     preflight: PreflightConfig,
@@ -294,6 +295,17 @@ impl RunOptions {
     #[must_use]
     pub fn with_install_wsl_updates(mut self, install: bool) -> Self {
         self.install_wsl_updates = install;
+        self
+    }
+
+    /// Sets `--install-nvim-lazy`: run `nvim --headless "+Lazy! sync" +qa`
+    /// instead of only reporting that the plugin sync is available.
+    ///
+    /// Syncing plugins can modify the user's neovim config and lockfile, so
+    /// the step is opt-in and only runs with this flag.
+    #[must_use]
+    pub fn with_install_nvim_lazy(mut self, install: bool) -> Self {
+        self.install_nvim_lazy = install;
         self
     }
 
@@ -482,6 +494,16 @@ impl RunOptions {
     #[must_use]
     pub fn install_wsl_updates(&self) -> bool {
         self.install_wsl_updates
+    }
+
+    /// Returns `true` when `--install-nvim-lazy` asks for `nvim --headless
+    /// "+Lazy! sync" +qa` to run.
+    ///
+    /// Syncing plugins can modify the user's neovim config and lockfile, so
+    /// the step is opt-in and only runs with this flag.
+    #[must_use]
+    pub fn install_nvim_lazy(&self) -> bool {
+        self.install_nvim_lazy
     }
 
     /// Returns the WSL distribution selected with `--wsl-distro`, when running
