@@ -102,7 +102,7 @@ fn list_steps_lists_every_builtin_step() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
-    assert!(text.contains("Steps (62):"), "listing: {text}");
+    assert!(text.contains("Steps (63):"), "listing: {text}");
     assert!(text.contains("conda"), "listing: {text}");
     assert!(text.contains("mamba"), "listing: {text}");
     assert!(text.contains("fnm"), "listing: {text}");
@@ -158,6 +158,7 @@ fn list_steps_lists_every_builtin_step() {
     assert!(text.contains("windows-update"), "listing: {text}");
     assert!(text.contains("yarn"), "listing: {text}");
     assert!(text.contains("bun"), "listing: {text}");
+    assert!(text.contains("elixir"), "listing: {text}");
 }
 
 #[test]
@@ -173,7 +174,7 @@ fn dry_run_with_every_builtin_step_excluded_plans_nothing() {
     let output = run(&[
         "--dry-run",
         "--skip",
-        &format!("{COMMON_STEPS},{MACOS_STEPS},apt,dnf,cargo-update,composer,conda,mamba,pnpm,yarn,bun,winget,chocolatey,scoop,windows-update,wsl,jenv,tfenv"),
+        &format!("{COMMON_STEPS},{MACOS_STEPS},apt,dnf,cargo-update,composer,conda,mamba,pnpm,yarn,bun,elixir,winget,chocolatey,scoop,windows-update,wsl,jenv,tfenv"),
     ]);
 
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
@@ -192,7 +193,7 @@ fn check_with_every_builtin_step_excluded_reports_up_to_date() {
     let output = run(&[
         "--check",
         "--skip",
-        &format!("{COMMON_STEPS},{MACOS_STEPS},apt,dnf,cargo-update,composer,conda,mamba,pnpm,yarn,bun,winget,chocolatey,scoop,windows-update,wsl,jenv,tfenv"),
+        &format!("{COMMON_STEPS},{MACOS_STEPS},apt,dnf,cargo-update,composer,conda,mamba,pnpm,yarn,bun,elixir,winget,chocolatey,scoop,windows-update,wsl,jenv,tfenv"),
     ]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));

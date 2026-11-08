@@ -763,6 +763,48 @@ fn check_reports_outdated_mise_tools_and_exits_2() {
 }
 
 #[test]
+fn elixir_updates_hex_and_rebar() {
+    let tools = StubTools::new(&["mix"]);
+    tools.set_responses("mix", &[StubOutput::new(), StubOutput::new()]);
+
+    let output = run(&tools, "elixir");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        support::elixir_transcript()
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<String>>()
+    );
+    assert!(
+        stdout(&output).contains("elixir: local hex"),
+        "output: {}",
+        stdout(&output)
+    );
+    assert!(
+        stdout(&output).contains("elixir: local rebar"),
+        "output: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn elixir_absent_is_skipped_without_calling_anything() {
+    let tools = StubTools::new(&[]);
+
+    let output = run(&tools, "elixir");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(tools.step_calls().is_empty());
+    assert!(
+        stdout(&output).contains("0 ok, 0 planned, 1 skipped, 0 failed"),
+        "summary: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
 fn check_reports_uv_and_mise_up_to_date_without_running_them() {
     let tools = StubTools::new(&["uv", "mise"]);
     tools.set_responses("uv", &[StubOutput::stdout("No tools installed\n")]);

@@ -29,6 +29,7 @@ pub mod dnf;
 pub mod doctor_warnings;
 pub mod dotnet_tools;
 pub mod elevation;
+pub mod elixir;
 pub mod emerge;
 mod executable;
 pub mod exit;
