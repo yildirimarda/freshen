@@ -814,3 +814,23 @@ pub fn composer_transcript() -> Vec<&'static str> {
 pub fn composer_self_update_only_transcript() -> Vec<&'static str> {
     composer_self_update_steps().to_vec()
 }
+
+/// Named insertion: the `conda update -n base conda` step.
+pub fn conda_update_base_steps() -> &'static [&'static str] {
+    &["conda update -n base conda"]
+}
+
+/// Named insertion: full conda run transcript (upgrade conda in base).
+pub fn conda_transcript() -> Vec<&'static str> {
+    conda_update_base_steps().to_vec()
+}
+
+/// Named insertion: the `conda env list` report-only check step.
+pub fn conda_env_list_steps() -> &'static [&'static str] {
+    &["conda env list"]
+}
+
+/// Named insertion: conda check-mode transcript (list environments).
+pub fn conda_check_transcript() -> Vec<&'static str> {
+    conda_env_list_steps().to_vec()
+}
