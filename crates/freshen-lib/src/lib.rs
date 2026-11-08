@@ -57,6 +57,7 @@ pub mod policy;
 pub mod preflight;
 pub mod process;
 pub mod pyenv;
+pub mod rbenv;
 pub mod registry;
 pub mod reopened_hidden;
 pub mod report;

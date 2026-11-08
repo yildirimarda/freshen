@@ -39,7 +39,7 @@ fn stderr(output: &Output) -> String {
 }
 
 /// The built-in steps that exist on every platform.
-const COMMON_STEPS: &str = "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-doctor,brew-bundle-cleanup,brew-reopen,colima-stop,colima-start,docker,go,rustup,asdf,cargo-update,uv,mise,fnm,npm,nvm,volta,pnpm,pip,pipx,pacman,aur,zypper,apk,emerge,termux,firmware,flatpak,snap,nix,nix-profile,nix-collect-garbage,home-manager,rpm-ostree,bootc,microsoft-store,yarn,bun,pyenv";
+const COMMON_STEPS: &str = "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-doctor,brew-bundle-cleanup,brew-reopen,colima-stop,colima-start,docker,go,rustup,asdf,cargo-update,uv,mise,fnm,npm,nvm,volta,pnpm,pip,pipx,pacman,aur,zypper,apk,emerge,termux,firmware,flatpak,snap,nix,nix-profile,nix-collect-garbage,home-manager,rpm-ostree,bootc,microsoft-store,yarn,bun,pyenv,rbenv";
 
 /// The built-in steps that only exist on macOS.
 const MACOS_STEPS: &str = "mas,macos-updates";
@@ -102,7 +102,7 @@ fn list_steps_lists_every_builtin_step() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
-    assert!(text.contains("Steps (53):"), "listing: {text}");
+    assert!(text.contains("Steps (54):"), "listing: {text}");
     assert!(text.contains("fnm"), "listing: {text}");
     assert!(text.contains("go"), "listing: {text}");
     assert!(text.contains("wsl"), "listing: {text}");
@@ -120,6 +120,7 @@ fn list_steps_lists_every_builtin_step() {
     assert!(text.contains("asdf"), "listing: {text}");
     assert!(text.contains("cargo-update"), "listing: {text}");
     assert!(text.contains("pyenv"), "listing: {text}");
+    assert!(text.contains("rbenv"), "listing: {text}");
     assert!(text.contains("uv"), "listing: {text}");
     assert!(text.contains("mise"), "listing: {text}");
     assert!(text.contains("pip"), "listing: {text}");
