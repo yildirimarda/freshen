@@ -1698,7 +1698,6 @@ mod tests {
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
             .unwrap_or_else(|error| panic!("failed to make stub executable: {error}"));
         std::env::set_var("PATH", &dir);
-        drop(_guard);
 
         let (sender, receiver) = std::sync::mpsc::channel();
         let handle = std::thread::spawn(move || {
@@ -1709,11 +1708,17 @@ mod tests {
             )
         });
 
+        // Wait until the child has been spawned (it streams "first"
+        // immediately) before releasing the PATH guard: parallel tests may
+        // otherwise replace `PATH` with a directory that lacks `sleep`
+        // between our `set_var` and the spawn, and the spawn itself is not
+        // synchronized with the thread start.
         let first = match receiver.recv_timeout(Duration::from_millis(800)) {
             Ok(chunk) => chunk,
             Err(error) => panic!("no live output before the process exited: {error}"),
         };
         assert_eq!(first, (OutputStream::Stdout, "first".to_owned()));
+        drop(_guard);
 
         match handle.join() {
             Ok(Ok(output)) => {
