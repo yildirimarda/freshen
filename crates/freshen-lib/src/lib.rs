@@ -92,6 +92,7 @@ pub mod tfenv;
 pub mod tooling;
 pub mod volta;
 pub mod vscode;
+pub mod vscodium;
 pub mod warnings;
 pub mod windows_duplicates;
 pub mod windows_update;
