@@ -81,6 +81,7 @@ pub mod step;
 pub mod sudo;
 pub mod system;
 pub mod termux;
+pub mod tfenv;
 pub mod tooling;
 pub mod volta;
 pub mod warnings;

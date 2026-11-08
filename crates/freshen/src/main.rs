@@ -188,6 +188,7 @@ fn build_registry(runtime: Option<ContainerRuntimeKind>) -> Registry {
     registry = freshen_lib::rustup::register(registry);
     registry = freshen_lib::sdkman::register(registry);
     registry = freshen_lib::jenv::register(registry);
+    registry = freshen_lib::tfenv::register(registry);
     registry = freshen_lib::asdf::register(registry);
     registry = freshen_lib::cargo_update::register(registry);
     registry = freshen_lib::pnpm::register(registry);
