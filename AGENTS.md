@@ -31,15 +31,39 @@ work you discovered along the way, open a pull request, and stop.
    version of every line except your own item's tick — never let a conflict
    resolution untick another item (its code is already merged on main).
 9. `gh pr create --fill --label automated`
-   Run it from the current directory exactly like this. `gh` has NO `-C`
-   option (that is `git -C`); `gh -C /work ...` just prints usage and creates
-   nothing. `gh` is already authenticated via `GH_TOKEN` — never conclude
-   "gh is not authenticated" from a usage dump. Before this step, confirm the
-   push in step 8 actually succeeded (`git status -sb` shows no "ahead").
-   Afterwards confirm the PR exists with `gh pr view --json number,url`.
 10. **STOP.** Do not wait for CI, do not merge, do not cut a release, do not
     poll the PR, do not start the next item. GitHub handles everything after
     the PR is open.
+
+## Skills
+
+Situational know-how lives in skills: `.agents/skills/<name>/SKILL.md`. Your
+engine lists them by name and description; load one when it applies — with
+your skill tool, or simply by reading the file. When the prompt names a skill,
+load it before you start.
+
+| Skill | Load it when |
+|---|---|
+| `agentloop-graph-navigation` | Finding where to work; before changing a symbol |
+| `agentloop-testing` | Writing tests, or a test is flaky or slow |
+| `agentloop-pull-request` | Right before opening the PR, or when you are stuck |
+| `agentloop-plan-items` | Writing or appending `PLAN.md` items |
+| `agentloop-merge-conflicts` | A push is rejected or a merge conflicts |
+| `agentloop-dependencies` | Adding, removing or upgrading a dependency |
+| `agentloop-ci-fix` | CI failed on your pull request |
+| `agentloop-ci-proposals` | The item is about CI or `.github/workflows/` |
+| `agentloop-skill-authoring` | You learned something the next session will need |
+
+`agentloop-*` skills are maintained by agentloop and replaced on every update —
+never edit them. Every other skill in that directory belongs to this project;
+some were recorded by earlier sessions.
+
+**Record what you learn.** When you work out something non-obvious and
+reusable about this project — how to run, test, debug or seed part of it, or a
+trap that cost you several attempts — save it as a project skill so the next
+session does not rediscover it (`agentloop-skill-authoring`). At most one new
+skill per session; prefer updating an existing one. Name it in the PR
+description.
 
 ## Growing the plan
 
@@ -48,26 +72,18 @@ item you will often find work the plan does not cover: a missing edge case, a
 required migration, error handling that was hand-waved, a refactor a later item
 will depend on. Record it instead of silently doing it or silently ignoring it.
 
-**How to add:**
-
-- Append new `- [ ]` items to the **end** of the milestone they belong to. If
-  you are not sure where they fit, put them under `## Discovered`.
-- Write them in the same style as existing items: concrete, independently
-  testable, one pull request each. "Add retry with backoff to the S3 upload
-  path", not "Reliability".
+- Append new `- [ ]` items to the **end** of the milestone they belong to, or
+  under `## Discovered` if you are not sure. Same style as existing items:
+  concrete, independently testable, one pull request each
+  (`agentloop-plan-items` has the format and examples).
 - **Append only.** Never delete, reorder, reword or uncheck an existing item,
   and never touch an item above the one you are working on.
-- List what you added and why in the pull request description.
-
-**Limits:**
-
 - At most 3 new items per session. If you found nothing, add nothing — do not
-  pad the plan to look productive.
-- Do not add work that is merely nice to have. If you would not defend it to a
-  reviewer, leave it out.
-- If you discover something that must be done **before** your current item can
-  work, do not reorder the plan. Stop, open the PR with the `blocked` label, and
-  explain the dependency.
+  pad the plan to look productive, and leave out what is merely nice to have.
+- If something must be done **before** your current item can work, do not
+  reorder the plan. Stop, open the PR with the `blocked` label, and explain
+  the dependency.
+- List what you added and why in the pull request description.
 
 Only a `--replan` session may restructure `PLAN.md` freely.
 
@@ -77,21 +93,17 @@ This repository has a knowledge graph of itself. **Query the graph before you
 read source files** — it is dramatically cheaper than reading files, and it is
 how this project stays affordable.
 
-- `graphify_query_graph` — ask a question in plain language, get back the
-  relevant subgraph with `file:line` citations. Start here.
-- `graphify_get_neighbors` — what a given symbol calls and is called by.
-- `graphify_shortest_path` — how two symbols are connected.
-- `graphify_god_nodes` — the most-connected symbols. Use this to orient
-  yourself in an unfamiliar area.
-- `graphify_get_node` — full detail on one symbol.
+- MCP tools: `graphify_query_graph` (start here), `graphify_get_neighbors`,
+  `graphify_shortest_path`, `graphify_god_nodes`, `graphify_get_node`.
+- The same graph from any shell: `graphify query "<question>" --budget 1500`,
+  `graphify explain "<symbol>"`, `graphify path "<A>" "<B>"`.
+- The prompt may already include a "Where to start" excerpt from the graph —
+  begin there.
 
-Only open a file directly once the graph has told you which file and which
-lines matter. Never read a whole directory to "get oriented" — ask the graph
-instead.
-
-Two caveats: edges marked `INFERRED` are model-generated guesses, so verify
-them against the real file before relying on them. And the graph reflects the
-last index, so if you just created a file, the graph does not know about it yet.
+Only open a file once the graph has told you which file and which lines
+matter. Edges marked `INFERRED` are guesses — verify them in the source. The
+graph reflects the last index, so files you just created are not in it yet.
+More in `agentloop-graph-navigation`.
 
 ## Output discipline (token budget)
 
@@ -114,7 +126,9 @@ loses detail), and burned request quota.
 
 - No direct pushes to `main` or `release/*`.
 - No `git push --force`.
-- Do not modify anything under `.github/workflows/`.
+- Do not modify anything under `.github/workflows/`. Plan items about CI are
+  delivered as proposals under `ci-proposals/` (`agentloop-ci-proposals`).
+- Do not create or edit `agentloop-*` skills.
 - Do not restructure `PLAN.md`. You may tick your own item and append new ones
   (see "Growing the plan") — nothing else. If the plan itself is wrong, say so
   in the PR description and stop.
@@ -123,23 +137,9 @@ loses detail), and burned request quota.
   explain why you changed it in the PR description.
 - No `terraform apply` or `terraform destroy`. Only `fmt`,
   `init -backend=false`, `validate`, `plan`.
-- Never commit secrets, tokens or `.env` contents.
+- Never commit secrets, tokens or `.env` contents, and never print
+  environment variables into files or logs.
 - When adding a new dependency, justify it in the PR description.
-
-## CI changes
-
-You cannot modify anything under `.github/workflows/` — it is denied by
-config, and GitHub rejects your token's pushes to that path anyway. But plan
-items about CI are legitimate. Handle them like this:
-
-1. Write the full proposed workflow file (or the diff) under
-   `ci-proposals/<short-name>.yml`. Files there are inert — GitHub only
-   executes workflows from `.github/workflows/`.
-2. In the PR description, explain what the change does and why, and include
-   the one command a human runs to apply it:
-   `git mv ci-proposals/<name>.yml .github/workflows/<name>.yml`
-3. Tick the plan item as done — proposing IS the deliverable for CI items.
-   A human applies it in a separate commit.
 
 ## Cross-platform CI
 
@@ -211,4 +211,4 @@ freshen keeps a developer machine up to date (package managers, language toolcha
 - Cross-platform: any OS-specific code lives behind `#[cfg(target_os = ...)]` in an OS abstraction module; every step declares the platforms it supports
 - Safety:       never add a step that deletes user data without an explicit opt-in flag; never quit the terminal running the tool; restore everything that was stopped (apps, containers) even on error or Ctrl-C
 - Tests must not touch the real system: never call the real `brew`, `apt`, `winget`, `docker`, `colima`, `uv` or `mise` from tests — use stub executables or recorded transcripts
-- CI: Rust jobs live in `ci-proposals/rust.yml` until a human runs `git mv ci-proposals/rust.yml .github/workflows/rust.yml` (agents cannot modify `.github/workflows/`); the existing `ci.yml` Rust step becomes active by itself once `Cargo.toml` exists
+- CI: the Rust jobs live in `.github/workflows/rust.yml` (applied). Agents cannot modify `.github/workflows/`; new or changed workflows are proposed under `ci-proposals/` (skill `agentloop-ci-proposals`) and a human applies them with `git mv` (see `HUMAN-TASKS.md`)

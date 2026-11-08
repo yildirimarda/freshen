@@ -22,7 +22,18 @@ Pending proposals:
 
 - [ ] `ci-proposals/real-tools.yml` (read-only checks against real Homebrew, Chocolatey, winget and apt), once the agent has proposed it and the apt (Milestone 5) and winget/Chocolatey (Milestone 6) steps exist. The new jobs fail closed on a missing or skipped step, so applying the proposal before those steps land turns the workflow red by design.
 
-- [ ] `ci-proposals/linux-containers.yml` (stub-based integration tests on Ubuntu, Fedora and Arch containers), once the Linux package-manager steps (Milestone 5) exist. Apply with `git mv ci-proposals/linux-containers.yml .github/workflows/linux-containers.yml`, then commit and push.
+- [ ] `ci-proposals/linux-containers.yml` (stub-based integration tests on Ubuntu, Fedora and Arch containers). The Linux package-manager steps (Milestone 5) exist now, so it can go live. The images ship no git and no Rust, so the proposal installs build dependencies and rustup itself. It is not a required check, but the agent loop waits for every check on a PR, so a red leg would stall every item: prove it green on a branch first.
+
+  ```bash
+  git switch -c ci/linux-containers
+  git mv ci-proposals/linux-containers.yml .github/workflows/linux-containers.yml
+  git commit -m "ci: apply linux-containers proposal" && git push -u origin HEAD
+  gh pr create --fill     # wait for all three legs (ubuntu, fedora, archlinux) to pass
+  ```
+
+  If a leg fails, fix the proposal (or the test, if it assumes the host userland) before merging; do not merge a red workflow.
+
+- [x] `ci-proposals/windows.yml` — dropped, nothing to apply. The `rust` workflow already runs `windows-latest` with the same four commands (fmt, clippy, unit tests, stub-based integration tests), so a separate workflow only doubles the Windows minutes.
 
 ## Accounts and credentials for Milestone 11 (distribution)
 
