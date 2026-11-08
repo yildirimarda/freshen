@@ -39,7 +39,7 @@ fn stderr(output: &Output) -> String {
 }
 
 /// The built-in steps that exist on every platform.
-const COMMON_STEPS: &str = "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-doctor,brew-bundle-cleanup,brew-reopen,colima-stop,colima-start,docker,go,rustup,asdf,cargo-update,uv,mise,fnm,gem,npm,nvm,volta,pnpm,pip,pipx,pacman,aur,zypper,apk,emerge,termux,firmware,flatpak,sdkman,snap,nix,nix-profile,nix-collect-garbage,home-manager,rpm-ostree,bootc,microsoft-store,yarn,bun,pyenv,rbenv";
+const COMMON_STEPS: &str = "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-doctor,brew-bundle-cleanup,brew-reopen,colima-stop,colima-start,docker,go,rustup,asdf,cargo-update,composer,uv,mise,fnm,gem,npm,nvm,volta,pnpm,pip,pipx,pacman,aur,zypper,apk,emerge,termux,firmware,flatpak,sdkman,snap,nix,nix-profile,nix-collect-garbage,home-manager,rpm-ostree,bootc,microsoft-store,yarn,bun,pyenv,rbenv";
 
 /// The built-in steps that only exist on macOS.
 const MACOS_STEPS: &str = "mas,macos-updates";
@@ -102,7 +102,7 @@ fn list_steps_lists_every_builtin_step() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
-    assert!(text.contains("Steps (58):"), "listing: {text}");
+    assert!(text.contains("Steps (59):"), "listing: {text}");
     assert!(text.contains("fnm"), "listing: {text}");
     assert!(text.contains("gem"), "listing: {text}");
     assert!(text.contains("go"), "listing: {text}");
@@ -120,6 +120,7 @@ fn list_steps_lists_every_builtin_step() {
     assert!(text.contains("rustup"), "listing: {text}");
     assert!(text.contains("asdf"), "listing: {text}");
     assert!(text.contains("cargo-update"), "listing: {text}");
+    assert!(text.contains("composer"), "listing: {text}");
     assert!(text.contains("pyenv"), "listing: {text}");
     assert!(text.contains("rbenv"), "listing: {text}");
     assert!(text.contains("uv"), "listing: {text}");
@@ -169,7 +170,7 @@ fn dry_run_with_every_builtin_step_excluded_plans_nothing() {
     let output = run(&[
         "--dry-run",
         "--skip",
-        &format!("{COMMON_STEPS},{MACOS_STEPS},apt,dnf,cargo-update,pnpm,yarn,bun,winget,chocolatey,scoop,windows-update,wsl,jenv,tfenv"),
+        &format!("{COMMON_STEPS},{MACOS_STEPS},apt,dnf,cargo-update,composer,pnpm,yarn,bun,winget,chocolatey,scoop,windows-update,wsl,jenv,tfenv"),
     ]);
 
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
@@ -188,7 +189,7 @@ fn check_with_every_builtin_step_excluded_reports_up_to_date() {
     let output = run(&[
         "--check",
         "--skip",
-        &format!("{COMMON_STEPS},{MACOS_STEPS},apt,dnf,cargo-update,pnpm,yarn,bun,winget,chocolatey,scoop,windows-update,wsl,jenv,tfenv"),
+        &format!("{COMMON_STEPS},{MACOS_STEPS},apt,dnf,cargo-update,composer,pnpm,yarn,bun,winget,chocolatey,scoop,windows-update,wsl,jenv,tfenv"),
     ]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));

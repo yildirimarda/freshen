@@ -180,6 +180,7 @@ fn build_registry(runtime: Option<ContainerRuntimeKind>) -> Registry {
     registry = freshen_lib::snap::register(registry);
     registry = freshen_lib::nix::register(registry);
     registry = freshen_lib::tooling::register(registry);
+    registry = freshen_lib::composer::register(registry);
     registry = freshen_lib::nvm::register(registry);
     registry = freshen_lib::fnm::register(registry);
     registry = freshen_lib::volta::register(registry);

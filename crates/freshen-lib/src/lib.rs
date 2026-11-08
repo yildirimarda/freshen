@@ -18,6 +18,7 @@ pub mod check;
 pub mod chocolatey;
 pub mod cleanup;
 pub mod cmd;
+pub mod composer;
 pub mod config;
 pub mod containers;
 pub(crate) mod deadline;

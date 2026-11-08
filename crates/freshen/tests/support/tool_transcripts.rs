@@ -790,3 +790,27 @@ pub fn stub_sequence_transcript() -> Vec<&'static str> {
     t.extend_from_slice(&["colima start"]);
     t
 }
+
+/// Named insertion: the composer self-update step.
+pub fn composer_self_update_steps() -> &'static [&'static str] {
+    &["composer self-update"]
+}
+
+/// Named insertion: the composer global update step.
+pub fn composer_global_update_steps() -> &'static [&'static str] {
+    &["composer global update"]
+}
+
+/// Named insertion: full composer transcript (self-update then global update).
+pub fn composer_transcript() -> Vec<&'static str> {
+    let mut t = Vec::new();
+    t.extend_from_slice(composer_self_update_steps());
+    t.extend_from_slice(composer_global_update_steps());
+    t
+}
+
+/// Named insertion: composer self-update only transcript (global update
+/// absent because `--cleanup` is not set).
+pub fn composer_self_update_only_transcript() -> Vec<&'static str> {
+    composer_self_update_steps().to_vec()
+}
