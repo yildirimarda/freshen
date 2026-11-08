@@ -216,6 +216,7 @@ pub struct RunOptions {
     install_firmware_updates: bool,
     install_wsl_updates: bool,
     install_nvim_lazy: bool,
+    install_nvim_packer: bool,
     wsl_distro: Option<String>,
     selection: StepSelection,
     preflight: PreflightConfig,
@@ -306,6 +307,17 @@ impl RunOptions {
     #[must_use]
     pub fn with_install_nvim_lazy(mut self, install: bool) -> Self {
         self.install_nvim_lazy = install;
+        self
+    }
+
+    /// Sets `--install-nvim-packer`: run `nvim --headless "+PackerSync" +qa`
+    /// instead of only reporting that the plugin sync is available.
+    ///
+    /// Syncing plugins can modify the user's neovim config, so the step is
+    /// opt-in and only runs with this flag.
+    #[must_use]
+    pub fn with_install_nvim_packer(mut self, install: bool) -> Self {
+        self.install_nvim_packer = install;
         self
     }
 
@@ -504,6 +516,16 @@ impl RunOptions {
     #[must_use]
     pub fn install_nvim_lazy(&self) -> bool {
         self.install_nvim_lazy
+    }
+
+    /// Returns `true` when `--install-nvim-packer` asks for `nvim --headless
+    /// "+PackerSync" +qa` to run.
+    ///
+    /// Syncing plugins can modify the user's neovim config, so the step is
+    /// opt-in and only runs with this flag.
+    #[must_use]
+    pub fn install_nvim_packer(&self) -> bool {
+        self.install_nvim_packer
     }
 
     /// Returns the WSL distribution selected with `--wsl-distro`, when running

@@ -724,6 +724,17 @@ pub fn nvim_lazy_transcript() -> Vec<&'static str> {
     nvim_lazy_steps().to_vec()
 }
 
+/// Named insertion: the `nvim --headless "+PackerSync" +qa` step.
+pub fn nvim_packer_steps() -> &'static [&'static str] {
+    &["nvim --headless +PackerSync +qa"]
+}
+
+/// Named insertion: full nvim-packer transcript (`nvim --headless "+PackerSync"
+/// +qa`).
+pub fn nvim_packer_transcript() -> Vec<&'static str> {
+    nvim_packer_steps().to_vec()
+}
+
 /// Named insertion: the `pnpm update -g` step.
 pub fn pnpm_steps() -> &'static [&'static str] {
     &["pnpm update -g"]
