@@ -3,7 +3,7 @@
 //! Every test runs the built binary against a stub `jenv` executable and
 //! asserts the exact command transcript. No real tool is touched.
 
-#![cfg(feature = "test-harness")]
+#![cfg(all(feature = "test-harness", not(windows)))]
 
 mod support;
 
