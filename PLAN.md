@@ -303,7 +303,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add SDKMAN (`sdk selfupdate`, `sdk upgrade`) run in a non-interactive shell, skipped when the tool is absent, covered by recorded transcripts
 - [x] Add jenv as a report-only step that shows newer Java versions without switching, covered by recorded transcripts
 - [x] Add tfenv as a report-only step that shows newer Terraform versions without switching, covered by recorded transcripts
-- [ ] Add `gem update --system`, skipped when Ruby is managed by a system package manager, covered by recorded transcripts
+- [x] Add `gem update --system`, skipped when Ruby is managed by a system package manager, covered by recorded transcripts
 - [ ] Add `gem update` for user-installed gems, skipping the system gem directory, covered by recorded transcripts
 - [ ] Add Composer (`composer self-update`, `composer global update`), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add Conda (`conda update -n base conda`) with a report-only check for the other environments, covered by recorded transcripts
