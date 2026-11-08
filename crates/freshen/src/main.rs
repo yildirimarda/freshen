@@ -206,6 +206,7 @@ fn build_registry(runtime: Option<ContainerRuntimeKind>) -> Registry {
     registry = freshen_lib::appstore::register(registry);
     registry = freshen_lib::vscode::register(registry);
     registry = freshen_lib::cursor::register(registry);
+    registry = freshen_lib::vscodium::register(registry);
     registry = freshen_lib::winget::register(registry);
     registry = freshen_lib::chocolatey::register(registry);
     registry = freshen_lib::microsoft_store::register(registry);

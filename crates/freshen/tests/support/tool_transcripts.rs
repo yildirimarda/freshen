@@ -663,6 +663,16 @@ pub fn cursor_transcript() -> Vec<&'static str> {
     cursor_steps().to_vec()
 }
 
+/// Named insertion: the `codium --update-extensions` step.
+pub fn vscodium_steps() -> &'static [&'static str] {
+    &["codium --update-extensions"]
+}
+
+/// Named insertion: full VSCodium transcript (`codium --update-extensions`).
+pub fn vscodium_transcript() -> Vec<&'static str> {
+    vscodium_steps().to_vec()
+}
+
 /// Named insertion: the `sdk selfupdate` and `sdk upgrade` steps.
 pub fn sdkman_steps() -> &'static [&'static str] {
     &["sdk selfupdate", "sdk upgrade"]

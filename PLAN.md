@@ -312,7 +312,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add Elixir tooling (`mix local.hex --force`, `mix local.rebar --force`), skipped when the tool is absent, covered by recorded transcripts
 - [x] Add VS Code extension updates (`code --update-extensions`), skipped when the CLI is absent, covered by recorded transcripts
 - [x] Add Cursor extension updates when its CLI exists, covered by recorded transcripts
-- [ ] Add VSCodium extension updates when its CLI exists, covered by recorded transcripts
+- [x] Add VSCodium extension updates when its CLI exists, covered by recorded transcripts
 - [ ] Add lazy.nvim plugin sync (`nvim --headless "+Lazy! sync" +qa`) as an opt-in step, covered by recorded transcripts
 - [ ] Add packer plugin sync as an opt-in step, covered by recorded transcripts
 - [ ] Add Mason tool updates (`nvim --headless "+MasonUpdate" +qa`) as an opt-in step, covered by recorded transcripts
