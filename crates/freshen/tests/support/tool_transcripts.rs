@@ -874,3 +874,22 @@ pub fn mamba_env_list_steps() -> &'static [&'static str] {
 pub fn mamba_check_transcript() -> Vec<&'static str> {
     mamba_env_list_steps().to_vec()
 }
+
+/// Named insertion: the `mix local.hex --force` step.
+pub fn elixir_hex_steps() -> &'static [&'static str] {
+    &["mix local hex --force"]
+}
+
+/// Named insertion: the `mix local.rebar --force` step.
+pub fn elixir_rebar_steps() -> &'static [&'static str] {
+    &["mix local rebar --force"]
+}
+
+/// Named insertion: full Elixir transcript (`mix local.hex --force` then
+/// `mix local.rebar --force`).
+pub fn elixir_transcript() -> Vec<&'static str> {
+    let mut t = Vec::new();
+    t.extend_from_slice(elixir_hex_steps());
+    t.extend_from_slice(elixir_rebar_steps());
+    t
+}
