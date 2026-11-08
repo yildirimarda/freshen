@@ -643,6 +643,16 @@ pub fn pipx_transcript() -> Vec<&'static str> {
     pipx_steps().to_vec()
 }
 
+/// Named insertion: the `code --update-extensions` step.
+pub fn vscode_steps() -> &'static [&'static str] {
+    &["code --update-extensions"]
+}
+
+/// Named insertion: full VS Code transcript (`code --update-extensions`).
+pub fn vscode_transcript() -> Vec<&'static str> {
+    vscode_steps().to_vec()
+}
+
 /// Named insertion: the `sdk selfupdate` and `sdk upgrade` steps.
 pub fn sdkman_steps() -> &'static [&'static str] {
     &["sdk selfupdate", "sdk upgrade"]
