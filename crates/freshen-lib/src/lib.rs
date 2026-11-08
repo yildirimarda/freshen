@@ -34,6 +34,7 @@ pub mod flatpak;
 pub mod fnm;
 pub mod go;
 pub mod homebrew;
+pub mod jenv;
 pub mod left_running_apps;
 pub mod listing;
 pub mod locale;
