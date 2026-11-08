@@ -713,6 +713,17 @@ pub fn cargo_update_transcript() -> Vec<&'static str> {
     cargo_update_steps().to_vec()
 }
 
+/// Named insertion: the `nvim --headless "+Lazy! sync" +qa` step.
+pub fn nvim_lazy_steps() -> &'static [&'static str] {
+    &["nvim --headless +Lazy! sync +qa"]
+}
+
+/// Named insertion: full nvim-lazy transcript (`nvim --headless "+Lazy!
+/// sync" +qa`).
+pub fn nvim_lazy_transcript() -> Vec<&'static str> {
+    nvim_lazy_steps().to_vec()
+}
+
 /// Named insertion: the `pnpm update -g` step.
 pub fn pnpm_steps() -> &'static [&'static str] {
     &["pnpm update -g"]

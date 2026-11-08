@@ -50,6 +50,7 @@ pub mod mamba;
 pub mod microsoft_store;
 mod network;
 pub mod nix;
+pub mod nvim;
 pub mod nvm;
 pub mod options;
 pub mod output;
