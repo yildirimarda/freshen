@@ -643,6 +643,26 @@ pub fn pipx_transcript() -> Vec<&'static str> {
     pipx_steps().to_vec()
 }
 
+/// Named insertion: the `sdk selfupdate` and `sdk upgrade` steps.
+pub fn sdkman_steps() -> &'static [&'static str] {
+    &["sdk selfupdate", "sdk upgrade"]
+}
+
+/// Named insertion: full SDKMAN transcript (self-update then upgrade).
+pub fn sdkman_transcript() -> Vec<&'static str> {
+    sdkman_steps().to_vec()
+}
+
+/// Named insertion: the `sdk selfupdate` step.
+pub fn sdkman_selfupdate_steps() -> &'static [&'static str] {
+    &["sdk selfupdate"]
+}
+
+/// Named insertion: full SDKMAN self-update transcript.
+pub fn sdkman_selfupdate_transcript() -> Vec<&'static str> {
+    sdkman_selfupdate_steps().to_vec()
+}
+
 /// Named insertion: the rustup update step.
 pub fn rustup_steps() -> &'static [&'static str] {
     &["rustup update"]
