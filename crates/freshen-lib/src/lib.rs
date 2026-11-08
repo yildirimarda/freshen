@@ -32,6 +32,7 @@ pub mod exit;
 pub mod firmware;
 pub mod flatpak;
 pub mod fnm;
+pub mod gem;
 pub mod go;
 pub mod homebrew;
 pub mod jenv;
