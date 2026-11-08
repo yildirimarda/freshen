@@ -299,7 +299,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add fnm: report when a newer Node LTS exists than the one in use, and update fnm itself only when it is not managed by brew or mise, covered by recorded transcripts
 - [x] Add volta: report when a newer Node LTS exists than the one in use, and update volta itself only when it is not managed by brew or mise, covered by recorded transcripts
 - [x] Add pyenv: update pyenv and its plugins and report newer Python versions without installing them, covered by recorded transcripts
-- [ ] Add rbenv: update rbenv and ruby-build and report newer Ruby versions without installing them, covered by recorded transcripts
+- [x] Add rbenv: update rbenv and ruby-build and report newer Ruby versions without installing them, covered by recorded transcripts
 - [ ] Add SDKMAN (`sdk selfupdate`, `sdk upgrade`) run in a non-interactive shell, skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add jenv as a report-only step that shows newer Java versions without switching, covered by recorded transcripts
 - [ ] Add tfenv as a report-only step that shows newer Terraform versions without switching, covered by recorded transcripts
