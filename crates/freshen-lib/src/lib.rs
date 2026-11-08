@@ -22,6 +22,7 @@ pub mod composer;
 pub mod conda;
 pub mod config;
 pub mod containers;
+pub mod cursor;
 pub(crate) mod deadline;
 #[cfg(target_os = "linux")]
 pub mod desktop_apps;

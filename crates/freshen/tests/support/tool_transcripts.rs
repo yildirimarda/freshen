@@ -653,6 +653,16 @@ pub fn vscode_transcript() -> Vec<&'static str> {
     vscode_steps().to_vec()
 }
 
+/// Named insertion: the `cursor --update-extensions` step.
+pub fn cursor_steps() -> &'static [&'static str] {
+    &["cursor --update-extensions"]
+}
+
+/// Named insertion: full Cursor transcript (`cursor --update-extensions`).
+pub fn cursor_transcript() -> Vec<&'static str> {
+    cursor_steps().to_vec()
+}
+
 /// Named insertion: the `sdk selfupdate` and `sdk upgrade` steps.
 pub fn sdkman_steps() -> &'static [&'static str] {
     &["sdk selfupdate", "sdk upgrade"]
