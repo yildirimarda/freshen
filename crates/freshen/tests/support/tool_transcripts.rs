@@ -815,6 +815,26 @@ pub fn composer_self_update_only_transcript() -> Vec<&'static str> {
     composer_self_update_steps().to_vec()
 }
 
+/// Named insertion: the `dotnet tool list --global` step.
+pub fn dotnet_tools_list_steps() -> &'static [&'static str] {
+    &["dotnet tool list --global"]
+}
+
+/// Named insertion: the `dotnet tool update --global` step for one tool.
+pub fn dotnet_tools_update_steps() -> &'static [&'static str] {
+    &["dotnet tool update --global tool-one"]
+}
+
+/// Named insertion: full .NET global tools transcript (list then update each
+/// installed tool).
+pub fn dotnet_tools_transcript() -> Vec<&'static str> {
+    let mut t = Vec::new();
+    t.extend_from_slice(dotnet_tools_list_steps());
+    t.extend_from_slice(&["dotnet tool update --global tool-one"]);
+    t.extend_from_slice(&["dotnet tool update --global tool-two"]);
+    t
+}
+
 /// Named insertion: the `conda update -n base conda` step.
 pub fn conda_update_base_steps() -> &'static [&'static str] {
     &["conda update -n base conda"]
