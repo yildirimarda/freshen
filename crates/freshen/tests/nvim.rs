@@ -28,6 +28,7 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+#[cfg(unix)]
 #[test]
 fn nvim_lazy_syncs_plugins() {
     let tools = StubTools::new(&["nvim"]);
@@ -54,6 +55,7 @@ fn nvim_lazy_skips_when_nvim_is_absent() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn a_failing_nvim_lazy_fails_the_step() {
     let tools = StubTools::new(&["nvim"]);
