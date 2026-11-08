@@ -834,3 +834,23 @@ pub fn conda_env_list_steps() -> &'static [&'static str] {
 pub fn conda_check_transcript() -> Vec<&'static str> {
     conda_env_list_steps().to_vec()
 }
+
+/// Named insertion: the `micromamba self-update` step.
+pub fn mamba_self_update_steps() -> &'static [&'static str] {
+    &["micromamba self-update"]
+}
+
+/// Named insertion: full mamba run transcript (self-update micromamba).
+pub fn mamba_transcript() -> Vec<&'static str> {
+    mamba_self_update_steps().to_vec()
+}
+
+/// Named insertion: the `micromamba env list` report-only check step.
+pub fn mamba_env_list_steps() -> &'static [&'static str] {
+    &["micromamba env list"]
+}
+
+/// Named insertion: mamba check-mode transcript (list environments).
+pub fn mamba_check_transcript() -> Vec<&'static str> {
+    mamba_env_list_steps().to_vec()
+}
