@@ -29,23 +29,23 @@ fn run(tools: &StubTools) -> Output {
 }
 
 #[test]
-fn gem_updates_ruby_gems() {
+fn gem_updates_user_installed_gems() {
     let tools = StubTools::new(&["gem"]);
     tools.set_responses("gem", &[StubOutput::new()]);
 
     let output = run(&tools);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert_eq!(tools.step_calls(), vec!["gem update --system".to_string()]);
+    assert_eq!(tools.step_calls(), vec!["gem update".to_string()]);
     assert!(
-        stdout(&output).contains("gem: update --system"),
+        stdout(&output).contains("gem: update"),
         "output: {}",
         stdout(&output)
     );
 }
 
 #[test]
-fn gem_skips_update_when_ruby_is_managed_by_brew() {
+fn gem_update_runs_even_when_ruby_is_managed_by_brew() {
     let tools = StubTools::new(&["gem", "brew"]);
     tools.set_responses("brew", &[StubOutput::new()]);
     tools.set_responses("gem", &[StubOutput::new()]);
@@ -53,19 +53,18 @@ fn gem_skips_update_when_ruby_is_managed_by_brew() {
     let output = run(&tools);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert_eq!(
-        tools.step_calls(),
-        vec!["brew list --formula ruby".to_string()]
-    );
+    // User-installed gems are independent of the system package manager, so
+    // `gem update` runs and brew is not consulted for RubyGems itself.
+    assert_eq!(tools.calls(), vec!["gem update".to_string()]);
     assert!(
-        !stdout(&output).contains("gem: update --system"),
-        "gem update --system must not run when brew owns Ruby: {}",
+        stdout(&output).contains("gem: update"),
+        "gem update must run for user-installed gems even when brew owns Ruby: {}",
         stdout(&output)
     );
 }
 
 #[test]
-fn gem_skips_update_when_ruby_is_managed_by_dpkg() {
+fn gem_update_runs_even_when_ruby_is_managed_by_dpkg() {
     let tools = StubTools::new(&["gem", "dpkg"]);
     tools.set_responses("dpkg", &[StubOutput::new()]);
     tools.set_responses("gem", &[StubOutput::new()]);
@@ -73,10 +72,12 @@ fn gem_skips_update_when_ruby_is_managed_by_dpkg() {
     let output = run(&tools);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert_eq!(tools.step_calls(), vec!["dpkg -s ruby".to_string()]);
+    // User-installed gems are independent of the system package manager, so
+    // `gem update` runs and dpkg is not consulted for RubyGems itself.
+    assert_eq!(tools.calls(), vec!["gem update".to_string()]);
     assert!(
-        !stdout(&output).contains("gem: update --system"),
-        "gem update --system must not run when dpkg owns Ruby: {}",
+        stdout(&output).contains("gem: update"),
+        "gem update must run for user-installed gems even when dpkg owns Ruby: {}",
         stdout(&output)
     );
 }
@@ -104,7 +105,7 @@ fn a_failing_gem_update_fails_the_step() {
     let output = run(&tools);
 
     assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
-    assert_eq!(tools.step_calls(), vec!["gem update --system".to_string()]);
+    assert_eq!(tools.step_calls(), vec!["gem update".to_string()]);
     assert!(
         stdout(&output).contains("1 failed"),
         "summary: {}",
