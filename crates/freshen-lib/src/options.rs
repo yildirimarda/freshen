@@ -218,6 +218,7 @@ pub struct RunOptions {
     install_nvim_lazy: bool,
     install_nvim_packer: bool,
     install_nvim_mason: bool,
+    install_nvim_treesitter: bool,
     wsl_distro: Option<String>,
     selection: StepSelection,
     preflight: PreflightConfig,
@@ -330,6 +331,17 @@ impl RunOptions {
     #[must_use]
     pub fn with_install_nvim_mason(mut self, install: bool) -> Self {
         self.install_nvim_mason = install;
+        self
+    }
+
+    /// Sets `--install-nvim-treesitter`: run `nvim --headless "+TSUpdate" +qa`
+    /// instead of only reporting that the parser update is available.
+    ///
+    /// Updating Treesitter parsers can modify the user's neovim config, so the
+    /// step is opt-in and only runs with this flag.
+    #[must_use]
+    pub fn with_install_nvim_treesitter(mut self, install: bool) -> Self {
+        self.install_nvim_treesitter = install;
         self
     }
 
@@ -548,6 +560,16 @@ impl RunOptions {
     #[must_use]
     pub fn install_nvim_mason(&self) -> bool {
         self.install_nvim_mason
+    }
+
+    /// Returns `true` when `--install-nvim-treesitter` asks for `nvim
+    /// --headless "+TSUpdate" +qa` to run.
+    ///
+    /// Updating Treesitter parsers can modify the user's neovim config, so the
+    /// step is opt-in and only runs with this flag.
+    #[must_use]
+    pub fn install_nvim_treesitter(&self) -> bool {
+        self.install_nvim_treesitter
     }
 
     /// Returns the WSL distribution selected with `--wsl-distro`, when running
