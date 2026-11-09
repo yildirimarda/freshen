@@ -187,6 +187,7 @@ fn build_registry(runtime: Option<ContainerRuntimeKind>) -> Registry {
     registry = freshen_lib::nvm::register(registry);
     registry = freshen_lib::nvim::register(registry);
     registry = freshen_lib::omz::register(registry);
+    registry = freshen_lib::zinit::register(registry);
     registry = freshen_lib::packer::register(registry);
     registry = freshen_lib::mason::register(registry);
     registry = freshen_lib::treesitter::register(registry);

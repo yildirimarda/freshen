@@ -318,7 +318,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add Mason tool updates (`nvim --headless "+MasonUpdate" +qa`) as an opt-in step, covered by recorded transcripts
 - [x] Add Treesitter parser updates as an opt-in step, covered by recorded transcripts
 - [x] Add oh-my-zsh (`omz update --unattended`), skipped when the tool is absent, covered by recorded transcripts
-- [ ] Add zinit (`zinit self-update`, `zinit update --all`), skipped when the tool is absent, covered by recorded transcripts
+- [x] Add zinit (`zinit self-update`, `zinit update --all`), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add antidote (`antidote update`), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add the tmux plugin manager (`~/.tmux/plugins/tpm/bin/update_plugins all`), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add fisher (`fisher update`), skipped when the tool is absent, covered by recorded transcripts
