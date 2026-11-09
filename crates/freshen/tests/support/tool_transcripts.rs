@@ -746,6 +746,17 @@ pub fn nvim_mason_transcript() -> Vec<&'static str> {
     nvim_mason_steps().to_vec()
 }
 
+/// Named insertion: the `nvim --headless "+TSUpdate" +qa` step.
+pub fn nvim_treesitter_steps() -> &'static [&'static str] {
+    &["nvim --headless +TSUpdate +qa"]
+}
+
+/// Named insertion: full nvim-treesitter transcript (`nvim --headless "+TSUpdate"
+/// +qa`).
+pub fn nvim_treesitter_transcript() -> Vec<&'static str> {
+    nvim_treesitter_steps().to_vec()
+}
+
 /// Named insertion: the `pnpm update -g` step.
 pub fn pnpm_steps() -> &'static [&'static str] {
     &["pnpm update -g"]

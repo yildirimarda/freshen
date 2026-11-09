@@ -93,6 +93,7 @@ pub mod system;
 pub mod termux;
 pub mod tfenv;
 pub mod tooling;
+pub mod treesitter;
 pub mod volta;
 pub mod vscode;
 pub mod vscodium;
