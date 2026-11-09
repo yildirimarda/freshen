@@ -797,6 +797,16 @@ pub fn antidote_transcript() -> Vec<&'static str> {
     antidote_steps().to_vec()
 }
 
+/// Named insertion: the `~/.tmux/plugins/tpm/bin/update_plugins all` step.
+pub fn tpm_steps() -> &'static [&'static str] {
+    &["tpm all"]
+}
+
+/// Named insertion: full tmux plugin manager transcript (`update_plugins all`).
+pub fn tpm_transcript() -> Vec<&'static str> {
+    tpm_steps().to_vec()
+}
+
 /// Named insertion: the `pnpm update -g` step.
 pub fn pnpm_steps() -> &'static [&'static str] {
     &["pnpm update -g"]
