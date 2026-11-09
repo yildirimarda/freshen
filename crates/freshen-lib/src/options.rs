@@ -236,6 +236,7 @@ pub struct RunOptions {
     restart_apps: bool,
     bump: bool,
     go_update: bool,
+    install_aws_cli_updates: bool,
 }
 
 impl RunOptions {
@@ -478,6 +479,15 @@ impl RunOptions {
         self
     }
 
+    /// Sets `--install-aws-cli-updates`: update AWS CLI v2 through the
+    /// official installer instead of only reporting that a newer version is
+    /// available.
+    #[must_use]
+    pub fn with_install_aws_cli_updates(mut self, install: bool) -> Self {
+        self.install_aws_cli_updates = install;
+        self
+    }
+
     /// Returns `true` when `--dry-run` is set.
     #[must_use]
     pub fn is_dry_run(&self) -> bool {
@@ -700,6 +710,13 @@ impl RunOptions {
         self.go_update
     }
 
+    /// Returns `true` when `--install-aws-cli-updates` asks to update AWS CLI
+    /// v2 through the official installer.
+    #[must_use]
+    pub fn install_aws_cli_updates(&self) -> bool {
+        self.install_aws_cli_updates
+    }
+
     /// Builds the ordered list of steps this run should execute on `platform`.
     ///
     /// Unknown ids in either flag are an error, and an `--only` id that is not
@@ -821,6 +838,7 @@ mod tests {
         assert!(!options.restart_services());
         assert!(!options.bump());
         assert!(!options.go_update());
+        assert!(!options.install_aws_cli_updates());
         assert!(options.selection().is_empty());
         assert_eq!(options.step_timeout(), None);
         assert_eq!(options.global_timeout(), None);
@@ -848,6 +866,7 @@ mod tests {
             .with_install_wsl_updates(true)
             .with_bump(true)
             .with_go_update(true)
+            .with_install_aws_cli_updates(true)
             .with_step_timeout(Some(std::time::Duration::from_secs(60)))
             .with_global_timeout(Some(std::time::Duration::from_secs(600)))
             .with_snapshot_retention(4)
@@ -861,6 +880,7 @@ mod tests {
         assert!(options.install_wsl_updates());
         assert!(options.bump());
         assert!(options.go_update());
+        assert!(options.install_aws_cli_updates());
         assert_eq!(options.snapshot_retention(), 4);
         assert_eq!(options.jobs(), 3);
         assert_eq!(

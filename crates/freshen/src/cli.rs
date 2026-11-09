@@ -151,6 +151,11 @@ pub struct Cli {
     #[arg(long)]
     pub reinstall_go: bool,
 
+    /// Update AWS CLI v2 through the official installer instead of only
+    /// reporting that a newer version is available (opt-in, off by default).
+    #[arg(long)]
+    pub install_aws_cli_updates: bool,
+
     /// Keep this many pre-upgrade snapshot files (0 keeps every snapshot,
     /// default 10).
     #[arg(long, value_name = "COUNT")]
@@ -297,6 +302,7 @@ impl Cli {
             .with_restart_apps(self.restart_apps)
             .with_bump(self.bump)
             .with_go_update(self.reinstall_go)
+            .with_install_aws_cli_updates(self.install_aws_cli_updates)
             .with_step_timeout(timeout(self.step_timeout.or(config.timeouts.step_seconds)))
             .with_global_timeout(timeout(self.timeout.or(config.timeouts.total_seconds)))
             .with_snapshot_retention(
@@ -385,6 +391,7 @@ mod tests {
         assert!(!options.restart_apps());
         assert!(!options.bump());
         assert!(!options.go_update());
+        assert!(!options.install_aws_cli_updates());
         assert_eq!(options.wsl_distro(), None);
         assert_eq!(
             options.snapshot_retention(),
@@ -438,6 +445,7 @@ mod tests {
             "--restart-apps",
             "--bump",
             "--reinstall-go",
+            "--install-aws-cli-updates",
             "--snapshot-retention",
             "3",
             "--step-timeout",
@@ -482,6 +490,7 @@ mod tests {
         assert!(options.restart_apps());
         assert!(options.bump());
         assert!(options.go_update());
+        assert!(options.install_aws_cli_updates());
         assert_eq!(options.snapshot_retention(), 3);
         assert_eq!(
             options.step_timeout(),
@@ -694,6 +703,7 @@ mod tests {
             "--restart-apps",
             "--bump",
             "--reinstall-go",
+            "--install-aws-cli-updates",
             "--snapshot-retention",
             "--step-timeout",
             "--timeout",

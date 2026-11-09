@@ -166,3 +166,67 @@ fn run_never_upgrades_anything() {
         tools.step_calls()
     );
 }
+
+#[test]
+fn run_without_the_opt_in_is_report_only() {
+    let tools = StubTools::new(&["aws"]);
+    tools.set_responses("aws", &[StubOutput::stdout(aws_version_output("2.10.0"))]);
+
+    let output = tools
+        .command()
+        .args(["--only", "aws"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    // Without the opt-in flag no installer command may run.
+    assert!(
+        !tools.step_calls().iter().any(|call| {
+            call.starts_with("curl") || call.starts_with("unzip") || call.starts_with("sudo")
+        }),
+        "calls: {:?}",
+        tools.step_calls()
+    );
+}
+
+#[test]
+fn run_with_the_opt_in_installs_via_the_official_installer() {
+    let tools = StubTools::new(&["aws", "curl", "unzip", "sudo"]);
+    tools.set_responses(
+        "aws",
+        &[
+            // detect: `aws --version`
+            StubOutput::stdout(aws_version_output("2.10.0")),
+            // check before the run: `aws --version`
+            StubOutput::stdout(aws_version_output("2.10.0")),
+        ],
+    );
+    tools.set_responses("curl", &[StubOutput::new()]);
+    tools.set_responses("unzip", &[StubOutput::new()]);
+    tools.set_responses("sudo", &[StubOutput::new()]);
+
+    let arch = std::env::consts::ARCH;
+    let url = format!("https://awscli.amazonaws.com/awscli-exe-linux-{arch}.zip");
+
+    let output = tools
+        .command()
+        .args(["--only", "aws", "--install-aws-cli-updates"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.step_calls(),
+        vec![
+            "aws --version".to_string(),
+            "aws --version".to_string(),
+            format!("curl {url} -o awscliv2.zip"),
+            "unzip -o awscliv2.zip".to_string(),
+            "sudo ./aws/install".to_string(),
+            // check after the run to compute the version diff
+            "aws --version".to_string(),
+        ],
+        "calls: {:?}",
+        tools.step_calls()
+    );
+}
