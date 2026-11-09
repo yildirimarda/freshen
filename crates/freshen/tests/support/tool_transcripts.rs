@@ -735,6 +735,17 @@ pub fn nvim_packer_transcript() -> Vec<&'static str> {
     nvim_packer_steps().to_vec()
 }
 
+/// Named insertion: the `nvim --headless "+MasonUpdate" +qa` step.
+pub fn nvim_mason_steps() -> &'static [&'static str] {
+    &["nvim --headless +MasonUpdate +qa"]
+}
+
+/// Named insertion: full nvim-mason transcript (`nvim --headless "+MasonUpdate"
+/// +qa`).
+pub fn nvim_mason_transcript() -> Vec<&'static str> {
+    nvim_mason_steps().to_vec()
+}
+
 /// Named insertion: the `pnpm update -g` step.
 pub fn pnpm_steps() -> &'static [&'static str] {
     &["pnpm update -g"]
