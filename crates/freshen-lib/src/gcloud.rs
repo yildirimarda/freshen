@@ -601,8 +601,13 @@ mod tests {
     #[test]
     fn gcloud_installed_with_system_package_manager_probes_each_manager() {
         // No package manager is present, so nothing is owned.
-        assert!(!gcloud_installed_with_system_package_manager(Path::new(
-            "/tmp/gcloud"
-        )));
+        let previous = env::var("PATH").ok();
+        env::set_var("PATH", "");
+        let result = gcloud_installed_with_system_package_manager(Path::new("/tmp/gcloud"));
+        match previous {
+            Some(previous) => env::set_var("PATH", &previous),
+            None => env::remove_var("PATH"),
+        }
+        assert!(!result);
     }
 }
