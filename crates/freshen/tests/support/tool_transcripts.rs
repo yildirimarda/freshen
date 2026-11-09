@@ -787,6 +787,16 @@ pub fn zinit_transcript() -> Vec<&'static str> {
     zinit_steps().to_vec()
 }
 
+/// Named insertion: the `antidote update` step.
+pub fn antidote_steps() -> &'static [&'static str] {
+    &["antidote update"]
+}
+
+/// Named insertion: full antidote transcript (`antidote update`).
+pub fn antidote_transcript() -> Vec<&'static str> {
+    antidote_steps().to_vec()
+}
+
 /// Named insertion: the `pnpm update -g` step.
 pub fn pnpm_steps() -> &'static [&'static str] {
     &["pnpm update -g"]

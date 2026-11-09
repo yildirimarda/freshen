@@ -165,6 +165,7 @@ fn build_registry(runtime: Option<ContainerRuntimeKind>) -> Registry {
     let mut registry = Registry::new();
     registry = freshen_lib::containers::register_for(registry, runtime);
     registry = freshen_lib::homebrew::register(registry);
+    registry = freshen_lib::antidote::register(registry);
     registry = freshen_lib::aur::register(registry);
     registry = freshen_lib::emerge::register(registry);
     registry = freshen_lib::apk::register(registry);
