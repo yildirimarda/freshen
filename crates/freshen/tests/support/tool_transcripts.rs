@@ -683,6 +683,16 @@ pub fn gh_transcript() -> Vec<&'static str> {
     gh_steps().to_vec()
 }
 
+/// Named insertion: the `kubectl krew upgrade` step.
+pub fn kubectl_steps() -> &'static [&'static str] {
+    &["kubectl krew upgrade"]
+}
+
+/// Named insertion: full kubectl plugins transcript (upgrade all plugins).
+pub fn kubectl_transcript() -> Vec<&'static str> {
+    kubectl_steps().to_vec()
+}
+
 /// Named insertion: the `sdk selfupdate` and `sdk upgrade` steps.
 pub fn sdkman_steps() -> &'static [&'static str] {
     &["sdk selfupdate", "sdk upgrade"]

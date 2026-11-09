@@ -44,6 +44,7 @@ pub mod gh;
 pub mod go;
 pub mod homebrew;
 pub mod jenv;
+pub mod kubectl;
 pub mod left_running_apps;
 pub mod listing;
 pub mod locale;
