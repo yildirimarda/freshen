@@ -180,6 +180,7 @@ fn build_registry(runtime: Option<ContainerRuntimeKind>) -> Registry {
     registry = freshen_lib::flatpak::register(registry);
     registry = freshen_lib::fisher::register(registry);
     registry = freshen_lib::firmware::register(registry);
+    registry = freshen_lib::gcloud::register(registry);
     registry = freshen_lib::snap::register(registry);
     registry = freshen_lib::nix::register(registry);
     registry = freshen_lib::tooling::register(registry);
