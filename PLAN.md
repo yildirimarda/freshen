@@ -322,7 +322,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add antidote (`antidote update`), skipped when the tool is absent, covered by recorded transcripts
 - [x] Add the tmux plugin manager (`~/.tmux/plugins/tpm/bin/update_plugins all`), skipped when the tool is absent, covered by recorded transcripts
 - [x] Add fisher (`fisher update`), skipped when the tool is absent, covered by recorded transcripts
-- [ ] Add GitHub CLI extensions (`gh extension upgrade --all`), skipped when the tool is absent, covered by recorded transcripts
+- [x] Add GitHub CLI extensions (`gh extension upgrade --all`), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add kubectl plugins (`kubectl krew upgrade`), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add Helm repository updates (`helm repo update`), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add a report-only list of Helm releases with newer chart versions, covered by recorded transcripts
