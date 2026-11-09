@@ -13,7 +13,9 @@ use crate::platform::Platform;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::process::{CommandSpec, NETWORK_RETRIES};
 use crate::registry::Registry;
-use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+use crate::step::OutdatedItem;
+use crate::step::{CheckReport, Detection, Step, StepError, StepId};
 use serde_json::Value;
 
 /// The Helm package manager step.
@@ -229,6 +231,7 @@ impl HelmReleasesStep {
 }
 
 /// An installed Helm release with the chart it tracks.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[derive(Debug, Clone)]
 struct HelmRelease {
     name: String,
@@ -237,6 +240,7 @@ struct HelmRelease {
 }
 
 /// Parses `helm list -o json` output into the releases it lists.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn parse_helm_list(output: &str) -> Vec<HelmRelease> {
     let Ok(Value::Array(items)) = serde_json::from_str(output) else {
         return Vec::new();
@@ -264,6 +268,7 @@ fn parse_helm_list(output: &str) -> Vec<HelmRelease> {
 /// The chart column is `<name>-<version>` where `name` may carry a repository
 /// prefix such as `bitnami/`. The split happens at the last `-` whose right
 /// hand side starts with a digit.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn split_chart(chart: &str) -> Option<(&str, &str)> {
     let (name, version) = chart.rsplit_once('-')?;
     if version.chars().next().is_some_and(|c| c.is_ascii_digit()) {
@@ -274,11 +279,13 @@ fn split_chart(chart: &str) -> Option<(&str, &str)> {
 }
 
 /// Whether `candidate` is a newer version than `current`.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn version_newer(candidate: &str, current: &str) -> bool {
     version_key(candidate) > version_key(current)
 }
 
 /// A sortable key for a version string like `1.2.3`.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn version_key(version: &str) -> Vec<u64> {
     version
         .split('.')
@@ -300,6 +307,7 @@ fn detect_helm() -> Detection {
 mod tests {
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     use super::detect_helm;
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     use super::{parse_helm_list, split_chart, version_newer};
     use crate::step::Detection;
 
@@ -338,6 +346,7 @@ mod tests {
         assert!(!Detection::NotInstalled.is_installed());
     }
 
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[test]
     fn split_chart_separates_name_and_version() {
         assert_eq!(
@@ -353,6 +362,7 @@ mod tests {
         assert_eq!(split_chart(""), None);
     }
 
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[test]
     fn parse_helm_list_reads_chart_and_version() {
         let output = r#"[{"name":"my-release","namespace":"default","chart":"nginx-ingress-1.2.3","app_version":"1.2.3"}]"#;
@@ -363,6 +373,7 @@ mod tests {
         assert_eq!(releases[0].chart_version, "1.2.3");
     }
 
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[test]
     fn parse_helm_list_ignores_invalid_json() {
         assert!(parse_helm_list("not json").is_empty());
@@ -370,6 +381,7 @@ mod tests {
         assert!(parse_helm_list("[]").is_empty());
     }
 
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[test]
     fn version_newer_compare_major_minor_patch() {
         assert!(version_newer("2.0.0", "1.2.3"));
