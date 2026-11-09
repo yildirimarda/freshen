@@ -16,6 +16,7 @@ use crate::registry::Registry;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::step::OutdatedItem;
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use serde_json::Value;
 
 /// The Helm package manager step.
