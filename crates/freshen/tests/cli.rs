@@ -102,7 +102,7 @@ fn list_steps_lists_every_builtin_step() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
-    assert!(text.contains("Steps (73):"), "listing: {text}");
+    assert!(text.contains("Steps (74):"), "listing: {text}");
     assert!(text.contains("antidote"), "listing: {text}");
     assert!(text.contains("conda"), "listing: {text}");
     assert!(text.contains("mamba"), "listing: {text}");
@@ -118,6 +118,7 @@ fn list_steps_lists_every_builtin_step() {
     assert!(text.contains("nvim-treesitter"), "listing: {text}");
     assert!(text.contains("oh-my-zsh"), "listing: {text}");
     assert!(text.contains("zinit"), "listing: {text}");
+    assert!(text.contains("tpm"), "listing: {text}");
     assert!(text.contains("volta"), "listing: {text}");
     assert!(text.contains("pnpm"), "listing: {text}");
     assert!(text.contains("brew"), "listing: {text}");
@@ -184,7 +185,7 @@ fn dry_run_with_every_builtin_step_excluded_plans_nothing() {
     let output = run(&[
         "--dry-run",
         "--skip",
-        &format!("{COMMON_STEPS},{MACOS_STEPS},apt,dnf,cargo-update,composer,conda,mamba,pnpm,yarn,bun,elixir,winget,chocolatey,scoop,windows-update,wsl,jenv,tfenv,nvim-lazy,nvim-packer,nvim-mason,nvim-treesitter,oh-my-zsh,zinit"),
+        &format!("{COMMON_STEPS},{MACOS_STEPS},apt,dnf,cargo-update,composer,conda,mamba,pnpm,yarn,bun,elixir,winget,chocolatey,scoop,windows-update,wsl,jenv,tfenv,nvim-lazy,nvim-packer,nvim-mason,nvim-treesitter,oh-my-zsh,zinit,tpm"),
     ]);
 
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
@@ -203,7 +204,7 @@ fn check_with_every_builtin_step_excluded_reports_up_to_date() {
     let output = run(&[
         "--check",
         "--skip",
-        &format!("{COMMON_STEPS},{MACOS_STEPS},apt,dnf,cargo-update,composer,conda,mamba,pnpm,yarn,bun,elixir,winget,chocolatey,scoop,windows-update,wsl,jenv,tfenv,nvim-lazy,nvim-packer,nvim-mason,nvim-treesitter,oh-my-zsh,zinit"),
+        &format!("{COMMON_STEPS},{MACOS_STEPS},apt,dnf,cargo-update,composer,conda,mamba,pnpm,yarn,bun,elixir,winget,chocolatey,scoop,windows-update,wsl,jenv,tfenv,nvim-lazy,nvim-packer,nvim-mason,nvim-treesitter,oh-my-zsh,zinit,tpm"),
     ]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
