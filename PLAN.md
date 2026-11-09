@@ -325,7 +325,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add GitHub CLI extensions (`gh extension upgrade --all`), skipped when the tool is absent, covered by recorded transcripts
 - [x] Add kubectl plugins (`kubectl krew upgrade`), skipped when the tool is absent, covered by recorded transcripts
 - [x] Add Helm repository updates (`helm repo update`), skipped when the tool is absent, covered by recorded transcripts
-- [ ] Add a report-only list of Helm releases with newer chart versions, covered by recorded transcripts
+- [x] Add a report-only list of Helm releases with newer chart versions, covered by recorded transcripts
 - [ ] Add a report of newer AWS CLI v2 versions for non-brew installs, covered by recorded transcripts
 - [ ] Add an explicit flag that updates AWS CLI v2 through the official installer, covered by recorded transcripts
 - [ ] Add the Google Cloud CLI (`gcloud components update --quiet`) when installed outside a system package manager, covered by recorded transcripts

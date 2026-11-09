@@ -58,6 +58,10 @@ struct WindowsUpdateStep {
     /// Which backend produced `last_items`, so the check reuses the same
     /// backend instead of re-detecting it.
     backend: Mutex<Option<UpdateBackend>>,
+    /// The resolved PowerShell path, cached alongside the backend so `fetch_listing`
+    /// reuses the exact executable that `detect_backend` found instead of doing a
+    /// second `PATH` lookup that could land on a different (system-installed) pwsh.
+    powershell: Mutex<Option<std::path::PathBuf>>,
 }
 
 /// The result of one Windows Update scan: the pending updates and whether
@@ -73,6 +77,7 @@ impl WindowsUpdateStep {
         Self {
             last_items: Mutex::new(None),
             backend: Mutex::new(None),
+            powershell: Mutex::new(None),
         }
     }
 
@@ -93,6 +98,9 @@ impl WindowsUpdateStep {
     /// Detects which backend is available: PSWindowsUpdate first, then usoclient.
     fn detect_backend(&self) -> Result<UpdateBackend, StepError> {
         if let Some(powershell) = powershell_command() {
+            if let Ok(mut p) = self.powershell.lock() {
+                *p = Some(powershell.clone());
+            }
             let output = CommandSpec::new(powershell)
                 .args([
                     "-NoProfile",
@@ -134,7 +142,8 @@ impl WindowsUpdateStep {
     fn fetch_listing(&self) -> Result<WindowsUpdateListing, StepError> {
         match self.backend()? {
             UpdateBackend::PsWindowsUpdate => {
-                let Some(powershell) = powershell_command() else {
+                let powershell = self.powershell.lock().ok().and_then(|p| p.clone());
+                let Some(powershell) = powershell else {
                     return Ok(WindowsUpdateListing::default());
                 };
                 let output = CommandSpec::new(powershell)
@@ -800,7 +809,9 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let previous = std::env::var("PATH").ok();
+        let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
         std::env::set_var("PATH", &dir);
+        std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
 
         let options = RunOptions::new().with_filters(
             crate::policy::ItemFilters::new()
@@ -814,6 +825,11 @@ mod tests {
             std::env::set_var("PATH", previous);
         } else {
             std::env::remove_var("PATH");
+        }
+        if let Some(previous_log) = previous_log {
+            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
+        } else {
+            std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
         }
         let _ = std::fs::remove_dir_all(&dir);
 
