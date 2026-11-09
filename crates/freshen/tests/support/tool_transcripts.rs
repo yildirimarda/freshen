@@ -959,6 +959,16 @@ pub fn dotnet_tools_transcript() -> Vec<&'static str> {
     t
 }
 
+/// Named insertion: the `fisher update` step.
+pub fn fisher_steps() -> &'static [&'static str] {
+    &["fisher update"]
+}
+
+/// Named insertion: full Fisher transcript (`fisher update`).
+pub fn fisher_transcript() -> Vec<&'static str> {
+    fisher_steps().to_vec()
+}
+
 /// Named insertion: the `conda update -n base conda` step.
 pub fn conda_update_base_steps() -> &'static [&'static str] {
     &["conda update -n base conda"]

@@ -36,6 +36,7 @@ pub mod emerge;
 mod executable;
 pub mod exit;
 pub mod firmware;
+pub mod fisher;
 pub mod flatpak;
 pub mod fnm;
 pub mod gem;
