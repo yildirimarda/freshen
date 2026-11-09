@@ -42,6 +42,7 @@ pub mod fnm;
 pub mod gem;
 pub mod gh;
 pub mod go;
+pub mod helm;
 pub mod homebrew;
 pub mod jenv;
 pub mod kubectl;

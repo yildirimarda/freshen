@@ -573,6 +573,16 @@ pub fn flatpak_cleanup_transcript() -> Vec<&'static str> {
     flatpak_cleanup_steps().to_vec()
 }
 
+/// Named insertion: the Helm repo update step.
+pub fn helm_steps() -> &'static [&'static str] {
+    &["helm repo update"]
+}
+
+/// Named insertion: full Helm transcript (repo update).
+pub fn helm_transcript() -> Vec<&'static str> {
+    helm_steps().to_vec()
+}
+
 /// Named insertion: the Snap refresh step.
 pub fn snap_steps() -> &'static [&'static str] {
     &["snap refresh"]

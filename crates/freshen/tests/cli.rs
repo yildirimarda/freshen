@@ -39,7 +39,7 @@ fn stderr(output: &Output) -> String {
 }
 
 /// The built-in steps that exist on every platform.
-const COMMON_STEPS: &str = "antidote,brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-doctor,brew-bundle-cleanup,brew-reopen,colima-stop,colima-start,docker,dotnet-tools,go,rustup,asdf,cargo-update,composer,uv,mise,fnm,gem,gh,npm,nvm,volta,pnpm,pip,pipx,vscode,cursor,vscodium,pacman,aur,zypper,apk,emerge,termux,firmware,fisher,flatpak,sdkman,snap,nix,nix-profile,nix-collect-garbage,home-manager,rpm-ostree,bootc,microsoft-store,yarn,bun,pyenv,rbenv,nvim-lazy,nvim-packer,nvim-mason,nvim-treesitter,oh-my-zsh";
+const COMMON_STEPS: &str = "antidote,brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-doctor,brew-bundle-cleanup,brew-reopen,colima-stop,colima-start,docker,dotnet-tools,go,rustup,asdf,cargo-update,composer,uv,mise,fnm,gem,gh,helm,npm,nvm,volta,pnpm,pip,pipx,vscode,cursor,vscodium,pacman,aur,zypper,apk,emerge,termux,firmware,fisher,flatpak,sdkman,snap,nix,nix-profile,nix-collect-garbage,home-manager,rpm-ostree,bootc,microsoft-store,yarn,bun,pyenv,rbenv,nvim-lazy,nvim-packer,nvim-mason,nvim-treesitter,oh-my-zsh";
 
 /// The built-in steps that only exist on macOS.
 const MACOS_STEPS: &str = "mas,macos-updates";
@@ -102,7 +102,7 @@ fn list_steps_lists_every_builtin_step() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
-    assert!(text.contains("Steps (77):"), "listing: {text}");
+    assert!(text.contains("Steps (78):"), "listing: {text}");
     assert!(text.contains("antidote"), "listing: {text}");
     assert!(text.contains("conda"), "listing: {text}");
     assert!(text.contains("mamba"), "listing: {text}");
@@ -155,6 +155,7 @@ fn list_steps_lists_every_builtin_step() {
     assert!(text.contains("emerge"), "listing: {text}");
     assert!(text.contains("firmware"), "listing: {text}");
     assert!(text.contains("flatpak"), "listing: {text}");
+    assert!(text.contains("helm"), "listing: {text}");
     assert!(text.contains("sdkman"), "listing: {text}");
     assert!(text.contains("jenv"), "listing: {text}");
     assert!(text.contains("tfenv"), "listing: {text}");
