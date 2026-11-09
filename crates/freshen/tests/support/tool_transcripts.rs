@@ -673,6 +673,16 @@ pub fn vscodium_transcript() -> Vec<&'static str> {
     vscodium_steps().to_vec()
 }
 
+/// Named insertion: the `gh extension upgrade --all` step.
+pub fn gh_steps() -> &'static [&'static str] {
+    &["gh extension upgrade --all"]
+}
+
+/// Named insertion: full GitHub CLI extensions transcript (upgrade all).
+pub fn gh_transcript() -> Vec<&'static str> {
+    gh_steps().to_vec()
+}
+
 /// Named insertion: the `sdk selfupdate` and `sdk upgrade` steps.
 pub fn sdkman_steps() -> &'static [&'static str] {
     &["sdk selfupdate", "sdk upgrade"]

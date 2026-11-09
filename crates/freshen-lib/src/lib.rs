@@ -40,6 +40,7 @@ pub mod fisher;
 pub mod flatpak;
 pub mod fnm;
 pub mod gem;
+pub mod gh;
 pub mod go;
 pub mod homebrew;
 pub mod jenv;

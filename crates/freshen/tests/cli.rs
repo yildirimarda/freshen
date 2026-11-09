@@ -39,7 +39,7 @@ fn stderr(output: &Output) -> String {
 }
 
 /// The built-in steps that exist on every platform.
-const COMMON_STEPS: &str = "antidote,brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-doctor,brew-bundle-cleanup,brew-reopen,colima-stop,colima-start,docker,dotnet-tools,go,rustup,asdf,cargo-update,composer,uv,mise,fnm,gem,npm,nvm,volta,pnpm,pip,pipx,vscode,cursor,vscodium,pacman,aur,zypper,apk,emerge,termux,firmware,fisher,flatpak,sdkman,snap,nix,nix-profile,nix-collect-garbage,home-manager,rpm-ostree,bootc,microsoft-store,yarn,bun,pyenv,rbenv,nvim-lazy,nvim-packer,nvim-mason,nvim-treesitter,oh-my-zsh";
+const COMMON_STEPS: &str = "antidote,brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-doctor,brew-bundle-cleanup,brew-reopen,colima-stop,colima-start,docker,dotnet-tools,go,rustup,asdf,cargo-update,composer,uv,mise,fnm,gem,gh,npm,nvm,volta,pnpm,pip,pipx,vscode,cursor,vscodium,pacman,aur,zypper,apk,emerge,termux,firmware,fisher,flatpak,sdkman,snap,nix,nix-profile,nix-collect-garbage,home-manager,rpm-ostree,bootc,microsoft-store,yarn,bun,pyenv,rbenv,nvim-lazy,nvim-packer,nvim-mason,nvim-treesitter,oh-my-zsh";
 
 /// The built-in steps that only exist on macOS.
 const MACOS_STEPS: &str = "mas,macos-updates";
@@ -102,7 +102,7 @@ fn list_steps_lists_every_builtin_step() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let text = stdout(&output);
-    assert!(text.contains("Steps (75):"), "listing: {text}");
+    assert!(text.contains("Steps (76):"), "listing: {text}");
     assert!(text.contains("antidote"), "listing: {text}");
     assert!(text.contains("conda"), "listing: {text}");
     assert!(text.contains("mamba"), "listing: {text}");
@@ -141,6 +141,7 @@ fn list_steps_lists_every_builtin_step() {
     assert!(text.contains("vscode"), "listing: {text}");
     assert!(text.contains("cursor"), "listing: {text}");
     assert!(text.contains("vscodium"), "listing: {text}");
+    assert!(text.contains("gh"), "listing: {text}");
     assert!(text.contains("mas"), "listing: {text}");
     assert!(text.contains("macos-updates"), "listing: {text}");
     assert!(text.contains("apt"), "listing: {text}");
@@ -185,7 +186,7 @@ fn dry_run_with_every_builtin_step_excluded_plans_nothing() {
     let output = run(&[
         "--dry-run",
         "--skip",
-        &format!("{COMMON_STEPS},{MACOS_STEPS},apt,dnf,cargo-update,composer,conda,mamba,pnpm,yarn,bun,elixir,winget,chocolatey,scoop,windows-update,wsl,jenv,tfenv,nvim-lazy,nvim-packer,nvim-mason,nvim-treesitter,oh-my-zsh,zinit,tpm"),
+        &format!("{COMMON_STEPS},{MACOS_STEPS},apt,dnf,cargo-update,composer,conda,mamba,pnpm,yarn,bun,elixir,gh,winget,chocolatey,scoop,windows-update,wsl,jenv,tfenv,nvim-lazy,nvim-packer,nvim-mason,nvim-treesitter,oh-my-zsh,zinit,tpm"),
     ]);
 
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
@@ -204,7 +205,7 @@ fn check_with_every_builtin_step_excluded_reports_up_to_date() {
     let output = run(&[
         "--check",
         "--skip",
-        &format!("{COMMON_STEPS},{MACOS_STEPS},apt,dnf,cargo-update,composer,conda,mamba,pnpm,yarn,bun,elixir,winget,chocolatey,scoop,windows-update,wsl,jenv,tfenv,nvim-lazy,nvim-packer,nvim-mason,nvim-treesitter,oh-my-zsh,zinit,tpm"),
+        &format!("{COMMON_STEPS},{MACOS_STEPS},apt,dnf,cargo-update,composer,conda,mamba,pnpm,yarn,bun,elixir,gh,winget,chocolatey,scoop,windows-update,wsl,jenv,tfenv,nvim-lazy,nvim-packer,nvim-mason,nvim-treesitter,oh-my-zsh,zinit,tpm"),
     ]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
