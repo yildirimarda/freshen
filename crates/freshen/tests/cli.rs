@@ -70,6 +70,7 @@ fn help_lists_every_flag() {
         "--skip-metered-check",
         "--min-free-disk-gib",
         "--battery-threshold",
+        "--install-aws-cli-updates",
     ] {
         assert!(text.contains(flag), "help does not mention {flag}: {text}");
     }

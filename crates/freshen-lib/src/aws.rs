@@ -15,6 +15,7 @@
 use std::path::Path;
 
 use crate::homebrew::brew_installs;
+use crate::options::RunOptions;
 use crate::output::human;
 use crate::platform::Platform;
 use crate::process::CommandSpec;
@@ -92,9 +93,70 @@ impl AwsCliStep {
         Ok(CheckReport::from_items(items))
     }
 
-    /// Report-only: never upgrades the AWS CLI.
-    fn do_nothing(&self) {
-        human!("aws: report only, nothing to upgrade");
+    /// Runs the official AWS CLI v2 installer for the current platform.
+    #[cfg(target_os = "linux")]
+    fn install(&self) -> Result<(), StepError> {
+        let zip = match std::env::consts::ARCH {
+            "x86_64" | "aarch64" => {
+                format!("awscli-exe-linux-{}.zip", std::env::consts::ARCH)
+            }
+            arch => {
+                return Err(StepError::run(
+                    AWS_CLI,
+                    format!("unsupported architecture {arch} for the AWS CLI v2 installer"),
+                ));
+            }
+        };
+        let url = format!("https://awscli.amazonaws.com/{zip}");
+        human!("aws: install (AWS CLI v2 via official installer)");
+        CommandSpec::new("curl")
+            .args([url.as_str(), "-o", "awscliv2.zip"])
+            .neutral_locale()
+            .run()
+            .map_err(|error| StepError::run_from_process(AWS_CLI, &error))?;
+        CommandSpec::new("unzip")
+            .args(["-o", "awscliv2.zip"])
+            .run()
+            .map_err(|error| StepError::run_from_process(AWS_CLI, &error))?;
+        CommandSpec::new("sudo")
+            .args(["./aws/install"])
+            .run()
+            .map(|_| ())
+            .map_err(|error| StepError::run_from_process(AWS_CLI, &error))
+    }
+
+    /// Runs the official AWS CLI v2 installer for the current platform.
+    #[cfg(target_os = "macos")]
+    fn install(&self) -> Result<(), StepError> {
+        let url = "https://awscli.amazonaws.com/AWSCLIV2.pkg";
+        human!("aws: install (AWS CLI v2 via official installer)");
+        CommandSpec::new("curl")
+            .args([url, "-o", "AWSCLIV2.pkg"])
+            .neutral_locale()
+            .run()
+            .map_err(|error| StepError::run_from_process(AWS_CLI, &error))?;
+        CommandSpec::new("sudo")
+            .args(["installer", "-pkg", "AWSCLIV2.pkg", "-target", "/"])
+            .run()
+            .map(|_| ())
+            .map_err(|error| StepError::run_from_process(AWS_CLI, &error))
+    }
+
+    /// Runs the official AWS CLI v2 installer for the current platform.
+    #[cfg(target_os = "windows")]
+    fn install(&self) -> Result<(), StepError> {
+        let url = "https://awscli.amazonaws.com/AWSCLIV2.msi";
+        human!("aws: install (AWS CLI v2 via official installer)");
+        CommandSpec::new("curl")
+            .args([url, "-o", "AWSCLIV2.msi"])
+            .neutral_locale()
+            .run()
+            .map_err(|error| StepError::run_from_process(AWS_CLI, &error))?;
+        CommandSpec::new("msiexec.exe")
+            .args(["/i", "AWSCLIV2.msi", "/quiet"])
+            .run()
+            .map(|_| ())
+            .map_err(|error| StepError::run_from_process(AWS_CLI, &error))
     }
 }
 
@@ -125,8 +187,18 @@ impl Step for AwsCliStep {
     }
 
     fn run(&self) -> Result<(), StepError> {
-        self.do_nothing();
-        Ok(())
+        self.run_with_options(&RunOptions::new())
+    }
+
+    /// Updates AWS CLI v2 through the official installer when the opt-in flag
+    /// is set; otherwise reports that a newer version is available and changes
+    /// nothing.
+    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
+        if !options.install_aws_cli_updates() {
+            human!("aws: report only, nothing to upgrade (use --install-aws-cli-updates)");
+            return Ok(());
+        }
+        self.install()
     }
 
     fn platforms(&self) -> &'static [Platform] {
@@ -150,7 +222,13 @@ fn version_key(version: &str) -> Vec<u64> {
 #[cfg(test)]
 mod tests {
     use super::{version_newer, AwsCliStep};
+    use crate::options::RunOptions;
+    use crate::step::Step;
 
+    #[test]
+    fn run_without_the_opt_in_is_report_only() {
+        assert!(AwsCliStep.run_with_options(&RunOptions::new()).is_ok());
+    }
     #[test]
     fn parse_version_reads_aws_cli_v2() {
         assert_eq!(
