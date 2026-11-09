@@ -757,6 +757,16 @@ pub fn nvim_treesitter_transcript() -> Vec<&'static str> {
     nvim_treesitter_steps().to_vec()
 }
 
+/// Named insertion: the `omz update --unattended` step.
+pub fn omz_steps() -> &'static [&'static str] {
+    &["omz update --unattended"]
+}
+
+/// Named insertion: full oh-my-zsh transcript (`omz update --unattended`).
+pub fn omz_transcript() -> Vec<&'static str> {
+    omz_steps().to_vec()
+}
+
 /// Named insertion: the `pnpm update -g` step.
 pub fn pnpm_steps() -> &'static [&'static str] {
     &["pnpm update -g"]
