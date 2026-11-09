@@ -1718,6 +1718,15 @@ mod tests {
             Err(error) => panic!("no live output before the process exited: {error}"),
         };
         assert_eq!(first, (OutputStream::Stdout, "first".to_owned()));
+
+        // Restore `PATH` while still holding the guard: releasing the guard
+        // with a polluted `PATH` lets a parallel test spawn a command right
+        // when `PATH` no longer contains it (e.g. the winget step stub).
+        if let Some(previous) = previous {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
         drop(_guard);
 
         match handle.join() {
@@ -1729,11 +1738,6 @@ mod tests {
             Err(_) => panic!("runner thread panicked"),
         }
 
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
