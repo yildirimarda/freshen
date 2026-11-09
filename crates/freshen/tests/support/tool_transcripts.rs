@@ -767,6 +767,26 @@ pub fn omz_transcript() -> Vec<&'static str> {
     omz_steps().to_vec()
 }
 
+/// Named insertion: the `zinit self-update` step.
+pub fn zinit_selfupdate_steps() -> &'static [&'static str] {
+    &["zinit self-update"]
+}
+
+/// Named insertion: full zinit self-update transcript (`zinit self-update`).
+pub fn zinit_selfupdate_transcript() -> Vec<&'static str> {
+    zinit_selfupdate_steps().to_vec()
+}
+
+/// Named insertion: the `zinit self-update` and `zinit update --all` steps.
+pub fn zinit_steps() -> &'static [&'static str] {
+    &["zinit self-update", "zinit update --all"]
+}
+
+/// Named insertion: full zinit transcript (self-update then update --all).
+pub fn zinit_transcript() -> Vec<&'static str> {
+    zinit_steps().to_vec()
+}
+
 /// Named insertion: the `pnpm update -g` step.
 pub fn pnpm_steps() -> &'static [&'static str] {
     &["pnpm update -g"]

@@ -105,6 +105,7 @@ pub mod winget;
 pub mod wsl;
 pub mod xcode;
 pub mod yarn;
+pub mod zinit;
 pub mod zypper;
 
 pub use apps::{
