@@ -12,6 +12,7 @@ pub mod apt;
 pub mod asdf;
 pub mod aur;
 pub mod aws;
+pub mod az;
 pub mod bootc;
 pub mod bun;
 pub mod bundle_cleanup_packages;
