@@ -217,6 +217,7 @@ pub struct RunOptions {
     install_wsl_updates: bool,
     install_nvim_lazy: bool,
     install_nvim_packer: bool,
+    install_nvim_mason: bool,
     wsl_distro: Option<String>,
     selection: StepSelection,
     preflight: PreflightConfig,
@@ -318,6 +319,17 @@ impl RunOptions {
     #[must_use]
     pub fn with_install_nvim_packer(mut self, install: bool) -> Self {
         self.install_nvim_packer = install;
+        self
+    }
+
+    /// Sets `--install-nvim-mason`: run `nvim --headless "+MasonUpdate" +qa`
+    /// instead of only reporting that the Mason package update is available.
+    ///
+    /// Updating Mason packages can modify the user's neovim config, so the
+    /// step is opt-in and only runs with this flag.
+    #[must_use]
+    pub fn with_install_nvim_mason(mut self, install: bool) -> Self {
+        self.install_nvim_mason = install;
         self
     }
 
@@ -526,6 +538,16 @@ impl RunOptions {
     #[must_use]
     pub fn install_nvim_packer(&self) -> bool {
         self.install_nvim_packer
+    }
+
+    /// Returns `true` when `--install-nvim-mason` asks for `nvim --headless
+    /// "+MasonUpdate" +qa` to run.
+    ///
+    /// Updating Mason packages can modify the user's neovim config, so the
+    /// step is opt-in and only runs with this flag.
+    #[must_use]
+    pub fn install_nvim_mason(&self) -> bool {
+        self.install_nvim_mason
     }
 
     /// Returns the WSL distribution selected with `--wsl-distro`, when running
