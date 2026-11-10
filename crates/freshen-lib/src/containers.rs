@@ -16,7 +16,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -45,6 +45,18 @@ const CONTAINER_PLATFORMS: [Platform; 2] = [Platform::Macos, Platform::Linux];
 /// The `docker ps --format` argument, with the literal tabs the zsh script
 /// produces with `$'...'`.
 const PS_FORMAT: &str = "{{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.project\"}}";
+
+/// How long to wait for containers to become healthy after `up -d`.
+///
+/// Overridden by the `FRESHEN_HEALTH_WAIT_SECS` environment variable (in
+/// seconds), which tests use to make the wait short or instant.
+const HEALTH_WAIT: Duration = Duration::from_secs(60);
+
+/// How often to poll container health while waiting.
+///
+/// Overridden by the `FRESHEN_HEALTH_POLL_SECS` environment variable (in
+/// seconds).
+const HEALTH_POLL: Duration = Duration::from_secs(2);
 
 /// Label on a compose project that opts it out of compose pull/up.
 ///
@@ -2119,8 +2131,9 @@ impl ContainerStartStep {
         if let Some(compose) = self.compose {
             for project in &snapshot.compose {
                 human!("{} up -d: {}", compose.as_str(), project.name());
-                if let Err(error) = compose.command(project, &["up", "-d"]).run() {
-                    failures.push(StepError::run_from_process(COLIMA_START, &error));
+                match up_and_wait_for_health(COLIMA_START, compose, project, self.container_cli) {
+                    Ok(unhealthy) => report_unhealthy_containers(&unhealthy),
+                    Err(error) => failures.push(error),
                 }
             }
         }
@@ -2164,8 +2177,9 @@ fn restore_runtime(
     if let Some(compose) = compose {
         for project in &stopped.compose {
             human!("{} up -d: {}", compose.as_str(), project.name());
-            if let Err(error) = compose.command(project, &["up", "-d"]).run() {
-                failures.push(StepError::run_from_process(step, &error));
+            match up_and_wait_for_health(step, compose, project, container_cli) {
+                Ok(unhealthy) => report_unhealthy_containers(&unhealthy),
+                Err(error) => failures.push(error),
             }
         }
     }
@@ -2298,8 +2312,9 @@ impl Step for DockerStep {
                 if let Err(error) = compose.command(project, &["pull", "--quiet"]).run() {
                     failures.push(StepError::run_from_process(DOCKER, &error));
                 }
-                if let Err(error) = compose.command(project, &["up", "-d"]).run() {
-                    failures.push(StepError::run_from_process(DOCKER, &error));
+                match up_and_wait_for_health(DOCKER, compose, project, self.container_cli) {
+                    Ok(unhealthy) => report_unhealthy_containers(&unhealthy),
+                    Err(error) => failures.push(error),
                 }
             }
         }
@@ -2410,6 +2425,143 @@ fn selected_containers(
 
 fn container_command(container_cli: &'static str, arguments: &[&str], id: &str) -> CommandSpec {
     CommandSpec::new(container_cli).args(arguments).arg(id)
+}
+
+/// Lists the running containers of a compose project, identified by the
+/// `com.docker.compose.project` label that Compose attaches to every container
+/// it manages.
+fn project_containers(container_cli: &'static str, project: &str) -> Vec<StandaloneContainer> {
+    let Ok(output) = CommandSpec::new(container_cli)
+        .args([
+            "ps",
+            "--filter",
+            &format!("label=com.docker.compose.project={project}"),
+            "--format",
+            PS_FORMAT,
+        ])
+        .neutral_locale()
+        .run()
+    else {
+        return Vec::new();
+    };
+    parse_ps_containers(output.stdout())
+}
+
+/// Parses `docker ps --format "{{.ID}}\t{{.Names}}\t{{.Label ...}}"` output into
+/// containers, keeping compose-managed containers too (unlike
+/// [`parse_standalone_containers`], which drops them).
+fn parse_ps_containers(output: &str) -> Vec<StandaloneContainer> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\t');
+            let id = fields.next()?;
+            let name = fields.next()?;
+            let _project = fields.next().unwrap_or_default();
+            (!id.is_empty() && !name.is_empty()).then(|| StandaloneContainer {
+                id: id.to_owned(),
+                name: name.to_owned(),
+            })
+        })
+        .collect()
+}
+
+/// Runs `up -d` for `project` and waits for its containers to become healthy,
+/// returning the containers that did not become healthy before the timeout.
+/// Containers without a healthcheck are considered healthy.
+fn up_and_wait_for_health(
+    step: StepId,
+    compose: ComposeCommand,
+    project: &ComposeProject,
+    container_cli: &'static str,
+) -> Result<Vec<StandaloneContainer>, StepError> {
+    if let Err(error) = compose.command(project, &["up", "-d"]).run() {
+        return Err(StepError::run_from_process(step, &error));
+    }
+    let containers = project_containers(container_cli, project.name());
+    Ok(wait_for_container_health(&containers, container_cli))
+}
+
+/// Reports containers that did not become healthy as a warning, without
+/// failing the step.
+fn report_unhealthy_containers(unhealthy: &[StandaloneContainer]) {
+    if unhealthy.is_empty() {
+        return;
+    }
+    let names: Vec<&str> = unhealthy.iter().map(StandaloneContainer::name).collect();
+    human!(
+        "warning: the following containers did not become healthy: {}",
+        names.join(", ")
+    );
+}
+
+/// Polls each container's health until it is healthy or the wait elapses,
+/// returning the containers that are still not healthy.
+fn wait_for_container_health(
+    containers: &[StandaloneContainer],
+    container_cli: &'static str,
+) -> Vec<StandaloneContainer> {
+    let wait = health_wait();
+    if containers.is_empty() {
+        return Vec::new();
+    }
+
+    let started = Instant::now();
+    let mut remaining: Vec<StandaloneContainer> = containers.to_vec();
+    loop {
+        remaining = unhealthy_now(&remaining, container_cli);
+        if remaining.is_empty() || started.elapsed() >= wait {
+            return remaining;
+        }
+        let remaining_time = wait.saturating_sub(started.elapsed());
+        std::thread::sleep(health_poll().min(remaining_time));
+    }
+}
+
+/// Returns the containers that are not healthy right now.
+fn unhealthy_now(
+    containers: &[StandaloneContainer],
+    container_cli: &'static str,
+) -> Vec<StandaloneContainer> {
+    containers
+        .iter()
+        .filter(|container| !container_is_healthy(container.id(), container_cli))
+        .cloned()
+        .collect()
+}
+
+/// Returns `true` when `container` is healthy or has no healthcheck to wait
+/// for (`"none"` means no healthcheck is configured).
+fn container_is_healthy(container_id: &str, container_cli: &'static str) -> bool {
+    let Ok(output) = CommandSpec::new(container_cli)
+        .args([
+            "inspect",
+            "--format",
+            "{{.State.Health.Status}}",
+            container_id,
+        ])
+        .neutral_locale()
+        .run()
+    else {
+        return false;
+    };
+    matches!(output.stdout().trim(), "healthy" | "none")
+}
+
+fn health_wait() -> Duration {
+    std::env::var("FRESHEN_HEALTH_WAIT_SECS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(HEALTH_WAIT)
+}
+
+fn health_poll() -> Duration {
+    std::env::var("FRESHEN_HEALTH_POLL_SECS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(HEALTH_POLL)
 }
 
 fn detect_with_brew(runtime: &dyn ContainerRuntime) -> Detection {
