@@ -733,6 +733,24 @@ pub fn rustup_transcript() -> Vec<&'static str> {
     rustup_steps().to_vec()
 }
 
+/// Named insertion: the `git lfs version` detection query.
+pub fn git_lfs_version() -> &'static [&'static str] {
+    &["git lfs version"]
+}
+
+/// Named insertion: the `git lfs install --skip-repo` step.
+pub fn git_lfs_install_steps() -> &'static [&'static str] {
+    &["git lfs install --skip-repo"]
+}
+
+/// Named insertion: full `git lfs` transcript (version query then install).
+pub fn git_lfs_transcript() -> Vec<&'static str> {
+    let mut t = Vec::new();
+    t.extend_from_slice(git_lfs_version());
+    t.extend_from_slice(git_lfs_install_steps());
+    t
+}
+
 /// Named insertion: the `cargo install-update -a` step.
 pub fn cargo_update_steps() -> &'static [&'static str] {
     &["cargo install-update -a"]
