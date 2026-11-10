@@ -163,7 +163,28 @@ fn stops_colima_and_restores_containers_around_the_formula_upgrade() {
     install_colima(&tools);
     install_docker(&tools);
 
-    let output = run(&tools, &Scenario::default());
+    let inspect_abc = "docker inspect --format {{.State.Health.Status}} abc";
+    let inspect_def = "docker inspect --format {{.State.Health.Status}} def";
+
+    let output = tools
+        .command()
+        .env("FRESHEN_OUTDATED_FORMULAE", "colima\n")
+        .env("FRESHEN_OUTDATED_CASKS", "")
+        .env("FRESHEN_BREW_UPGRADE_STATUS", "0")
+        .env("FRESHEN_COLIMA_STATUS", "0")
+        .env("FRESHEN_COLIMA_START_STATUS", "0")
+        .env("FRESHEN_COMPOSE_JSON", COMPOSE_JSON)
+        .env("FRESHEN_PS_OUTPUT", PS_OUTPUT)
+        .env("FRESHEN_CONTAINERS_WEB", "abc\tweb-1\tweb")
+        .env("FRESHEN_CONTAINERS_DB", "def\tdb-1\tdb")
+        .env("FRESHEN_HEALTH_WAIT_SECS", "0")
+        .env("FRESHEN_HEALTH_POLL_SECS", "1")
+        .env("FRESHEN_HEALTH_ABC", "healthy")
+        .env("FRESHEN_HEALTH_DEF", "healthy")
+        .env("FRESHEN_HEALTH_GHI", "healthy")
+        .args(["--only", ALL_STEPS, "--cleanup"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let mut expected = Vec::new();
@@ -182,8 +203,10 @@ fn stops_colima_and_restores_containers_around_the_formula_upgrade() {
     expected.extend(docker_start_containers().iter().map(|&s| s.to_string()));
     expected.push(web("up -d"));
     expected.push(project_ps("web"));
+    expected.push(inspect_abc.to_string());
     expected.push(db("up -d"));
     expected.push(project_ps("db"));
+    expected.push(inspect_def.to_string());
     expected.extend(brew_cask_query().iter().map(|&s| s.to_string()));
     expected.extend(brew_autoremove().iter().map(|&s| s.to_string()));
     expected.extend(brew_cleanup().iter().map(|&s| s.to_string()));
@@ -192,9 +215,11 @@ fn stops_colima_and_restores_containers_around_the_formula_upgrade() {
     expected.push(web("pull --quiet"));
     expected.push(web("up -d"));
     expected.push(project_ps("web"));
+    expected.push(inspect_abc.to_string());
     expected.push(db("pull --quiet"));
     expected.push(db("up -d"));
     expected.push(project_ps("db"));
+    expected.push(inspect_def.to_string());
     expected.extend(docker_image_prune().iter().map(|&s| s.to_string()));
     assert_eq!(tools.step_calls(), expected);
 
@@ -314,8 +339,12 @@ fn a_container_that_becomes_healthy_after_waiting_is_not_reported() {
         .env("FRESHEN_COMPOSE_JSON", COMPOSE_JSON)
         .env("FRESHEN_PS_OUTPUT", PS_OUTPUT)
         .env("FRESHEN_CONTAINERS_WEB", "ghi\tweb-1\tweb")
+        .env("FRESHEN_CONTAINERS_DB", "def\tdb-1\tdb")
         .env("FRESHEN_HEALTH_WAIT_SECS", "2")
         .env("FRESHEN_HEALTH_POLL_SECS", "1")
+        .env("FRESHEN_HEALTH_ABC", "healthy")
+        .env("FRESHEN_HEALTH_DEF", "healthy")
+        .env("FRESHEN_HEALTH_GHI", "healthy")
         .args(["--only", ALL_STEPS, "--cleanup"])
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
