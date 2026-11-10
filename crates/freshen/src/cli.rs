@@ -321,6 +321,7 @@ impl Cli {
             .with_step_overrides(config.step_overrides())
             .with_filters(config.item_filters())
             .with_app_lists(config.app_lists())
+            .with_pre_commit_repositories(config.pre_commit_repositories())
             .with_chocolatey_except(self.except.clone())
     }
 }

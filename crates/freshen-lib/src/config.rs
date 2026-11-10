@@ -109,6 +109,10 @@ pub struct Config {
     /// The apps that are quit around a cask upgrade.
     #[serde(default)]
     pub apps: AppSection,
+
+    /// The repositories whose pre-commit hooks are kept up to date.
+    #[serde(default)]
+    pub pre_commit: PreCommitSection,
 }
 
 /// The `[preflight]` section: the checks that run before an update.
@@ -208,6 +212,19 @@ pub struct AppSection {
     pub always_quit: Option<Vec<String>>,
 }
 
+/// The `[pre-commit]` section: the repositories whose pre-commit hooks
+/// freshen keeps up to date.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreCommitSection {
+    /// The repositories freshen runs `pre-commit autoupdate` in.
+    ///
+    /// Each entry is the path to a repository checkout. freshen never scans
+    /// the disk for repositories: only the listed repositories are touched,
+    /// so the step does nothing until a repository is listed here.
+    pub repositories: Option<Vec<String>>,
+}
+
 impl Config {
     /// Parses configuration text.
     ///
@@ -276,6 +293,12 @@ impl Config {
         AppLists::new()
             .with_never_quit(self.apps.never_quit.clone().unwrap_or_default())
             .with_always_quit(self.apps.always_quit.clone().unwrap_or_default())
+    }
+
+    /// The repositories whose pre-commit hooks freshen keeps up to date.
+    #[must_use]
+    pub fn pre_commit_repositories(&self) -> Vec<String> {
+        self.pre_commit.repositories.clone().unwrap_or_default()
     }
 
     /// The step ids the file enables or disables.

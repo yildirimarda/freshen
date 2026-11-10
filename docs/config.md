@@ -172,6 +172,27 @@ instead of replacing them:
 NEVER_QUIT="com.docker,com.orbstack" freshen
 ```
 
+### `[pre_commit]`
+
+The repositories whose pre-commit hooks freshen keeps up to date.
+
+| Key | Type | Meaning |
+|---|---|---|
+| `repositories` | list of paths | The repositories freshen runs `pre-commit autoupdate` in. |
+
+```toml
+[pre_commit]
+repositories = [
+    "/Users/you/src/dotfiles",
+    "/Users/you/src/website",
+]
+```
+
+freshen never scans the disk for repositories: only the repositories listed
+here are touched, so the step does nothing until at least one repository is
+configured. Each repository is updated with `pre-commit autoupdate`, run
+inside the repository checkout.
+
 ## Precedence
 
 1. A flag given on the command line wins.
