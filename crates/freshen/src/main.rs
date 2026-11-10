@@ -49,7 +49,8 @@ fn main() -> ExitCode {
     let app_lists = config.app_lists().merged_with(AppLists::from_env());
     let options = options
         .with_app_lists(app_lists)
-        .with_container_runtime(active_container_runtime(cli.container_runtime));
+        .with_container_runtime(active_container_runtime(cli.container_runtime))
+        .with_pre_commit_repositories(config.pre_commit_repositories());
 
     // Validate `sudo` credentials once up front so every step that needs root
     // can be skipped with a "needs sudo" reason instead of failing mid-run.
@@ -221,6 +222,7 @@ fn build_registry(runtime: Option<ContainerRuntimeKind>) -> Registry {
     registry = freshen_lib::vscodium::register(registry);
     registry = freshen_lib::gh::register(registry);
     registry = freshen_lib::git_lfs::register(registry);
+    registry = freshen_lib::pre_commit::register(registry);
     registry = freshen_lib::helm::register(registry);
     registry = freshen_lib::kubectl::register(registry);
     registry = freshen_lib::winget::register(registry);
