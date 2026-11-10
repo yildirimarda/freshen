@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::containers::ActiveContainerRuntime;
@@ -230,6 +231,7 @@ pub struct RunOptions {
     step_overrides: BTreeMap<String, bool>,
     filters: ItemFilters,
     app_lists: AppLists,
+    pre_commit_repositories: Vec<PathBuf>,
     chocolatey_except: Vec<String>,
     container_runtime: Option<ActiveContainerRuntime>,
     restart_services: bool,
@@ -420,6 +422,19 @@ impl RunOptions {
     #[must_use]
     pub fn with_app_lists(mut self, app_lists: AppLists) -> Self {
         self.app_lists = app_lists;
+        self
+    }
+
+    /// Replaces the repositories whose pre-commit hooks are kept up to date.
+    ///
+    /// Each entry is the path to a repository checkout. freshen never scans
+    /// the disk for repositories: only the listed ones are touched.
+    #[must_use]
+    pub fn with_pre_commit_repositories(
+        mut self,
+        repositories: impl IntoIterator<Item = impl Into<PathBuf>>,
+    ) -> Self {
+        self.pre_commit_repositories = repositories.into_iter().map(Into::into).collect();
         self
     }
 
@@ -668,6 +683,12 @@ impl RunOptions {
     #[must_use]
     pub fn app_lists(&self) -> &AppLists {
         &self.app_lists
+    }
+
+    /// The repositories whose pre-commit hooks are kept up to date.
+    #[must_use]
+    pub fn pre_commit_repositories(&self) -> &[PathBuf] {
+        &self.pre_commit_repositories
     }
 
     /// The Chocolatey packages excluded with `--except`.

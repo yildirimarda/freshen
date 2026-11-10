@@ -25,6 +25,7 @@
 
 use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, BufReader, Read};
+use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 #[cfg(test)]
@@ -390,6 +391,7 @@ fn strip_escape_sequences(text: &str) -> String {
 pub struct CommandSpec {
     program: OsString,
     args: Vec<OsString>,
+    current_dir: Option<PathBuf>,
     env_clear: bool,
     env: Vec<(OsString, OsString)>,
     env_remove: Vec<OsString>,
@@ -407,6 +409,7 @@ impl CommandSpec {
         Self {
             program: program.into(),
             args: Vec::new(),
+            current_dir: None,
             env_clear: false,
             env: Vec::new(),
             env_remove: Vec::new(),
@@ -433,6 +436,16 @@ impl CommandSpec {
         S: Into<OsString>,
     {
         self.args.extend(args.into_iter().map(Into::into));
+        self
+    }
+
+    /// Sets the working directory the command runs in.
+    ///
+    /// The child inherits this directory, so a step can run a command inside
+    /// a repository checkout without changing freshen's own working directory.
+    #[must_use]
+    pub fn current_dir(mut self, current_dir: impl Into<PathBuf>) -> Self {
+        self.current_dir = Some(current_dir.into());
         self
     }
 
@@ -740,6 +753,9 @@ impl CommandSpec {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if let Some(current_dir) = &self.current_dir {
+            command.current_dir(current_dir);
+        }
 
         #[cfg(unix)]
         {
