@@ -1459,6 +1459,9 @@ mod tests {
     use super::{network_failure, Backoff, CommandSpec, NetworkFailure};
     #[cfg(unix)]
     use super::{OutputStream, ProcessError};
+    use std::env;
+    use std::fs;
+    use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
 
     fn backoff() -> Backoff {
@@ -2202,5 +2205,55 @@ mod tests {
 
         assert!(output.success());
         assert_eq!(output.stdout(), "done");
+    }
+
+    #[test]
+    fn every_path_mutation_holds_path_guard() {
+        // `PATH` is process-global and freshen's tests run in parallel, so
+        // every test that mutates it must hold `crate::process::PATH_GUARD`,
+        // otherwise a stub such as `choco` can be wiped off `PATH` while a
+        // guarded test (chocolatey, winget, scoop, ...) runs concurrently.
+        let src_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        collect_rs_files(&src_dir, &mut files);
+        files.sort();
+        for file in files {
+            let content = fs::read_to_string(&file)
+                .unwrap_or_else(|error| panic!("failed to read {}: {error}", file.display()));
+            let lines: Vec<&str> = content.lines().collect();
+            for (index, line) in lines.iter().enumerate() {
+                if !line.contains(r#"set_var("PATH""#) {
+                    continue;
+                }
+                let mut fn_start = 0;
+                for j in (0..=index).rev() {
+                    if lines[j].trim_start().starts_with("fn ") {
+                        fn_start = j;
+                        break;
+                    }
+                }
+                let segment = lines[fn_start..=index].join("\n");
+                assert!(
+                    segment.contains("PATH_GUARD"),
+                    "set_var(\"PATH\" in {}:{} does not hold crate::process::PATH_GUARD",
+                    file.display(),
+                    index + 1
+                );
+            }
+        }
+    }
+
+    fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_rs_files(&path, out);
+            } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+                out.push(path);
+            }
+        }
     }
 }
