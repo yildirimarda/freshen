@@ -220,6 +220,7 @@ fn build_registry(runtime: Option<ContainerRuntimeKind>) -> Registry {
     registry = freshen_lib::cursor::register(registry);
     registry = freshen_lib::vscodium::register(registry);
     registry = freshen_lib::gh::register(registry);
+    registry = freshen_lib::git_lfs::register(registry);
     registry = freshen_lib::helm::register(registry);
     registry = freshen_lib::kubectl::register(registry);
     registry = freshen_lib::winget::register(registry);

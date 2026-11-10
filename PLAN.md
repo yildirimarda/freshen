@@ -331,7 +331,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add the Google Cloud CLI (`gcloud components update --quiet`) when installed outside a system package manager, covered by recorded transcripts
 - [x] Add the Azure CLI (`az upgrade --yes`) when installed outside a system package manager, covered by recorded transcripts
 - [x] Fix the flaky PATH race in the freshen-lib unit tests: the gcloud.rs and az.rs tests set and restore the global PATH (some set it to an empty string) without taking crate::process::PATH_GUARD, so they can wipe the stub `choco` off PATH while a chocolatey, winget, scoop or other guarded test runs in parallel (seen as "could not start `choco`: No such file or directory" in chocolatey::tests::check_excludes_excepted_packages on macOS); make every test that mutates PATH hold the guard, and add a test or a grep-based check in an existing test module that fails when a `set_var("PATH"` appears in freshen-lib without the guard, covered by `cargo test -p freshen-lib` run repeatedly
-- [ ] Add a `git lfs` self-check (`git lfs version`, `git lfs install --skip-repo`), skipped when the tool is absent, covered by recorded transcripts
+- [x] Add a `git lfs` self-check (`git lfs version`, `git lfs install --skip-repo`), skipped when the tool is absent, covered by recorded transcripts
 - [ ] Add `pre-commit autoupdate` as an opt-in step for the repositories listed in the config, never scanning the disk for repositories, covered by tests
 
 ## Milestone 8: Containers and Services

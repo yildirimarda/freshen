@@ -44,6 +44,7 @@ pub mod fnm;
 pub mod gcloud;
 pub mod gem;
 pub mod gh;
+pub mod git_lfs;
 pub mod go;
 pub mod helm;
 pub mod homebrew;
