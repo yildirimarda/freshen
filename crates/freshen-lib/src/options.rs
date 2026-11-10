@@ -237,6 +237,7 @@ pub struct RunOptions {
     restart_services: bool,
     restart_apps: bool,
     bump: bool,
+    docker_bump: bool,
     go_update: bool,
     install_aws_cli_updates: bool,
 }
@@ -485,6 +486,15 @@ impl RunOptions {
         self
     }
 
+    /// Sets `--docker-bump`: pull pinned container images too (referenced by
+    /// digest or a fixed non-`latest` tag). Without the flag those images are
+    /// skipped when pulling compose images.
+    #[must_use]
+    pub fn with_docker_bump(mut self, docker_bump: bool) -> Self {
+        self.docker_bump = docker_bump;
+        self
+    }
+
     /// Sets `--reinstall-go`: reinstall outdated `go install` binaries instead
     /// of only reporting them. Without the flag the Go step is check-only and
     /// never changes the pinned Go toolchain.
@@ -724,6 +734,13 @@ impl RunOptions {
         self.bump
     }
 
+    /// Returns `true` when `--docker-bump` asks to pull pinned container
+    /// images too.
+    #[must_use]
+    pub fn docker_bump(&self) -> bool {
+        self.docker_bump
+    }
+
     /// Returns `true` when `--reinstall-go` asks to reinstall outdated `go
     /// install` binaries.
     #[must_use]
@@ -858,6 +875,7 @@ mod tests {
         assert_eq!(options.wsl_distro(), None);
         assert!(!options.restart_services());
         assert!(!options.bump());
+        assert!(!options.docker_bump());
         assert!(!options.go_update());
         assert!(!options.install_aws_cli_updates());
         assert!(options.selection().is_empty());

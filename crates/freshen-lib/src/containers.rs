@@ -2262,6 +2262,125 @@ impl Step for ContainerStartStep {
     }
 }
 
+/// How a compose service's `image` reference is pinned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImagePin {
+    /// `repo` or `repo:latest` — not pinned, the image will be pulled.
+    Unpinned,
+    /// `repo@digest` — pinned by digest.
+    Digest,
+    /// `repo:tag` with a tag other than `latest` — pinned to a fixed version.
+    Tag,
+}
+
+/// Classifies a compose `image:` value.
+///
+/// The tag is the text after the last `:` that is not part of a port
+/// (`registry:5000/repo`), so `registry:5000/repo` is untagged while
+/// `registry:5000/repo:1.25` is pinned to `1.25`.
+fn image_pin(image: &str) -> ImagePin {
+    if image.contains('@') {
+        return ImagePin::Digest;
+    }
+    let Some((_, tag)) = image.rsplit_once(':') else {
+        return ImagePin::Unpinned;
+    };
+    if tag.contains('/') {
+        // `registry:5000/repo` — the colon separates a port, not a tag.
+        return ImagePin::Unpinned;
+    }
+    if tag.is_empty() || tag == "latest" {
+        ImagePin::Unpinned
+    } else {
+        ImagePin::Tag
+    }
+}
+
+/// Parses the `image:` value of every service declared under a top-level
+/// `services:` key.
+///
+/// A minimal indentation-based parser is enough: the compose files freshen
+/// reads are simple mappings. Shapes that cannot be recognised are skipped,
+/// which only ever makes freshen pull an image it could not classify (the
+/// safe default).
+fn parse_service_images(text: &str) -> Vec<(String, String)> {
+    let mut services: Vec<(String, String)> = Vec::new();
+    let mut services_indent: Option<usize> = None;
+    let mut service_indent: Option<usize> = None;
+    let mut current: Option<String> = None;
+
+    for raw in text.lines() {
+        let trimmed = raw.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = raw.len() - trimmed.len();
+        let line = trimmed;
+
+        if indent == 0 && line == "services:" {
+            services_indent = Some(0);
+            service_indent = None;
+            current = None;
+            continue;
+        }
+        let Some(services_indent) = services_indent else {
+            continue;
+        };
+
+        if service_indent.is_none() && indent > services_indent && line.ends_with(':') {
+            service_indent = Some(indent);
+        }
+        let Some(service_indent) = service_indent else {
+            continue;
+        };
+
+        if indent == service_indent && line.ends_with(':') && !line.contains(' ') {
+            current = Some(line.trim_end_matches(':').to_owned());
+            continue;
+        }
+
+        if let Some(service) = &current {
+            if indent > service_indent {
+                if let Some(image) = line.strip_prefix("image:") {
+                    let mut image = image.trim();
+                    image = image.trim_matches(|c| c == '"' || c == '\'');
+                    services.push((service.clone(), image.to_owned()));
+                    current = None;
+                }
+            }
+        }
+    }
+
+    services
+}
+
+/// Returns the declared services of `config_files` together with the names of
+/// those whose image is pinned (by digest or a fixed non-`latest` tag), or
+/// `None` when none of the files could be read or parsed at all.
+///
+/// When nothing can be read, freshen cannot classify any image, so it must
+/// pull everything (the safe default). When files are readable, only the
+/// services whose image is known to be unpinned are returned; an empty list
+/// means every declared service is pinned and nothing needs pulling.
+fn project_services(config_files: &[String]) -> Option<(Vec<String>, Vec<String>)> {
+    let mut all = Vec::new();
+    let mut pinned = Vec::new();
+    let mut readable = false;
+    for file in config_files {
+        let Ok(text) = std::fs::read_to_string(file) else {
+            continue;
+        };
+        readable = true;
+        for (service, image) in parse_service_images(&text) {
+            all.push(service.clone());
+            if matches!(image_pin(&image), ImagePin::Digest | ImagePin::Tag) {
+                pinned.push(service);
+            }
+        }
+    }
+    readable.then_some((all, pinned))
+}
+
 struct DockerStep {
     runtime: Arc<dyn ContainerRuntime>,
     compose: Option<ComposeCommand>,
@@ -2332,8 +2451,32 @@ impl Step for DockerStep {
             for project in &projects {
                 human!("{} pull + up -d: {}", compose.as_str(), project.name());
                 let previous = project_containers(self.container_cli, project.name());
-                if let Err(error) = compose.command(project, &["pull", "--quiet"]).run() {
-                    failures.push(StepError::run_from_process(DOCKER, &error));
+                let (pull, pinned) = if options.docker_bump() {
+                    (None, Vec::new())
+                } else {
+                    match project_services(project.config_files()) {
+                        None => (None, Vec::new()),
+                        Some((all, pinned)) => {
+                            let unpinned: Vec<String> = all
+                                .into_iter()
+                                .filter(|service| !pinned.iter().any(|pinned| pinned == service))
+                                .collect();
+                            (Some(unpinned), pinned)
+                        }
+                    }
+                };
+                if !options.docker_bump() && !pinned.is_empty() {
+                    human!("  skipping pinned images: {}", pinned.join(", "));
+                }
+                let skip_pull = matches!(&pull, Some(services) if services.is_empty());
+                if !skip_pull {
+                    let mut pull_args = vec!["pull", "--quiet"];
+                    if let Some(services) = &pull {
+                        pull_args.extend(services.iter().map(String::as_str));
+                    }
+                    if let Err(error) = compose.command(project, &pull_args).run() {
+                        failures.push(StepError::run_from_process(DOCKER, &error));
+                    }
                 }
                 match up_and_wait_for_health(DOCKER, compose, project, self.container_cli) {
                     Ok(unhealthy) => report_unhealthy_containers(&unhealthy, &previous),
@@ -2650,15 +2793,15 @@ fn command_exists(program: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        detect_active_runtime, detect_compose_command, live_restore_warning,
+        detect_active_runtime, detect_compose_command, image_pin, live_restore_warning,
         parse_compose_projects, parse_live_restore_enabled,
-        parse_running_standalone_lima_instances, parse_standalone_containers,
-        podman_machine_running, register, register_for, register_with_runtime, selected_projects,
-        ActiveContainerRuntime, ColimaRuntime, ComposeCommand, ComposeCommandProbe, ComposeProject,
-        ContainerRuntime, ContainerRuntimeKind, ContainerRuntimeProbe, ContainerRuntimeSource,
-        DockerDesktopRuntime, DockerEngineProbe, NativeDockerRuntime, OrbStackRuntime,
-        PodmanRuntime, RancherDesktopRuntime, StandaloneContainer, COLIMA_START, COLIMA_STOP,
-        COMPOSE_SKIP_LABEL, DOCKER, PS_FORMAT,
+        parse_running_standalone_lima_instances, parse_service_images, parse_standalone_containers,
+        podman_machine_running, project_services, register, register_for, register_with_runtime,
+        selected_projects, ActiveContainerRuntime, ColimaRuntime, ComposeCommand,
+        ComposeCommandProbe, ComposeProject, ContainerRuntime, ContainerRuntimeKind,
+        ContainerRuntimeProbe, ContainerRuntimeSource, DockerDesktopRuntime, DockerEngineProbe,
+        ImagePin, NativeDockerRuntime, OrbStackRuntime, PodmanRuntime, RancherDesktopRuntime,
+        StandaloneContainer, COLIMA_START, COLIMA_STOP, COMPOSE_SKIP_LABEL, DOCKER, PS_FORMAT,
     };
     #[cfg(windows)]
     use super::{DockerDesktopWindowsRuntime, PodmanDesktopWindowsRuntime};
@@ -3907,6 +4050,97 @@ mod tests {
         );
 
         assert_eq!(runtime.to_string(), "Docker Desktop (docker context)");
+    }
+
+    #[test]
+    fn image_pin_classifies_digest_tag_and_latest() {
+        assert_eq!(image_pin("nginx@sha256:abc123"), ImagePin::Digest);
+        assert_eq!(image_pin("nginx:1.25"), ImagePin::Tag);
+        assert_eq!(image_pin("nginx:latest"), ImagePin::Unpinned);
+        assert_eq!(image_pin("nginx"), ImagePin::Unpinned);
+        assert_eq!(image_pin("registry:5000/nginx"), ImagePin::Unpinned);
+        assert_eq!(image_pin("registry:5000/nginx:1.25"), ImagePin::Tag);
+        assert_eq!(image_pin("nginx:"), ImagePin::Unpinned);
+    }
+
+    #[test]
+    fn parse_service_images_reads_service_images() {
+        let text = "\
+services:
+  web:
+    image: nginx@sha256:old
+  app:
+    image: \"node:20\"
+  db:
+    image: postgres
+";
+
+        assert_eq!(
+            parse_service_images(text),
+            [
+                ("web".to_owned(), "nginx@sha256:old".to_owned()),
+                ("app".to_owned(), "node:20".to_owned()),
+                ("db".to_owned(), "postgres".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_service_images_ignores_keys_outside_services() {
+        let text = "version: '3'\nservices:\n  web:\n    image: nginx\n";
+
+        assert_eq!(
+            parse_service_images(text),
+            [("web".to_owned(), "nginx".to_owned())]
+        );
+    }
+
+    fn pin_temp_compose(contents: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "freshen-pin-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|since| since.as_nanos())
+                .unwrap_or_default()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root)
+            .unwrap_or_else(|error| panic!("failed to create {root:?}: {error}"));
+        let compose = root.join("compose.yml");
+        std::fs::write(&compose, contents)
+            .unwrap_or_else(|error| panic!("failed to write {compose:?}: {error}"));
+        compose
+    }
+
+    #[test]
+    fn project_services_reports_pinned_and_unpinned() {
+        let compose = pin_temp_compose(
+            "\
+services:
+  web:
+    image: nginx@sha256:old
+  app:
+    image: node
+",
+        );
+
+        let (all, pinned) = project_services(&[compose.to_string_lossy().to_string()])
+            .unwrap_or_else(|| panic!("readable compose file must yield services"));
+        assert_eq!(all, ["web", "app"]);
+        assert_eq!(pinned, ["web"]);
+
+        if let Some(parent) = compose.parent() {
+            let _ = std::fs::remove_dir_all(parent);
+        }
+    }
+
+    #[test]
+    fn project_services_skips_unreadable_files() {
+        assert_eq!(
+            project_services(&["/nonexistent/compose.yml".to_owned()]),
+            None
+        );
     }
 
     #[cfg(unix)]
