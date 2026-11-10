@@ -22,7 +22,7 @@ const MACHINE_STOPPED: &str = r#"[{"Name":"podman-machine-default","Running":fal
 
 /// `podman ps --format ...` with the same tab-separated shape as `docker ps`.
 const PODMAN_PS_CALL: &str =
-    "podman ps --format {{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.project\"}}";
+    "podman ps --format {{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.project\"}}\t{{.Image}}";
 
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
