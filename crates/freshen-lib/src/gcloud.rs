@@ -429,7 +429,14 @@ mod tests {
 
     /// Runs `f` with `gcloud` and the given package managers on `PATH`,
     /// restoring `PATH` afterwards.
+    ///
+    /// Holds `crate::process::PATH_GUARD` for the whole mutation so parallel
+    /// tests cannot replace `PATH` (and wipe a stub such as `choco`) out from
+    /// under another test.
     fn with_path_guard(pms: &[&str], f: impl FnOnce()) {
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let previous = env::var("PATH").ok();
         let mut dirs: Vec<PathBuf> = Vec::new();
         for pm in pms {
@@ -495,6 +502,9 @@ mod tests {
 
     #[test]
     fn detect_reports_not_installed_when_gcloud_is_absent() {
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let previous = env::var("PATH").ok();
         env::set_var("PATH", "");
         let result = detect_gcloud();
@@ -518,6 +528,9 @@ mod tests {
         // `bin/brew` so Homebrew reports itself as installed at that prefix.
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let previous = env::var("PATH").ok();
         let dir =
             env::temp_dir().join(format!("freshen-gcloud-brew-{}-{}", std::process::id(), id));
@@ -601,6 +614,9 @@ mod tests {
     #[test]
     fn gcloud_installed_with_system_package_manager_probes_each_manager() {
         // No package manager is present, so nothing is owned.
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let previous = env::var("PATH").ok();
         env::set_var("PATH", "");
         let result = gcloud_installed_with_system_package_manager(Path::new("/tmp/gcloud"));
