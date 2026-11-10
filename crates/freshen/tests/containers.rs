@@ -79,8 +79,14 @@ fn install_docker(tools: &StubTools) {
     printf '%s' "$FRESHEN_PS_OUTPUT"
     ;;
   "ps --filter label=com.docker.compose.project="*)
-    rest="${*#ps --filter label=com.docker.compose.project=}"
-    project="${rest%% *}"
+    project=""
+    for arg in "$@"; do
+      case "$arg" in
+        label=com.docker.compose.project=*)
+          project="${arg#label=com.docker.compose.project=}"
+          ;;
+      esac
+    done
     case "$project" in
       web) printf '%s' "$FRESHEN_CONTAINERS_WEB" ;;
       db)  printf '%s' "$FRESHEN_CONTAINERS_DB" ;;
