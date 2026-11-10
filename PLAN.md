@@ -336,7 +336,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 
 ## Milestone 8: Containers and Services
 
-- [ ] Per-project opt-out for compose pull/up using a label or a config list of excluded projects, covered by tests
+- [x] Per-project opt-out for compose pull/up using a label or a config list of excluded projects, covered by tests
 - [ ] Add health-check aware recreation: after `up -d`, wait for health checks and report the containers that did not become healthy, covered by stub-based tests
 - [ ] Record the previous image digest per container so an unhealthy recreation has a rollback hint, covered by stub-based tests
 - [ ] Pin-aware pulls: skip images referenced by digest or a fixed non-`latest` tag unless `--docker-bump` is given, covered by tests

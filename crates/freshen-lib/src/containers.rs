@@ -46,6 +46,14 @@ const CONTAINER_PLATFORMS: [Platform; 2] = [Platform::Macos, Platform::Linux];
 /// produces with `$'...'`.
 const PS_FORMAT: &str = "{{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.project\"}}";
 
+/// Label on a compose project that opts it out of compose pull/up.
+///
+/// A project whose metadata carries this label is never stopped, pulled or
+/// started by freshen, so it keeps running while the container runtime is
+/// upgraded. It is an alternative to naming projects in the configuration
+/// file's `[exclude].projects` list.
+const COMPOSE_SKIP_LABEL: &str = "freshen.com/skip";
+
 /// A container runtime that freshen can identify from the host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ContainerRuntimeKind {
@@ -1583,6 +1591,7 @@ pub fn detect_compose_command(
 pub struct ComposeProject {
     name: String,
     config_files: Vec<String>,
+    labels: Vec<String>,
 }
 
 impl ComposeProject {
@@ -1595,6 +1604,7 @@ impl ComposeProject {
         Self {
             name: name.into(),
             config_files: config_files.into_iter().map(Into::into).collect(),
+            labels: Vec::new(),
         }
     }
 
@@ -1608,6 +1618,18 @@ impl ComposeProject {
     #[must_use]
     pub fn config_files(&self) -> &[String] {
         &self.config_files
+    }
+
+    /// Labels attached to the project, for example the opt-out label.
+    #[must_use]
+    pub fn labels(&self) -> &[String] {
+        &self.labels
+    }
+
+    /// Returns `true` when the project carries `label`.
+    #[must_use]
+    pub fn has_label(&self, label: &str) -> bool {
+        self.labels.iter().any(|l| l == label)
     }
 }
 
@@ -1673,7 +1695,23 @@ fn compose_project(value: &Value) -> Option<ComposeProject> {
     Some(ComposeProject {
         name: name.to_owned(),
         config_files,
+        labels: parse_labels(value.get("Labels")),
     })
+}
+
+/// Parses the labels of a compose project.
+///
+/// Labels are key-value pairs, so an object's keys are the label names. An
+/// array of strings is accepted too. Any other shape yields no labels.
+fn parse_labels(labels: Option<&Value>) -> Vec<String> {
+    match labels {
+        Some(Value::Object(map)) => map.keys().cloned().collect(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| item.as_str().map(str::to_owned))
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// Parses the tab-separated output of `docker ps` used to find standalone
@@ -2333,19 +2371,16 @@ fn list_standalone_containers(container_cli: &'static str) -> Vec<StandaloneCont
     parse_standalone_containers(output.stdout())
 }
 
-/// Keeps the compose projects the project filter allows.
+/// Keeps the compose projects the project filter allows, excluding projects
+/// that carry the opt-out label.
 ///
 /// A project that is filtered out is never stopped, pulled or started, so it
 /// keeps running while the container runtime is upgraded.
 fn selected_projects(projects: Vec<ComposeProject>, options: &RunOptions) -> Vec<ComposeProject> {
     let filter = options.filters().projects();
-    if filter.is_empty() {
-        return projects;
-    }
-
     projects
         .into_iter()
-        .filter(|project| filter.includes(project.name()))
+        .filter(|project| !project.has_label(COMPOSE_SKIP_LABEL) && filter.includes(project.name()))
         .collect()
 }
 
@@ -2421,18 +2456,19 @@ mod tests {
         detect_active_runtime, detect_compose_command, live_restore_warning,
         parse_compose_projects, parse_live_restore_enabled,
         parse_running_standalone_lima_instances, parse_standalone_containers,
-        podman_machine_running, register, register_for, register_with_runtime,
+        podman_machine_running, register, register_for, register_with_runtime, selected_projects,
         ActiveContainerRuntime, ColimaRuntime, ComposeCommand, ComposeCommandProbe, ComposeProject,
         ContainerRuntime, ContainerRuntimeKind, ContainerRuntimeProbe, ContainerRuntimeSource,
         DockerDesktopRuntime, DockerEngineProbe, NativeDockerRuntime, OrbStackRuntime,
         PodmanRuntime, RancherDesktopRuntime, StandaloneContainer, COLIMA_START, COLIMA_STOP,
-        DOCKER, PS_FORMAT,
+        COMPOSE_SKIP_LABEL, DOCKER, PS_FORMAT,
     };
     #[cfg(windows)]
     use super::{DockerDesktopWindowsRuntime, PodmanDesktopWindowsRuntime};
     use crate::homebrew;
     use crate::options::RunOptions;
     use crate::platform::Platform;
+    use crate::policy::{ItemFilters, NameFilter};
     use crate::process::ProcessError;
     use crate::registry::Registry;
     use crate::step::{Detection, StepId};
@@ -2627,6 +2663,59 @@ mod tests {
             parse_compose_projects(json),
             [ComposeProject::new("kept", ["/srv/kept.yml"])]
         );
+    }
+
+    #[test]
+    fn parse_compose_projects_reads_labels() {
+        let json = r#"[
+            {"Name": "web", "ConfigFiles": "/srv/web/compose.yml"},
+            {"Name": "db", "ConfigFiles": "/srv/db/compose.yml", "Labels": {"freshen.com/skip": "true"}},
+            {"Name": "cache", "ConfigFiles": "/srv/cache/compose.yml", "Labels": ["freshen.com/skip", "other"]}
+        ]"#;
+
+        let projects = parse_compose_projects(json);
+
+        assert_eq!(names(&projects), ["web", "db", "cache"]);
+        assert!(!projects[0].has_label(COMPOSE_SKIP_LABEL));
+        assert!(projects[1].has_label(COMPOSE_SKIP_LABEL));
+        assert!(projects[2].has_label(COMPOSE_SKIP_LABEL));
+    }
+
+    #[test]
+    fn a_project_with_the_skip_label_is_not_selected() {
+        let projects = vec![
+            ComposeProject {
+                name: "web".into(),
+                config_files: Vec::new(),
+                labels: Vec::new(),
+            },
+            ComposeProject {
+                name: "db".into(),
+                config_files: Vec::new(),
+                labels: vec![COMPOSE_SKIP_LABEL.to_owned()],
+            },
+        ];
+
+        let selected = selected_projects(projects, &options_with(&[], &[]));
+
+        assert_eq!(names(&selected), ["web"]);
+    }
+
+    #[test]
+    fn the_skip_label_wins_over_the_project_include_list() {
+        let projects = vec![ComposeProject {
+            name: "web".into(),
+            config_files: Vec::new(),
+            labels: vec![COMPOSE_SKIP_LABEL.to_owned()],
+        }];
+
+        let options = RunOptions::new().with_filters(
+            ItemFilters::new().with_projects(NameFilter::new().with_include(["web"])),
+        );
+
+        let selected = selected_projects(projects, &options);
+
+        assert!(selected.is_empty());
     }
 
     #[test]

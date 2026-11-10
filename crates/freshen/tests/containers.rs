@@ -440,6 +440,91 @@ esac"#,
     );
 }
 
+#[test]
+fn a_compose_project_with_the_skip_label_is_not_pulled_or_started() {
+    let tools = StubTools::new(&["brew", "colima", "docker"]);
+    install_brew(&tools);
+    install_colima(&tools);
+    install_docker(&tools);
+
+    let compose_json = r#"[
+        {"Name":"web","ConfigFiles":"/srv/web/compose.yml,/srv/web/override.yml"},
+        {"Name":"db","ConfigFiles":"/srv/db/compose.yml","Labels":{"freshen.com/skip":"true"}}
+    ]"#;
+
+    let output = run(
+        &tools,
+        &Scenario {
+            compose_json,
+            ..Scenario::default()
+        },
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+
+    assert!(calls.contains(&web("pull --quiet")), "calls: {calls:?}");
+    assert!(calls.contains(&web("up -d")), "calls: {calls:?}");
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.starts_with("docker compose -p db")),
+        "calls: {calls:?}"
+    );
+
+    let text = stdout(&output);
+    assert!(
+        text.contains("docker compose pull + up -d: web"),
+        "output: {text}"
+    );
+    assert!(
+        !text.contains("docker compose pull + up -d: db"),
+        "output: {text}"
+    );
+}
+
+#[test]
+fn a_compose_project_in_the_config_exclude_list_is_not_pulled_or_started() {
+    let tools = StubTools::new(&["brew", "colima", "docker"]);
+    install_brew(&tools);
+    install_colima(&tools);
+    install_docker(&tools);
+
+    let config = tools.home().join("config.toml");
+    fs::write(
+        &config,
+        r#"[exclude]
+projects = ["db"]
+"#,
+    )
+    .unwrap_or_else(|error| panic!("failed to write config: {error}"));
+
+    let output = tools
+        .command()
+        .env("FRESHEN_OUTDATED_FORMULAE", "colima\n")
+        .env("FRESHEN_OUTDATED_CASKS", "")
+        .env("FRESHEN_BREW_UPGRADE_STATUS", "0")
+        .env("FRESHEN_COLIMA_STATUS", "0")
+        .env("FRESHEN_COLIMA_START_STATUS", "0")
+        .env("FRESHEN_COMPOSE_JSON", COMPOSE_JSON)
+        .env("FRESHEN_PS_OUTPUT", PS_OUTPUT)
+        .args(["--only", ALL_STEPS, "--cleanup", "--config"])
+        .arg(&config)
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+
+    assert!(calls.contains(&web("pull --quiet")), "calls: {calls:?}");
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.starts_with("docker compose -p db")),
+        "calls: {calls:?}"
+    );
+}
+
 /// Creates `bin/<tool>` executables inside `prefix`, without putting anything
 /// on `PATH`.
 fn install_in_prefix(prefix: &Path, tools: &[&str]) {
