@@ -1737,6 +1737,13 @@ mod tests {
             Err(error) => panic!("no live output before the process exited: {error}"),
         };
         assert_eq!(first, (OutputStream::Stdout, "first".to_owned()));
+
+        if let Some(previous) = previous {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
         drop(_guard);
 
         match handle.join() {
@@ -1747,13 +1754,6 @@ mod tests {
             Ok(Err(error)) => panic!("command failed: {error}"),
             Err(_) => panic!("runner thread panicked"),
         }
-
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]
