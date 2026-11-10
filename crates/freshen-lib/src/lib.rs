@@ -138,8 +138,8 @@ pub use containers::{
     parse_standalone_containers, ActiveContainerRuntime, ColimaRuntime, ComposeCommand,
     ComposeCommandProbe, ComposeProject, ContainerRuntime, ContainerRuntimeKind,
     ContainerRuntimeProbe, ContainerRuntimeSource, DockerDesktopRuntime, DockerEngineProbe,
-    HostComposeCommandProbe, HostContainerRuntimeProbe, HostDockerEngineProbe, NativeDockerRuntime,
-    RancherDesktopRuntime, StandaloneContainer,
+    HostComposeCommandProbe, HostContainerRuntimeProbe, HostDockerEngineProbe, K3dRuntime,
+    NativeDockerRuntime, RancherDesktopRuntime, StandaloneContainer,
 };
 #[cfg(windows)]
 pub use containers::{DockerDesktopWindowsRuntime, PodmanDesktopWindowsRuntime};

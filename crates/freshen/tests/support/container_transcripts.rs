@@ -121,3 +121,15 @@ pub fn limactl_start(name: &str) -> String {
 pub fn limactl_list_json() -> &'static [&'static str] {
     &["limactl list --json"]
 }
+
+pub fn k3d_cluster_list_json() -> &'static [&'static str] {
+    &["k3d cluster list -o json"]
+}
+
+pub fn k3d_cluster_stop(name: &str) -> String {
+    format!("k3d cluster stop {name}")
+}
+
+pub fn k3d_cluster_start(name: &str) -> String {
+    format!("k3d cluster start {name}")
+}
