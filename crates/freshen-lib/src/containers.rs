@@ -91,11 +91,13 @@ pub enum ContainerRuntimeKind {
     Podman,
     /// A native Docker Engine socket, or another Docker-compatible endpoint.
     NativeDocker,
+    /// k3d, running Kubernetes clusters inside Docker containers.
+    K3d,
 }
 
 impl ContainerRuntimeKind {
     /// Every known runtime.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Colima,
         Self::OrbStack,
         Self::DockerDesktop,
@@ -103,6 +105,7 @@ impl ContainerRuntimeKind {
         Self::RancherDesktop,
         Self::Podman,
         Self::NativeDocker,
+        Self::K3d,
     ];
 
     /// Canonical name accepted by `--container-runtime` and used in reports.
@@ -116,6 +119,7 @@ impl ContainerRuntimeKind {
             Self::RancherDesktop => "rancher-desktop",
             Self::Podman => "podman",
             Self::NativeDocker => "docker",
+            Self::K3d => "k3d",
         }
     }
 
@@ -130,6 +134,7 @@ impl ContainerRuntimeKind {
             Self::RancherDesktop => "Rancher Desktop",
             Self::Podman => "Podman",
             Self::NativeDocker => "Docker Engine",
+            Self::K3d => "K3d",
         }
     }
 }
@@ -153,6 +158,7 @@ impl FromStr for ContainerRuntimeKind {
             "rancher-desktop" | "rancher" | "rd" => Ok(Self::RancherDesktop),
             "podman" | "podman-machine" => Ok(Self::Podman),
             "docker" | "native" | "native-docker" | "docker-engine" => Ok(Self::NativeDocker),
+            "k3d" => Ok(Self::K3d),
             _ => Err(format!(
                 "unknown container runtime `{value}` (known: {})",
                 Self::ALL
@@ -1465,8 +1471,168 @@ fn podman_machine_running(json: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// The compose implementation freshen drives.
+/// The k3d runtime.
 ///
+/// k3d runs Kubernetes (k3s) clusters inside Docker containers. Upgrading the
+/// `k3d` formula can restart those clusters, so the formula triggers a
+/// stop/start cycle: the running clusters are stopped with `k3d cluster stop`
+/// before the upgrade and started again with `k3d cluster start` afterwards.
+/// Clusters are listed with `k3d cluster list -o json`. Only clusters that were
+/// running are restarted; clusters that were already stopped stay stopped.
+#[derive(Debug, Default, Clone)]
+pub struct K3dRuntime {
+    state: Arc<Mutex<K3dState>>,
+}
+
+#[derive(Debug, Default)]
+struct K3dState {
+    clusters: Vec<K3dCluster>,
+}
+
+/// A k3d cluster and whether it was running when it was last observed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct K3dCluster {
+    name: String,
+    running: bool,
+}
+
+impl K3dRuntime {
+    /// Creates the k3d runtime.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl ContainerRuntime for K3dRuntime {
+    fn name(&self) -> &'static str {
+        "k3d"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "K3d"
+    }
+
+    fn command(&self) -> &'static str {
+        "k3d"
+    }
+
+    fn detection_commands(&self) -> &'static [&'static str] {
+        &["k3d"]
+    }
+
+    fn detect(&self) -> Detection {
+        if command_exists("k3d") {
+            Detection::Installed
+        } else {
+            Detection::NotInstalled
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        let Ok(output) = CommandSpec::new("k3d")
+            .args(["cluster", "list", "-o", "json"])
+            .neutral_locale()
+            .run()
+        else {
+            return false;
+        };
+
+        let clusters = parse_k3d_clusters(output.stdout());
+        {
+            let mut state = lock(&self.state);
+            state.clusters = clusters;
+        }
+        self.observed_clusters()
+            .iter()
+            .any(|cluster| cluster.running)
+    }
+
+    fn stop(&self) -> Result<(), ProcessError> {
+        let clusters = self.observed_clusters();
+        let mut failures = Vec::new();
+
+        for cluster in &clusters {
+            if cluster.running {
+                human!("k3d cluster stop: {}", cluster.name);
+                if let Err(error) = CommandSpec::new("k3d")
+                    .args(["cluster", "stop", &cluster.name])
+                    .run()
+                {
+                    failures.push(error);
+                }
+            }
+        }
+
+        first_process_failure(failures)
+    }
+
+    fn start(&self) -> Result<(), ProcessError> {
+        let clusters = self.observed_clusters();
+        let mut failures = Vec::new();
+
+        for cluster in &clusters {
+            if cluster.running {
+                human!("k3d cluster start: {}", cluster.name);
+                if let Err(error) = CommandSpec::new("k3d")
+                    .args(["cluster", "start", &cluster.name])
+                    .run()
+                {
+                    failures.push(error);
+                }
+            }
+        }
+
+        first_process_failure(failures)
+    }
+
+    fn restart_formulae(&self) -> &'static [&'static str] {
+        &["k3d"]
+    }
+
+    fn restart_casks(&self) -> &'static [&'static str] {
+        &[]
+    }
+}
+
+impl K3dRuntime {
+    /// The clusters observed by the last `is_running` call, or empty when the
+    /// runtime has not been observed yet.
+    fn observed_clusters(&self) -> Vec<K3dCluster> {
+        let state = lock(&self.state);
+        if state.clusters.is_empty() {
+            return Vec::new();
+        }
+        state.clusters.clone()
+    }
+}
+
+/// Parses the JSON array printed by `k3d cluster list -o json`.
+///
+/// Each entry carries a `name` and a `state`; a cluster counts as running when
+/// its `state` is `running`. Malformed output yields no clusters.
+fn parse_k3d_clusters(output: &str) -> Vec<K3dCluster> {
+    let Ok(Value::Array(values)) = serde_json::from_str::<Value>(output.trim()) else {
+        return Vec::new();
+    };
+
+    values
+        .iter()
+        .filter_map(|value| {
+            let name = value.get("name")?.as_str()?;
+            let running = value
+                .get("state")
+                .and_then(Value::as_str)
+                .map(|state| state.eq_ignore_ascii_case("running"))
+                .unwrap_or(false);
+            Some(K3dCluster {
+                name: name.to_owned(),
+                running,
+            })
+        })
+        .collect()
+}
+
 /// Docker ships Compose v2 as the `docker compose` plugin, older installations
 /// have the standalone `docker-compose` binary, and Podman provides
 /// `podman compose`. The detected command is used for every compose action so
@@ -1876,6 +2042,9 @@ pub fn register_for(registry: Registry, kind: Option<ContainerRuntimeKind>) -> R
             ContainerRuntimeKind::NativeDocker,
             NativeDockerRuntime::new(),
         ),
+        Some(ContainerRuntimeKind::K3d) => {
+            register_with_compose(registry, K3dRuntime::new(), None, "docker")
+        }
         _ => register(registry),
     }
 }
@@ -2800,8 +2969,9 @@ mod tests {
         selected_projects, ActiveContainerRuntime, ColimaRuntime, ComposeCommand,
         ComposeCommandProbe, ComposeProject, ContainerRuntime, ContainerRuntimeKind,
         ContainerRuntimeProbe, ContainerRuntimeSource, DockerDesktopRuntime, DockerEngineProbe,
-        ImagePin, NativeDockerRuntime, OrbStackRuntime, PodmanRuntime, RancherDesktopRuntime,
-        StandaloneContainer, COLIMA_START, COLIMA_STOP, COMPOSE_SKIP_LABEL, DOCKER, PS_FORMAT,
+        ImagePin, K3dRuntime, NativeDockerRuntime, OrbStackRuntime, PodmanRuntime,
+        RancherDesktopRuntime, StandaloneContainer, COLIMA_START, COLIMA_STOP, COMPOSE_SKIP_LABEL,
+        DOCKER, PS_FORMAT,
     };
     #[cfg(windows)]
     use super::{DockerDesktopWindowsRuntime, PodmanDesktopWindowsRuntime};
@@ -3481,6 +3651,56 @@ mod tests {
         let registry = homebrew::register(register_for(
             Registry::new(),
             Some(ContainerRuntimeKind::Podman),
+        ));
+        let ordered: Vec<StepId> = registry
+            .ordered_for(Platform::Macos)
+            .unwrap_or_else(|error| panic!("registry order failed: {error}"))
+            .iter()
+            .map(|step| step.id())
+            .collect();
+
+        assert_eq!(
+            ordered,
+            [
+                "macos-updates",
+                "brew",
+                "colima-stop",
+                "brew-formulae",
+                "colima-start",
+                "brew-services",
+                "brew-casks",
+                "brew-autoremove",
+                "brew-cleanup",
+                "brew-doctor",
+                "brew-bundle-cleanup",
+                "brew-reopen",
+                "docker",
+            ]
+        );
+    }
+
+    #[test]
+    fn k3d_runtime_declares_its_formula_as_the_restart_trigger() {
+        let runtime = K3dRuntime::new();
+
+        assert_eq!(runtime.name(), "k3d");
+        assert_eq!(runtime.display_name(), "K3d");
+        assert_eq!(runtime.command(), "k3d");
+        assert_eq!(runtime.detection_commands(), &["k3d"]);
+        assert_eq!(runtime.restart_formulae(), ["k3d"]);
+        assert!(runtime.restart_casks().is_empty());
+        assert!(runtime.triggers_restart("k3d"));
+        assert!(!runtime.triggers_restart("k3d-default"));
+        assert!(!runtime.triggers_restart("docker"));
+        assert!(!runtime.triggers_restart("colima"));
+        assert_eq!(runtime.platforms(), super::CONTAINER_PLATFORMS);
+    }
+
+    #[test]
+    fn k3d_stops_before_formulae_and_starts_after_them() {
+        let registry = homebrew::register(register_for(
+            Registry::new(),
+            Some(ContainerRuntimeKind::K3d),
         ));
         let ordered: Vec<StepId> = registry
             .ordered_for(Platform::Macos)
