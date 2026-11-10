@@ -5,7 +5,7 @@ pub const ALL_STEPS: &str =
     "brew,brew-formulae,brew-services,brew-casks,brew-autoremove,brew-cleanup,brew-reopen,colima-stop,colima-start,docker";
 
 pub const PS_CALL: &str =
-    "docker ps --format {{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.project\"}}";
+    "docker ps --format {{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.project\"}}\t{{.Image}}";
 
 pub const COMPOSE_JSON: &str = r#"[
     {"Name":"web","ConfigFiles":"/srv/web/compose.yml,/srv/web/override.yml"},
@@ -30,7 +30,9 @@ pub fn compose(project: &str, files: &[&str], action: &str) -> String {
 pub fn project_ps(project: &str) -> String {
     let mut call = String::from("docker ps --filter label=com.docker.compose.project=");
     call.push_str(project);
-    call.push_str(" --format {{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.project\"}}");
+    call.push_str(
+        " --format {{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.project\"}}\t{{.Image}}",
+    );
     call
 }
 

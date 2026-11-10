@@ -44,7 +44,15 @@ const CONTAINER_PLATFORMS: [Platform; 2] = [Platform::Macos, Platform::Linux];
 
 /// The `docker ps --format` argument, with the literal tabs the zsh script
 /// produces with `$'...'`.
-const PS_FORMAT: &str = "{{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.project\"}}";
+/// Format of `docker ps` output used to list containers.
+///
+/// The fourth tab-separated field carries the image the container was running,
+/// ideally as `repository@digest`. `docker ps` cannot emit a digest directly,
+/// so the field is populated from `{{.Image}}` (repository:tag) unless a stub
+/// or future inspect-based lookup supplies `repository@digest`. Either way it is
+/// enough to build a per-container rollback hint for an unhealthy recreation.
+const PS_FORMAT: &str =
+    "{{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.project\"}}\t{{.Image}}";
 
 /// How long to wait for containers to become healthy after `up -d`.
 ///
@@ -1650,6 +1658,10 @@ impl ComposeProject {
 pub struct StandaloneContainer {
     id: String,
     name: String,
+    /// The image the container was running, as `repository@digest` when known.
+    /// Used to build a per-container rollback hint when a recreation turns out
+    /// to be unhealthy.
+    digest: Option<String>,
 }
 
 impl StandaloneContainer {
@@ -1659,6 +1671,7 @@ impl StandaloneContainer {
         Self {
             id: id.into(),
             name: name.into(),
+            digest: None,
         }
     }
 
@@ -1672,6 +1685,12 @@ impl StandaloneContainer {
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// The image the container was running, as `repository@digest`, if known.
+    #[must_use]
+    pub fn digest(&self) -> Option<&str> {
+        self.digest.as_deref()
     }
 }
 
@@ -1731,7 +1750,8 @@ fn parse_labels(labels: Option<&Value>) -> Vec<String> {
 ///
 /// Rows whose compose-project label is non-empty are managed by compose and
 /// are left out, exactly like the `awk -F'\t' '$3 == ""'` filter in the zsh
-/// script.
+/// script. The fourth field, when present, is the image the container was
+/// running (`repository@digest` when known).
 #[must_use]
 pub fn parse_standalone_containers(output: &str) -> Vec<StandaloneContainer> {
     output
@@ -1741,9 +1761,11 @@ pub fn parse_standalone_containers(output: &str) -> Vec<StandaloneContainer> {
             let id = fields.next()?;
             let name = fields.next()?;
             let project = fields.next().unwrap_or_default();
+            let digest = fields.next().filter(|d| !d.is_empty()).map(str::to_owned);
             project.is_empty().then(|| StandaloneContainer {
                 id: id.to_owned(),
                 name: name.to_owned(),
+                digest,
             })
         })
         .collect()
@@ -2132,7 +2154,7 @@ impl ContainerStartStep {
             for project in &snapshot.compose {
                 human!("{} up -d: {}", compose.as_str(), project.name());
                 match up_and_wait_for_health(COLIMA_START, compose, project, self.container_cli) {
-                    Ok(unhealthy) => report_unhealthy_containers(&unhealthy),
+                    Ok(unhealthy) => report_unhealthy_containers(&unhealthy, &[]),
                     Err(error) => failures.push(error),
                 }
             }
@@ -2178,7 +2200,7 @@ fn restore_runtime(
         for project in &stopped.compose {
             human!("{} up -d: {}", compose.as_str(), project.name());
             match up_and_wait_for_health(step, compose, project, container_cli) {
-                Ok(unhealthy) => report_unhealthy_containers(&unhealthy),
+                Ok(unhealthy) => report_unhealthy_containers(&unhealthy, &[]),
                 Err(error) => failures.push(error),
             }
         }
@@ -2309,11 +2331,12 @@ impl Step for DockerStep {
         } else if let Some(compose) = self.compose {
             for project in &projects {
                 human!("{} pull + up -d: {}", compose.as_str(), project.name());
+                let previous = project_containers(self.container_cli, project.name());
                 if let Err(error) = compose.command(project, &["pull", "--quiet"]).run() {
                     failures.push(StepError::run_from_process(DOCKER, &error));
                 }
                 match up_and_wait_for_health(DOCKER, compose, project, self.container_cli) {
-                    Ok(unhealthy) => report_unhealthy_containers(&unhealthy),
+                    Ok(unhealthy) => report_unhealthy_containers(&unhealthy, &previous),
                     Err(error) => failures.push(error),
                 }
             }
@@ -2447,7 +2470,7 @@ fn project_containers(container_cli: &'static str, project: &str) -> Vec<Standal
     parse_ps_containers(output.stdout())
 }
 
-/// Parses `docker ps --format "{{.ID}}\t{{.Names}}\t{{.Label ...}}"` output into
+/// Parses `docker ps --format "{{.ID}}\t{{.Names}}\t{{.Label ...}}\t{{.Image}}"` output into
 /// containers, keeping compose-managed containers too (unlike
 /// [`parse_standalone_containers`], which drops them).
 fn parse_ps_containers(output: &str) -> Vec<StandaloneContainer> {
@@ -2458,9 +2481,11 @@ fn parse_ps_containers(output: &str) -> Vec<StandaloneContainer> {
             let id = fields.next()?;
             let name = fields.next()?;
             let _project = fields.next().unwrap_or_default();
+            let digest = fields.next().filter(|d| !d.is_empty()).map(str::to_owned);
             (!id.is_empty() && !name.is_empty()).then(|| StandaloneContainer {
                 id: id.to_owned(),
                 name: name.to_owned(),
+                digest,
             })
         })
         .collect()
@@ -2484,7 +2509,14 @@ fn up_and_wait_for_health(
 
 /// Reports containers that did not become healthy as a warning, without
 /// failing the step.
-fn report_unhealthy_containers(unhealthy: &[StandaloneContainer]) {
+///
+/// `previous` holds the same containers before they were recreated, so a
+/// per-container rollback hint (`docker pull <image>`) can be printed for any
+/// container that knew its previous image.
+fn report_unhealthy_containers(
+    unhealthy: &[StandaloneContainer],
+    previous: &[StandaloneContainer],
+) {
     if unhealthy.is_empty() {
         return;
     }
@@ -2493,6 +2525,19 @@ fn report_unhealthy_containers(unhealthy: &[StandaloneContainer]) {
         "warning: the following containers did not become healthy: {}",
         names.join(", ")
     );
+    for container in unhealthy {
+        let Some(digest) = previous
+            .iter()
+            .find(|previous| previous.name() == container.name())
+            .and_then(StandaloneContainer::digest)
+        else {
+            continue;
+        };
+        human!(
+            "rollback: docker pull {digest} # previous image of {}",
+            container.name()
+        );
+    }
 }
 
 /// Polls each container's health until it is healthy or the wait elapses,
@@ -3050,9 +3095,9 @@ mod tests {
     fn ps_format_contains_the_tabs_the_zsh_script_uses() {
         assert_eq!(
             PS_FORMAT,
-            "{{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.project\"}}"
+            "{{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.project\"}}\t{{.Image}}"
         );
-        assert_eq!(PS_FORMAT.matches('\t').count(), 2);
+        assert_eq!(PS_FORMAT.matches('\t').count(), 3);
     }
 
     #[test]

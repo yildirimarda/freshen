@@ -218,10 +218,12 @@ fn stops_colima_and_restores_containers_around_the_formula_upgrade() {
     expected.extend(brew_cleanup().iter().map(|&s| s.to_string()));
     expected.push("colima status".to_string());
     expected.push("docker compose ls --format json".to_string());
+    expected.push(project_ps("web"));
     expected.push(web("pull --quiet"));
     expected.push(web("up -d"));
     expected.push(project_ps("web"));
     expected.push(inspect_abc.to_string());
+    expected.push(project_ps("db"));
     expected.push(db("pull --quiet"));
     expected.push(db("up -d"));
     expected.push(project_ps("db"));
@@ -326,6 +328,63 @@ fn containers_that_do_not_become_healthy_are_reported() {
         "output: {text}"
     );
     assert!(!text.contains("db-1"), "output: {text}");
+}
+
+#[test]
+fn an_unhealthy_recreated_container_gets_a_per_container_rollback_hint() {
+    let tools = StubTools::new(&["brew", "colima", "docker"]);
+    install_brew(&tools);
+    install_colima(&tools);
+    install_docker(&tools);
+
+    // A zero wait probes each container once and reports what is not healthy.
+    let output = tools
+        .command()
+        .env("FRESHEN_OUTDATED_FORMULAE", "")
+        .env("FRESHEN_OUTDATED_CASKS", "")
+        .env("FRESHEN_BREW_UPGRADE_STATUS", "0")
+        .env("FRESHEN_COLIMA_STATUS", "0")
+        .env("FRESHEN_COLIMA_START_STATUS", "0")
+        .env("FRESHEN_COMPOSE_JSON", COMPOSE_JSON)
+        .env("FRESHEN_PS_OUTPUT", PS_OUTPUT)
+        // web-1 was running nginx@sha256:old before the recreation.
+        .env(
+            "FRESHEN_CONTAINERS_WEB",
+            "abc\tweb-1\tweb\tnginx@sha256:old",
+        )
+        .env("FRESHEN_CONTAINERS_DB", "def\tdb-1\tdb")
+        .env("FRESHEN_HEALTH_WAIT_SECS", "0")
+        .env("FRESHEN_HEALTH_ABC", "unhealthy")
+        .env("FRESHEN_HEALTH_DEF", "healthy")
+        .args(["--only", ALL_STEPS, "--cleanup"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("did not become healthy: web-1"),
+        "output: {text}"
+    );
+    assert!(
+        text.contains("rollback: docker pull nginx@sha256:old"),
+        "output: {text}"
+    );
+    assert!(!text.contains("db-1"), "output: {text}");
+    let calls = tools.step_calls();
+    // The previous image is captured before `pull`, then again after `up -d`.
+    assert!(
+        calls
+            .iter()
+            .filter(|call| call.as_str() == project_ps("web"))
+            .count()
+            == 2,
+        "calls: {calls:?}"
+    );
+    assert!(
+        calls.contains(&"docker inspect --format {{.State.Health.Status}} abc".to_owned()),
+        "calls: {calls:?}"
+    );
 }
 
 #[test]
