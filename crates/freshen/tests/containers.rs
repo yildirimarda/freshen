@@ -16,8 +16,8 @@ use std::process::Output;
 use support::{
     brew_autoremove, brew_cask_query, brew_cleanup, brew_formula_query, brew_formula_upgrade,
     brew_update, colima_start, colima_stop, db, docker_image_prune, docker_start_containers,
-    docker_stop_containers, docker_version, web, StubTools, ALL_STEPS, COMPOSE_JSON, PS_CALL,
-    PS_OUTPUT,
+    docker_stop_containers, docker_version, project_ps, web, StubTools, ALL_STEPS, COMPOSE_JSON,
+    PS_CALL, PS_OUTPUT,
 };
 
 fn stdout(output: &Output) -> String {
@@ -69,11 +69,55 @@ fn install_docker(tools: &StubTools) {
     tools.set_script(
         "docker",
         r#"case "$*" in
+  "compose version")
+    exit 0
+    ;;
   "compose ls --format json")
     printf '%s' "$FRESHEN_COMPOSE_JSON"
     ;;
   "ps --format "*)
     printf '%s' "$FRESHEN_PS_OUTPUT"
+    ;;
+  "ps --filter label=com.docker.compose.project="*)
+    project=""
+    for arg in "$@"; do
+      case "$arg" in
+        label=com.docker.compose.project=*)
+          project="${arg#label=com.docker.compose.project=}"
+          ;;
+      esac
+    done
+    case "$project" in
+      web) printf '%s' "$FRESHEN_CONTAINERS_WEB" ;;
+      db)  printf '%s' "$FRESHEN_CONTAINERS_DB" ;;
+      *)   printf '%s' "$FRESHEN_PS_OUTPUT" ;;
+    esac
+    ;;
+  "inspect --format {{.State.Health.Status}} abc")
+    printf '%s' "$FRESHEN_HEALTH_ABC"
+    ;;
+  "inspect --format {{.State.Health.Status}} def")
+    printf '%s' "$FRESHEN_HEALTH_DEF"
+    ;;
+  "inspect --format {{.State.Health.Status}} ghi")
+    # Test-only: the first poll reports "starting", later polls "healthy".
+    state="${FRESHEN_STUB_STATE:?}"
+    count_file="$state/docker-inspect-ghi.count"
+    count=0
+    [ -f "$count_file" ] && read -r count < "$count_file"
+    count=$((count + 1))
+    printf '%s\n' "$count" > "$count_file"
+    if [ "$count" -eq 1 ]; then
+      printf 'starting'
+    else
+      printf 'healthy'
+    fi
+    ;;
+  "inspect --format {{.State.Health.Status}} "*)
+    printf 'healthy'
+    ;;
+  "image prune -f")
+    exit 0
     ;;
 esac"#,
     );
@@ -125,7 +169,28 @@ fn stops_colima_and_restores_containers_around_the_formula_upgrade() {
     install_colima(&tools);
     install_docker(&tools);
 
-    let output = run(&tools, &Scenario::default());
+    let inspect_abc = "docker inspect --format {{.State.Health.Status}} abc";
+    let inspect_def = "docker inspect --format {{.State.Health.Status}} def";
+
+    let output = tools
+        .command()
+        .env("FRESHEN_OUTDATED_FORMULAE", "colima\n")
+        .env("FRESHEN_OUTDATED_CASKS", "")
+        .env("FRESHEN_BREW_UPGRADE_STATUS", "0")
+        .env("FRESHEN_COLIMA_STATUS", "0")
+        .env("FRESHEN_COLIMA_START_STATUS", "0")
+        .env("FRESHEN_COMPOSE_JSON", COMPOSE_JSON)
+        .env("FRESHEN_PS_OUTPUT", PS_OUTPUT)
+        .env("FRESHEN_CONTAINERS_WEB", "abc\tweb-1\tweb")
+        .env("FRESHEN_CONTAINERS_DB", "def\tdb-1\tdb")
+        .env("FRESHEN_HEALTH_WAIT_SECS", "0")
+        .env("FRESHEN_HEALTH_POLL_SECS", "1")
+        .env("FRESHEN_HEALTH_ABC", "healthy")
+        .env("FRESHEN_HEALTH_DEF", "healthy")
+        .env("FRESHEN_HEALTH_GHI", "healthy")
+        .args(["--only", ALL_STEPS, "--cleanup"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let mut expected = Vec::new();
@@ -143,7 +208,11 @@ fn stops_colima_and_restores_containers_around_the_formula_upgrade() {
     expected.extend(colima_start().iter().map(|&s| s.to_string()));
     expected.extend(docker_start_containers().iter().map(|&s| s.to_string()));
     expected.push(web("up -d"));
+    expected.push(project_ps("web"));
+    expected.push(inspect_abc.to_string());
     expected.push(db("up -d"));
+    expected.push(project_ps("db"));
+    expected.push(inspect_def.to_string());
     expected.extend(brew_cask_query().iter().map(|&s| s.to_string()));
     expected.extend(brew_autoremove().iter().map(|&s| s.to_string()));
     expected.extend(brew_cleanup().iter().map(|&s| s.to_string()));
@@ -151,8 +220,12 @@ fn stops_colima_and_restores_containers_around_the_formula_upgrade() {
     expected.push("docker compose ls --format json".to_string());
     expected.push(web("pull --quiet"));
     expected.push(web("up -d"));
+    expected.push(project_ps("web"));
+    expected.push(inspect_abc.to_string());
     expected.push(db("pull --quiet"));
     expected.push(db("up -d"));
+    expected.push(project_ps("db"));
+    expected.push(inspect_def.to_string());
     expected.extend(docker_image_prune().iter().map(|&s| s.to_string()));
     assert_eq!(tools.step_calls(), expected);
 
@@ -178,6 +251,113 @@ fn stops_colima_and_restores_containers_around_the_formula_upgrade() {
         text.contains("Docker: prune dangling images"),
         "output: {text}"
     );
+}
+
+#[test]
+fn healthy_containers_are_not_reported_after_up_d() {
+    let tools = StubTools::new(&["brew", "colima", "docker"]);
+    install_brew(&tools);
+    install_colima(&tools);
+    install_docker(&tools);
+
+    let output = tools
+        .command()
+        .env("FRESHEN_OUTDATED_FORMULAE", "")
+        .env("FRESHEN_OUTDATED_CASKS", "")
+        .env("FRESHEN_BREW_UPGRADE_STATUS", "0")
+        .env("FRESHEN_COLIMA_STATUS", "0")
+        .env("FRESHEN_COLIMA_START_STATUS", "0")
+        .env("FRESHEN_COMPOSE_JSON", COMPOSE_JSON)
+        .env("FRESHEN_PS_OUTPUT", PS_OUTPUT)
+        .env("FRESHEN_CONTAINERS_WEB", "abc\tweb-1\tweb")
+        .env("FRESHEN_CONTAINERS_DB", "def\tdb-1\tdb")
+        .env("FRESHEN_HEALTH_ABC", "healthy")
+        .env("FRESHEN_HEALTH_DEF", "healthy")
+        .args(["--only", ALL_STEPS, "--cleanup"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(calls.contains(&project_ps("web")), "calls: {calls:?}");
+    assert!(calls.contains(&project_ps("db")), "calls: {calls:?}");
+    assert!(
+        calls.contains(&"docker inspect --format {{.State.Health.Status}} abc".to_owned()),
+        "calls: {calls:?}"
+    );
+    assert!(
+        calls.contains(&"docker inspect --format {{.State.Health.Status}} def".to_owned()),
+        "calls: {calls:?}"
+    );
+    let text = stdout(&output);
+    assert!(!text.contains("did not become healthy"), "output: {text}");
+}
+
+#[test]
+fn containers_that_do_not_become_healthy_are_reported() {
+    let tools = StubTools::new(&["brew", "colima", "docker"]);
+    install_brew(&tools);
+    install_colima(&tools);
+    install_docker(&tools);
+
+    // A zero wait probes each container once and reports what is not healthy.
+    let output = tools
+        .command()
+        .env("FRESHEN_OUTDATED_FORMULAE", "")
+        .env("FRESHEN_OUTDATED_CASKS", "")
+        .env("FRESHEN_BREW_UPGRADE_STATUS", "0")
+        .env("FRESHEN_COLIMA_STATUS", "0")
+        .env("FRESHEN_COLIMA_START_STATUS", "0")
+        .env("FRESHEN_COMPOSE_JSON", COMPOSE_JSON)
+        .env("FRESHEN_PS_OUTPUT", PS_OUTPUT)
+        .env("FRESHEN_CONTAINERS_WEB", "abc\tweb-1\tweb")
+        .env("FRESHEN_CONTAINERS_DB", "def\tdb-1\tdb")
+        .env("FRESHEN_HEALTH_WAIT_SECS", "0")
+        .env("FRESHEN_HEALTH_ABC", "unhealthy")
+        .env("FRESHEN_HEALTH_DEF", "healthy")
+        .args(["--only", ALL_STEPS, "--cleanup"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("did not become healthy: web-1"),
+        "output: {text}"
+    );
+    assert!(!text.contains("db-1"), "output: {text}");
+}
+
+#[test]
+fn a_container_that_becomes_healthy_after_waiting_is_not_reported() {
+    let tools = StubTools::new(&["brew", "colima", "docker"]);
+    install_brew(&tools);
+    install_colima(&tools);
+    install_docker(&tools);
+
+    let output = tools
+        .command()
+        .env("FRESHEN_OUTDATED_FORMULAE", "")
+        .env("FRESHEN_OUTDATED_CASKS", "")
+        .env("FRESHEN_BREW_UPGRADE_STATUS", "0")
+        .env("FRESHEN_COLIMA_STATUS", "0")
+        .env("FRESHEN_COLIMA_START_STATUS", "0")
+        .env("FRESHEN_COMPOSE_JSON", COMPOSE_JSON)
+        .env("FRESHEN_PS_OUTPUT", PS_OUTPUT)
+        .env("FRESHEN_CONTAINERS_WEB", "ghi\tweb-1\tweb")
+        .env("FRESHEN_CONTAINERS_DB", "def\tdb-1\tdb")
+        .env("FRESHEN_HEALTH_WAIT_SECS", "2")
+        .env("FRESHEN_HEALTH_POLL_SECS", "1")
+        .env("FRESHEN_HEALTH_ABC", "healthy")
+        .env("FRESHEN_HEALTH_DEF", "healthy")
+        .env("FRESHEN_HEALTH_GHI", "healthy")
+        .args(["--only", ALL_STEPS, "--cleanup"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(!text.contains("did not become healthy"), "output: {text}");
 }
 
 #[test]

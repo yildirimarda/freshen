@@ -25,6 +25,15 @@ pub fn compose(project: &str, files: &[&str], action: &str) -> String {
     call
 }
 
+/// `docker ps --filter label=com.docker.compose.project=<project>` run after an
+/// `up -d` to learn which containers need a health-check wait.
+pub fn project_ps(project: &str) -> String {
+    let mut call = String::from("docker ps --filter label=com.docker.compose.project=");
+    call.push_str(project);
+    call.push_str(" --format {{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.project\"}}");
+    call
+}
+
 pub fn web(action: &str) -> String {
     compose(
         "web",
