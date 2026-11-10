@@ -146,6 +146,12 @@ pub struct Cli {
     #[arg(long)]
     pub bump: bool,
 
+    /// Pull pinned container images too (images referenced by digest or a
+    /// fixed non-`latest` tag in a compose file). Without this flag freshen
+    /// only pulls images that are not pinned (opt-in, off by default).
+    #[arg(long)]
+    pub docker_bump: bool,
+
     /// Reinstall outdated `go install` binaries instead of only reporting them
     /// (opt-in, off by default). Does not change the pinned Go toolchain.
     #[arg(long)]
@@ -301,6 +307,7 @@ impl Cli {
             .with_restart_services(self.restart_services)
             .with_restart_apps(self.restart_apps)
             .with_bump(self.bump)
+            .with_docker_bump(self.docker_bump)
             .with_go_update(self.reinstall_go)
             .with_install_aws_cli_updates(self.install_aws_cli_updates)
             .with_step_timeout(timeout(self.step_timeout.or(config.timeouts.step_seconds)))
@@ -445,6 +452,7 @@ mod tests {
             "--restart-services",
             "--restart-apps",
             "--bump",
+            "--docker-bump",
             "--reinstall-go",
             "--install-aws-cli-updates",
             "--snapshot-retention",
@@ -490,6 +498,7 @@ mod tests {
         assert!(options.restart_services());
         assert!(options.restart_apps());
         assert!(options.bump());
+        assert!(options.docker_bump());
         assert!(options.go_update());
         assert!(options.install_aws_cli_updates());
         assert_eq!(options.snapshot_retention(), 3);

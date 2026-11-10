@@ -10,7 +10,7 @@ mod support;
 
 use std::fs::{self, Permissions};
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Output;
 
 use support::{
@@ -853,5 +853,161 @@ fn colima_is_not_detected_when_only_brew_is_in_the_prefix() {
     assert!(
         line.contains("not installed") && line.contains("skipped: not installed"),
         "{line}"
+    );
+}
+
+/// Writes a compose file into the stub home and returns its path plus the
+/// `docker compose ls` JSON that references it.
+fn compose_scenario(tools: &StubTools, name: &str, services: &str) -> (PathBuf, String) {
+    let compose = tools.home().join(format!("{name}.yml"));
+    fs::write(&compose, services)
+        .unwrap_or_else(|error| panic!("failed to write {name}.yml: {error}"));
+    let json = format!(
+        r#"[{{"Name":"{name}","ConfigFiles":"{}"}}]"#,
+        compose.display()
+    );
+    (compose, json)
+}
+
+#[test]
+fn pinned_images_are_skipped_without_docker_bump() {
+    let tools = StubTools::new(&["brew", "colima", "docker"]);
+    install_brew(&tools);
+    install_colima(&tools);
+    install_docker(&tools);
+
+    let (compose, compose_json) = compose_scenario(
+        &tools,
+        "web",
+        "services:\n  web:\n    image: nginx@sha256:old\n  app:\n    image: node\n",
+    );
+
+    let pull_all = format!(
+        "docker compose -p web -f {} pull --quiet",
+        compose.display()
+    );
+    let pull_app = format!("{pull_all} app");
+
+    let output = tools
+        .command()
+        .env("FRESHEN_OUTDATED_FORMULAE", "")
+        .env("FRESHEN_OUTDATED_CASKS", "")
+        .env("FRESHEN_BREW_UPGRADE_STATUS", "0")
+        .env("FRESHEN_COLIMA_STATUS", "0")
+        .env("FRESHEN_COLIMA_START_STATUS", "0")
+        .env("FRESHEN_COMPOSE_JSON", &compose_json)
+        .env("FRESHEN_PS_OUTPUT", PS_OUTPUT)
+        .env("FRESHEN_CONTAINERS_WEB", "abc\tweb-1\tweb")
+        .env("FRESHEN_HEALTH_WAIT_SECS", "0")
+        .env("FRESHEN_HEALTH_ABC", "healthy")
+        .args(["--only", ALL_STEPS, "--cleanup"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(
+        calls.contains(&pull_app),
+        "the unpinned app image should be pulled: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call == &pull_all),
+        "the pinned web image should not be pulled: {calls:?}"
+    );
+    let text = stdout(&output);
+    assert!(
+        text.contains("skipping pinned images: web"),
+        "output: {text}"
+    );
+}
+
+#[test]
+fn pinned_images_are_pulled_with_docker_bump() {
+    let tools = StubTools::new(&["brew", "colima", "docker"]);
+    install_brew(&tools);
+    install_colima(&tools);
+    install_docker(&tools);
+
+    let (compose, compose_json) = compose_scenario(
+        &tools,
+        "web",
+        "services:\n  web:\n    image: nginx@sha256:old\n  app:\n    image: node\n",
+    );
+
+    let pull_all = format!(
+        "docker compose -p web -f {} pull --quiet",
+        compose.display()
+    );
+
+    let output = tools
+        .command()
+        .env("FRESHEN_OUTDATED_FORMULAE", "")
+        .env("FRESHEN_OUTDATED_CASKS", "")
+        .env("FRESHEN_BREW_UPGRADE_STATUS", "0")
+        .env("FRESHEN_COLIMA_STATUS", "0")
+        .env("FRESHEN_COLIMA_START_STATUS", "0")
+        .env("FRESHEN_COMPOSE_JSON", &compose_json)
+        .env("FRESHEN_PS_OUTPUT", PS_OUTPUT)
+        .env("FRESHEN_CONTAINERS_WEB", "abc\tweb-1\tweb")
+        .env("FRESHEN_HEALTH_WAIT_SECS", "0")
+        .env("FRESHEN_HEALTH_ABC", "healthy")
+        .args(["--only", ALL_STEPS, "--cleanup", "--docker-bump"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(
+        calls.contains(&pull_all),
+        "all images should be pulled with --docker-bump: {calls:?}"
+    );
+    let text = stdout(&output);
+    assert!(!text.contains("skipping pinned images"), "output: {text}");
+}
+
+#[test]
+fn a_fixed_tag_is_treated_as_pinned() {
+    let tools = StubTools::new(&["brew", "colima", "docker"]);
+    install_brew(&tools);
+    install_colima(&tools);
+    install_docker(&tools);
+
+    let (compose, compose_json) = compose_scenario(
+        &tools,
+        "web",
+        "services:\n  web:\n    image: node:20\n  app:\n    image: node\n",
+    );
+
+    let pull_all = format!(
+        "docker compose -p web -f {} pull --quiet",
+        compose.display()
+    );
+    let pull_app = format!("{pull_all} app");
+
+    let output = tools
+        .command()
+        .env("FRESHEN_OUTDATED_FORMULAE", "")
+        .env("FRESHEN_OUTDATED_CASKS", "")
+        .env("FRESHEN_BREW_UPGRADE_STATUS", "0")
+        .env("FRESHEN_COLIMA_STATUS", "0")
+        .env("FRESHEN_COLIMA_START_STATUS", "0")
+        .env("FRESHEN_COMPOSE_JSON", &compose_json)
+        .env("FRESHEN_PS_OUTPUT", PS_OUTPUT)
+        .env("FRESHEN_CONTAINERS_WEB", "abc\tweb-1\tweb")
+        .env("FRESHEN_HEALTH_WAIT_SECS", "0")
+        .env("FRESHEN_HEALTH_ABC", "healthy")
+        .args(["--only", ALL_STEPS, "--cleanup"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(
+        calls.contains(&pull_app),
+        "the untagged app image should be pulled: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call == &pull_all),
+        "the pinned node:20 image should not be pulled: {calls:?}"
     );
 }
