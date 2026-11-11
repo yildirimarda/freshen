@@ -152,6 +152,11 @@ pub struct Cli {
     #[arg(long)]
     pub docker_bump: bool,
 
+    /// Prune dangling container images that have not been used for N days
+    /// (only runs with `--cleanup`, opt-in, off by default).
+    #[arg(long, value_name = "DAYS")]
+    pub prune_unused_older_than: Option<usize>,
+
     /// Reinstall outdated `go install` binaries instead of only reporting them
     /// (opt-in, off by default). Does not change the pinned Go toolchain.
     #[arg(long)]
@@ -308,6 +313,7 @@ impl Cli {
             .with_restart_apps(self.restart_apps)
             .with_bump(self.bump)
             .with_docker_bump(self.docker_bump)
+            .with_prune_unused_older_than(self.prune_unused_older_than)
             .with_go_update(self.reinstall_go)
             .with_install_aws_cli_updates(self.install_aws_cli_updates)
             .with_step_timeout(timeout(self.step_timeout.or(config.timeouts.step_seconds)))
@@ -399,6 +405,7 @@ mod tests {
         assert!(!options.restart_apps());
         assert!(!options.bump());
         assert!(!options.go_update());
+        assert_eq!(options.prune_unused_older_than(), None);
         assert!(!options.install_aws_cli_updates());
         assert_eq!(options.wsl_distro(), None);
         assert_eq!(
@@ -453,6 +460,8 @@ mod tests {
             "--restart-apps",
             "--bump",
             "--docker-bump",
+            "--prune-unused-older-than",
+            "30",
             "--reinstall-go",
             "--install-aws-cli-updates",
             "--snapshot-retention",
@@ -499,6 +508,7 @@ mod tests {
         assert!(options.restart_apps());
         assert!(options.bump());
         assert!(options.docker_bump());
+        assert_eq!(options.prune_unused_older_than(), Some(30));
         assert!(options.go_update());
         assert!(options.install_aws_cli_updates());
         assert_eq!(options.snapshot_retention(), 3);
@@ -714,6 +724,7 @@ mod tests {
             "--bump",
             "--reinstall-go",
             "--install-aws-cli-updates",
+            "--prune-unused-older-than",
             "--snapshot-retention",
             "--step-timeout",
             "--timeout",

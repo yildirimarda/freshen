@@ -2993,14 +2993,14 @@ impl Step for DockerStep {
         }
 
         if command_exists(self.container_cli) {
-            if let Err(error) = cleanup::run(
-                DOCKER,
-                "Docker: prune dangling images",
-                CommandSpec::new(self.container_cli)
-                    .args(["image", "prune", "-f"])
-                    .neutral_locale(),
-                options,
-            ) {
+            let mut spec = CommandSpec::new(self.container_cli)
+                .args(["image", "prune", "-f"])
+                .neutral_locale();
+            if let Some(days) = options.prune_unused_older_than() {
+                spec = spec.arg(format!("--filter until={}h", days * 24));
+            }
+            if let Err(error) = cleanup::run(DOCKER, "Docker: prune dangling images", spec, options)
+            {
                 failures.push(error);
             }
         }

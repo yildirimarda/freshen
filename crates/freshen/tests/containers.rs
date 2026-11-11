@@ -118,7 +118,10 @@ fn install_docker(tools: &StubTools) {
     ;;
   "image prune -f")
     exit 0
-    ;;
+  ;;
+  "image prune -f --filter until=*)")
+    exit 0
+  ;;
 esac"#,
     );
 }
@@ -293,6 +296,45 @@ fn healthy_containers_are_not_reported_after_up_d() {
     );
     let text = stdout(&output);
     assert!(!text.contains("did not become healthy"), "output: {text}");
+}
+
+#[test]
+fn prunes_images_older_than_the_configured_age() {
+    let tools = StubTools::new(&["brew", "colima", "docker"]);
+    install_brew(&tools);
+    install_colima(&tools);
+    install_docker(&tools);
+
+    let output = tools
+        .command()
+        .env("FRESHEN_OUTDATED_FORMULAE", "")
+        .env("FRESHEN_OUTDATED_CASKS", "")
+        .env("FRESHEN_BREW_UPGRADE_STATUS", "0")
+        .env("FRESHEN_COLIMA_STATUS", "0")
+        .env("FRESHEN_COLIMA_START_STATUS", "0")
+        .env("FRESHEN_COMPOSE_JSON", COMPOSE_JSON)
+        .env("FRESHEN_PS_OUTPUT", PS_OUTPUT)
+        .args([
+            "--only",
+            ALL_STEPS,
+            "--cleanup",
+            "--prune-unused-older-than",
+            "30",
+        ])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(
+        calls.contains(&"docker image prune -f --filter until=720h".to_owned()),
+        "calls: {calls:?}"
+    );
+    let text = stdout(&output);
+    assert!(
+        text.contains("Docker: prune dangling images"),
+        "output: {text}"
+    );
 }
 
 #[test]
