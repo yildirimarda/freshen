@@ -69,14 +69,20 @@ fn executable_extensions() -> Vec<String> {
         })
         .unwrap_or_default();
 
-    if extensions.is_empty() {
-        [".COM", ".EXE", ".BAT", ".CMD"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect()
-    } else {
-        extensions
+    // Always probe `.cmd` and `.bat` so stub executables written with those
+    // extensions are found even when `PATHEXT` does not list them. Test stubs
+    // on Windows are written as `docker.cmd`, so `.cmd` is probed first.
+    let mut result = Vec::with_capacity(extensions.len() + 2);
+    for extension in [".CMD", ".BAT"] {
+        if !extensions
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(extension))
+        {
+            result.push(extension.to_owned());
+        }
     }
+    result.extend(extensions);
+    result
 }
 
 #[cfg(not(windows))]
