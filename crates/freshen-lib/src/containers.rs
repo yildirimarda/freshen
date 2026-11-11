@@ -262,6 +262,12 @@ pub trait ContainerRuntimeProbe {
     /// Returns the name printed by `docker context show`.
     fn docker_context(&self) -> Option<String>;
 
+    /// Returns the endpoint address of the active Docker context, for example
+    /// `unix:///var/run/docker.sock` or `tcp://1.2.3.4:2375`. Returns `None`
+    /// when there is no active context or the endpoint cannot be determined,
+    /// in which case the caller treats the engine as local.
+    fn docker_endpoint(&self) -> Option<String>;
+
     /// Returns `true` when `path` exists.
     fn socket_exists(&self, path: &Path) -> bool;
 }
@@ -292,8 +298,56 @@ impl ContainerRuntimeProbe for HostContainerRuntimeProbe {
             .filter(|name| !name.is_empty())
     }
 
+    fn docker_endpoint(&self) -> Option<String> {
+        // `DOCKER_HOST` wins over the active context.
+        if let Some(host) = self.variable("DOCKER_HOST") {
+            return Some(host);
+        }
+
+        let context = self.docker_context()?;
+        if context == "default" {
+            return None;
+        }
+
+        CommandSpec::new("docker")
+            .args(["context", "inspect", "--format", "{{.Endpoint}}", &context])
+            .neutral_locale()
+            .run()
+            .ok()
+            .map(|output| output.stdout().trim().to_owned())
+            .filter(|endpoint| !endpoint.is_empty())
+    }
+
     fn socket_exists(&self, path: &Path) -> bool {
         path.exists()
+    }
+}
+
+/// Returns `true` when `endpoint` points at a local Docker engine (a Unix
+/// socket or a Windows named pipe) and `false` when it points at a remote
+/// engine (`tcp://`, `ssh://` or any other network address). An empty endpoint
+/// (the default local engine) or a bare socket path counts as local.
+#[must_use]
+fn is_local_endpoint(endpoint: &str) -> bool {
+    let endpoint = endpoint.trim();
+    if endpoint.is_empty() {
+        return true;
+    }
+    let Some(scheme) = endpoint.split_once("://").map(|(scheme, _)| scheme) else {
+        // A bare path with no scheme is a local socket.
+        return true;
+    };
+    matches!(scheme, "unix" | "npipe")
+}
+
+/// Returns `true` when `DOCKER_HOST` points at a remote engine rather than a
+/// local socket or named pipe. When `DOCKER_HOST` is unset, the default local
+/// engine is assumed.
+#[must_use]
+fn docker_host_is_remote() -> bool {
+    match std::env::var("DOCKER_HOST") {
+        Ok(host) => !is_local_endpoint(&host),
+        Err(_) => false,
     }
 }
 
@@ -302,9 +356,16 @@ impl ContainerRuntimeProbe for HostContainerRuntimeProbe {
 /// `DOCKER_HOST` wins over `docker context show`, which wins over the
 /// well-known socket paths. Returns `None` when none of them identifies a
 /// runtime, so the caller can leave the runtime line out instead of guessing.
+///
+/// A remote engine (`tcp://`, `ssh://` or another network address) is never
+/// returned: freshen never manages a non-local context unless the user has
+/// explicitly selected a local one.
 #[must_use]
 pub fn detect_active_runtime(probe: &dyn ContainerRuntimeProbe) -> Option<ActiveContainerRuntime> {
     if let Some(host) = probe.variable("DOCKER_HOST") {
+        if !is_local_endpoint(&host) {
+            return None;
+        }
         return Some(ActiveContainerRuntime::new(
             kind_from_docker_host(&host),
             ContainerRuntimeSource::Environment,
@@ -312,6 +373,13 @@ pub fn detect_active_runtime(probe: &dyn ContainerRuntimeProbe) -> Option<Active
     }
 
     if let Some(context) = probe.docker_context() {
+        let remote = probe
+            .docker_endpoint()
+            .map(|endpoint| !is_local_endpoint(&endpoint))
+            .unwrap_or(false);
+        if remote {
+            return None;
+        }
         if let Some(kind) = kind_from_context(&context) {
             return Some(ActiveContainerRuntime::new(
                 kind,
@@ -2090,6 +2158,10 @@ pub fn detect_compose_command(
     probe: &dyn ComposeCommandProbe,
     runtime: Option<ContainerRuntimeKind>,
 ) -> Option<ComposeCommand> {
+    if docker_host_is_remote() {
+        // Never probe a remote engine for its compose implementation.
+        return None;
+    }
     if runtime == Some(ContainerRuntimeKind::Podman) && probe.supports_compose("podman") {
         return Some(ComposeCommand::PodmanCompose);
     }
@@ -2532,6 +2604,12 @@ impl Step for ContainerStopStep {
     }
 
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
+        if docker_host_is_remote() {
+            human!(
+                "warning: DOCKER_HOST points at a remote engine, skipping container operations."
+            );
+            return Ok(());
+        }
         if !self.upgrade_triggers_restart(&homebrew::brew_installs())? || !self.runtime.is_running()
         {
             return Ok(());
@@ -2634,6 +2712,12 @@ impl ContainerStartStep {
     }
 
     fn start_and_restore(&self, action: &str) -> Result<(), StepError> {
+        if docker_host_is_remote() {
+            human!(
+                "warning: DOCKER_HOST points at a remote engine, skipping container operations."
+            );
+            return Ok(());
+        }
         let Some(snapshot) = self.snapshot.get() else {
             return Ok(());
         };
@@ -2937,6 +3021,12 @@ impl Step for DockerStep {
     }
 
     fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
+        if docker_host_is_remote() {
+            human!(
+                "warning: DOCKER_HOST points at a remote engine, skipping Docker image updates."
+            );
+            return Ok(());
+        }
         if !self.runtime.is_running() {
             human!(
                 "warning: {} is not running, skipping Docker image updates.",
@@ -4674,6 +4764,7 @@ mod tests {
     struct FakeProbe {
         variables: HashMap<String, String>,
         context: Option<String>,
+        endpoint: Option<String>,
         sockets: HashSet<PathBuf>,
     }
 
@@ -4685,6 +4776,13 @@ mod tests {
 
         fn with_context(mut self, context: &str) -> Self {
             self.context = Some(context.to_owned());
+            self
+        }
+
+        /// Sets the endpoint returned by `docker_endpoint`, simulating the
+        /// address of the active Docker context.
+        fn with_endpoint(mut self, endpoint: &str) -> Self {
+            self.endpoint = Some(endpoint.to_owned());
             self
         }
 
@@ -4701,6 +4799,10 @@ mod tests {
 
         fn docker_context(&self) -> Option<String> {
             self.context.clone()
+        }
+
+        fn docker_endpoint(&self) -> Option<String> {
+            self.endpoint.clone()
         }
 
         fn socket_exists(&self, path: &Path) -> bool {
@@ -4864,6 +4966,48 @@ mod tests {
     #[test]
     fn no_facts_means_no_detected_runtime() {
         assert_eq!(detected(&FakeProbe::default()), None);
+    }
+
+    #[test]
+    fn is_local_endpoint_classifies_local_and_remote_endpoints() {
+        assert!(super::is_local_endpoint("unix:///var/run/docker.sock"));
+        assert!(super::is_local_endpoint(
+            "unix:///run/user/1000/podman/podman.sock"
+        ));
+        assert!(super::is_local_endpoint("npipe:////./pipe/docker_engine"));
+        assert!(super::is_local_endpoint(""));
+        // A bare socket path with no scheme is local.
+        assert!(super::is_local_endpoint("/var/run/docker.sock"));
+        assert!(!super::is_local_endpoint("tcp://1.2.3.4:2375"));
+        assert!(!super::is_local_endpoint("tcp://1.2.3.4:2376"));
+        assert!(!super::is_local_endpoint("ssh://user@host"));
+        assert!(!super::is_local_endpoint("http://example.com"));
+    }
+
+    #[test]
+    fn a_remote_docker_host_is_not_detected_as_a_managed_runtime() {
+        let probe = FakeProbe::default().with_var("DOCKER_HOST", "tcp://remote.example.com:2375");
+
+        assert_eq!(detected(&probe), None);
+    }
+
+    #[test]
+    fn a_remote_docker_context_is_not_detected_as_a_managed_runtime() {
+        let probe = FakeProbe::default()
+            .with_context("myremote")
+            .with_endpoint("tcp://remote.example.com:2375");
+
+        assert_eq!(detected(&probe), None);
+    }
+
+    #[test]
+    fn a_local_docker_host_is_still_detected() {
+        let probe = FakeProbe::default().with_var("DOCKER_HOST", "unix:///var/run/docker.sock");
+
+        let runtime = detected(&probe).unwrap_or_else(|| panic!("local host was not detected"));
+
+        assert_eq!(runtime.kind(), ContainerRuntimeKind::NativeDocker);
+        assert_eq!(runtime.source(), &ContainerRuntimeSource::Environment);
     }
 
     #[test]

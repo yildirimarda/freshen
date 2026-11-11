@@ -1139,3 +1139,24 @@ Build Cache     10        2         2.5GB     1.5GB
     assert_eq!(build_cache["size"], "2.5GB");
     assert_eq!(build_cache["reclaimable"], "1.5GB");
 }
+
+#[test]
+fn docker_steps_never_touch_a_remote_engine() {
+    let tools = StubTools::new(&["docker", "colima"]);
+
+    let output = tools
+        .command()
+        .env("DOCKER_HOST", "tcp://remote.example.com:2375")
+        .args(["--only", ALL_STEPS, "--cleanup"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    // A remote engine is never touched: no docker command is issued, not even
+    // the read-only compose version probe, and no container is stopped.
+    assert!(
+        tools.step_calls().is_empty(),
+        "no calls against a remote engine: {:?}",
+        tools.step_calls()
+    );
+}
