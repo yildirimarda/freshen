@@ -238,6 +238,7 @@ pub struct RunOptions {
     restart_apps: bool,
     bump: bool,
     docker_bump: bool,
+    prune_unused_older_than: Option<usize>,
     go_update: bool,
     install_aws_cli_updates: bool,
 }
@@ -495,6 +496,15 @@ impl RunOptions {
         self
     }
 
+    /// Sets `--prune-unused-older-than`: prune dangling container images that
+    /// have not been used for `days` days when cleanup is enabled. `None`
+    /// disables the age-based prune.
+    #[must_use]
+    pub fn with_prune_unused_older_than(mut self, days: Option<usize>) -> Self {
+        self.prune_unused_older_than = days;
+        self
+    }
+
     /// Sets `--reinstall-go`: reinstall outdated `go install` binaries instead
     /// of only reporting them. Without the flag the Go step is check-only and
     /// never changes the pinned Go toolchain.
@@ -739,6 +749,13 @@ impl RunOptions {
     #[must_use]
     pub fn docker_bump(&self) -> bool {
         self.docker_bump
+    }
+
+    /// Returns the number of days after which an unused dangling container
+    /// image is pruned, or `None` when `--prune-unused-older-than` was not set.
+    #[must_use]
+    pub fn prune_unused_older_than(&self) -> Option<usize> {
+        self.prune_unused_older_than
     }
 
     /// Returns `true` when `--reinstall-go` asks to reinstall outdated `go
@@ -1140,5 +1157,23 @@ mod tests {
             );
             assert!(options.is_dry_run());
         }
+    }
+
+    #[test]
+    fn prune_unused_older_than_defaults_to_none() {
+        let options = RunOptions::new();
+
+        assert_eq!(options.prune_unused_older_than(), None);
+    }
+
+    #[test]
+    fn prune_unused_older_than_is_round_tripped_through_the_builder() {
+        let options = RunOptions::new().with_prune_unused_older_than(Some(30));
+
+        assert_eq!(options.prune_unused_older_than(), Some(30));
+
+        let cleared = options.with_prune_unused_older_than(None);
+
+        assert_eq!(cleared.prune_unused_older_than(), None);
     }
 }
