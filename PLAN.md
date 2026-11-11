@@ -354,7 +354,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 
 ## Milestone 9: Configuration and UX
 
-- [ ] Support named profiles (e.g. `work`, `minimal`) selectable with `--profile`, covered by tests
+- [x] Support named profiles (e.g. `work`, `minimal`) selectable with `--profile`, covered by tests
 - [ ] Add per-step pre/post hooks with environment variables describing the run, covered by tests
 - [ ] Add global `pre_run`/`post_run` hooks, covered by tests
 - [ ] Add user-defined custom steps (a name, a command, platforms, order) so anything not built in can be added without code changes, covered by tests
