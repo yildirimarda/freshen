@@ -93,11 +93,13 @@ pub enum ContainerRuntimeKind {
     NativeDocker,
     /// k3d, running Kubernetes clusters inside Docker containers.
     K3d,
+    /// kind, running Kubernetes clusters inside Docker containers.
+    Kind,
 }
 
 impl ContainerRuntimeKind {
     /// Every known runtime.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Colima,
         Self::OrbStack,
         Self::DockerDesktop,
@@ -106,6 +108,7 @@ impl ContainerRuntimeKind {
         Self::Podman,
         Self::NativeDocker,
         Self::K3d,
+        Self::Kind,
     ];
 
     /// Canonical name accepted by `--container-runtime` and used in reports.
@@ -120,6 +123,7 @@ impl ContainerRuntimeKind {
             Self::Podman => "podman",
             Self::NativeDocker => "docker",
             Self::K3d => "k3d",
+            Self::Kind => "kind",
         }
     }
 
@@ -135,6 +139,7 @@ impl ContainerRuntimeKind {
             Self::Podman => "Podman",
             Self::NativeDocker => "Docker Engine",
             Self::K3d => "K3d",
+            Self::Kind => "Kind",
         }
     }
 }
@@ -159,6 +164,7 @@ impl FromStr for ContainerRuntimeKind {
             "podman" | "podman-machine" => Ok(Self::Podman),
             "docker" | "native" | "native-docker" | "docker-engine" => Ok(Self::NativeDocker),
             "k3d" => Ok(Self::K3d),
+            "kind" => Ok(Self::Kind),
             _ => Err(format!(
                 "unknown container runtime `{value}` (known: {})",
                 Self::ALL
@@ -1633,6 +1639,159 @@ fn parse_k3d_clusters(output: &str) -> Vec<K3dCluster> {
         .collect()
 }
 
+/// The kind runtime.
+///
+/// kind runs Kubernetes clusters inside Docker containers. Upgrading the
+/// `kind` formula can restart those clusters, so the formula triggers a
+/// stop/start cycle: the running clusters are stopped with `kind cluster stop`
+/// before the upgrade and started again with `kind cluster start` afterwards.
+/// Clusters are listed with `kind get clusters`. Only clusters that were
+/// running are restarted; kind has no separate stopped state, so every listed
+/// cluster counts as running.
+#[derive(Debug, Default, Clone)]
+pub struct KindRuntime {
+    state: Arc<Mutex<KindState>>,
+}
+
+#[derive(Debug, Default)]
+struct KindState {
+    clusters: Vec<KindCluster>,
+}
+
+/// A kind cluster and whether it was running when it was last observed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct KindCluster {
+    name: String,
+    running: bool,
+}
+
+impl KindRuntime {
+    /// Creates the kind runtime.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl ContainerRuntime for KindRuntime {
+    fn name(&self) -> &'static str {
+        "kind"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Kind"
+    }
+
+    fn command(&self) -> &'static str {
+        "kind"
+    }
+
+    fn detection_commands(&self) -> &'static [&'static str] {
+        &["kind"]
+    }
+
+    fn detect(&self) -> Detection {
+        if command_exists("kind") {
+            Detection::Installed
+        } else {
+            Detection::NotInstalled
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        let Ok(output) = CommandSpec::new("kind")
+            .args(["get", "clusters"])
+            .neutral_locale()
+            .run()
+        else {
+            return false;
+        };
+
+        let clusters = parse_kind_clusters(output.stdout());
+        {
+            let mut state = lock(&self.state);
+            state.clusters = clusters;
+        }
+        self.observed_clusters()
+            .iter()
+            .any(|cluster| cluster.running)
+    }
+
+    fn stop(&self) -> Result<(), ProcessError> {
+        let clusters = self.observed_clusters();
+        let mut failures = Vec::new();
+
+        for cluster in &clusters {
+            if cluster.running {
+                human!("kind cluster stop: {}", cluster.name);
+                if let Err(error) = CommandSpec::new("kind")
+                    .args(["cluster", "stop", &cluster.name])
+                    .run()
+                {
+                    failures.push(error);
+                }
+            }
+        }
+
+        first_process_failure(failures)
+    }
+
+    fn start(&self) -> Result<(), ProcessError> {
+        let clusters = self.observed_clusters();
+        let mut failures = Vec::new();
+
+        for cluster in &clusters {
+            if cluster.running {
+                human!("kind cluster start: {}", cluster.name);
+                if let Err(error) = CommandSpec::new("kind")
+                    .args(["cluster", "start", &cluster.name])
+                    .run()
+                {
+                    failures.push(error);
+                }
+            }
+        }
+
+        first_process_failure(failures)
+    }
+
+    fn restart_formulae(&self) -> &'static [&'static str] {
+        &["kind"]
+    }
+
+    fn restart_casks(&self) -> &'static [&'static str] {
+        &[]
+    }
+}
+
+impl KindRuntime {
+    /// The clusters observed by the last `is_running` call, or empty when the
+    /// runtime has not been observed yet.
+    fn observed_clusters(&self) -> Vec<KindCluster> {
+        let state = lock(&self.state);
+        if state.clusters.is_empty() {
+            return Vec::new();
+        }
+        state.clusters.clone()
+    }
+}
+
+/// Parses the cluster names printed by `kind get clusters`.
+///
+/// Each non-empty line is one cluster name; every listed cluster counts as
+/// running because kind has no separate stopped state.
+fn parse_kind_clusters(output: &str) -> Vec<KindCluster> {
+    output
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .map(|name| KindCluster {
+            name: name.to_owned(),
+            running: true,
+        })
+        .collect()
+}
+
 /// Docker ships Compose v2 as the `docker compose` plugin, older installations
 /// have the standalone `docker-compose` binary, and Podman provides
 /// `podman compose`. The detected command is used for every compose action so
@@ -2044,6 +2203,9 @@ pub fn register_for(registry: Registry, kind: Option<ContainerRuntimeKind>) -> R
         ),
         Some(ContainerRuntimeKind::K3d) => {
             register_with_compose(registry, K3dRuntime::new(), None, "docker")
+        }
+        Some(ContainerRuntimeKind::Kind) => {
+            register_with_compose(registry, KindRuntime::new(), None, "docker")
         }
         _ => register(registry),
     }
@@ -2969,7 +3131,7 @@ mod tests {
         selected_projects, ActiveContainerRuntime, ColimaRuntime, ComposeCommand,
         ComposeCommandProbe, ComposeProject, ContainerRuntime, ContainerRuntimeKind,
         ContainerRuntimeProbe, ContainerRuntimeSource, DockerDesktopRuntime, DockerEngineProbe,
-        ImagePin, K3dRuntime, NativeDockerRuntime, OrbStackRuntime, PodmanRuntime,
+        ImagePin, K3dRuntime, KindRuntime, NativeDockerRuntime, OrbStackRuntime, PodmanRuntime,
         RancherDesktopRuntime, StandaloneContainer, COLIMA_START, COLIMA_STOP, COMPOSE_SKIP_LABEL,
         DOCKER, PS_FORMAT,
     };
@@ -3701,6 +3863,56 @@ mod tests {
         let registry = homebrew::register(register_for(
             Registry::new(),
             Some(ContainerRuntimeKind::K3d),
+        ));
+        let ordered: Vec<StepId> = registry
+            .ordered_for(Platform::Macos)
+            .unwrap_or_else(|error| panic!("registry order failed: {error}"))
+            .iter()
+            .map(|step| step.id())
+            .collect();
+
+        assert_eq!(
+            ordered,
+            [
+                "macos-updates",
+                "brew",
+                "colima-stop",
+                "brew-formulae",
+                "colima-start",
+                "brew-services",
+                "brew-casks",
+                "brew-autoremove",
+                "brew-cleanup",
+                "brew-doctor",
+                "brew-bundle-cleanup",
+                "brew-reopen",
+                "docker",
+            ]
+        );
+    }
+
+    #[test]
+    fn kind_runtime_declares_its_formula_as_the_restart_trigger() {
+        let runtime = KindRuntime::new();
+
+        assert_eq!(runtime.name(), "kind");
+        assert_eq!(runtime.display_name(), "Kind");
+        assert_eq!(runtime.command(), "kind");
+        assert_eq!(runtime.detection_commands(), &["kind"]);
+        assert_eq!(runtime.restart_formulae(), ["kind"]);
+        assert!(runtime.restart_casks().is_empty());
+        assert!(runtime.triggers_restart("kind"));
+        assert!(!runtime.triggers_restart("kind-default"));
+        assert!(!runtime.triggers_restart("docker"));
+        assert!(!runtime.triggers_restart("colima"));
+        assert_eq!(runtime.platforms(), super::CONTAINER_PLATFORMS);
+    }
+
+    #[test]
+    fn kind_stops_before_formulae_and_starts_after_them() {
+        let registry = homebrew::register(register_for(
+            Registry::new(),
+            Some(ContainerRuntimeKind::Kind),
         ));
         let ordered: Vec<StepId> = registry
             .ordered_for(Platform::Macos)
