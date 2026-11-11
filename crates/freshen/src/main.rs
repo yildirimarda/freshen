@@ -45,7 +45,13 @@ fn main() -> ExitCode {
             return exit::code(exit::STEP_FAILURE);
         }
     };
-    let options = cli.run_options_with(&config);
+    let options = match cli.run_options_with(&config) {
+        Ok(options) => options,
+        Err(error) => {
+            eprintln!("freshen: {error}");
+            return exit::code(exit::STEP_FAILURE);
+        }
+    };
     let app_lists = config.app_lists().merged_with(AppLists::from_env());
     let options = options
         .with_app_lists(app_lists)

@@ -9,6 +9,8 @@
 //! default. Flags that are not given stay `None` here, so the configuration
 //! file can fill them in.
 
+use std::collections::BTreeMap;
+use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -18,6 +20,30 @@ use freshen_lib::{
     RunOptions, StepSelection, DEFAULT_JOBS, DEFAULT_MIN_BATTERY_PERCENT,
     DEFAULT_MIN_FREE_DISK_GIB, DEFAULT_SNAPSHOT_RETENTION, DEFAULT_WAIT,
 };
+
+/// A problem combining the command line with the configuration file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CliError {
+    /// `--profile` named a profile that the configuration file does not define.
+    UnknownProfile {
+        /// Name that was given on the command line.
+        name: String,
+        /// Profiles that the configuration file defines.
+        known: String,
+    },
+}
+
+impl fmt::Display for CliError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownProfile { name, known } => {
+                write!(f, "unknown profile `{name}` (known profiles: {known})")
+            }
+        }
+    }
+}
+
+impl std::error::Error for CliError {}
 
 /// Keep a developer machine up to date: package managers, language toolchains
 /// and containers, on macOS, Linux and Windows.
@@ -66,6 +92,12 @@ pub struct Cli {
     /// Skip the named steps (comma-separated, repeatable).
     #[arg(long, value_name = "STEP", value_delimiter = ',', action = ArgAction::Append)]
     pub skip: Vec<String>,
+
+    /// Run the steps enabled by the named profile, defined in the
+    /// configuration file under `[profiles.<name>]`. The profile's steps
+    /// override the top-level `[steps]` section.
+    #[arg(long, value_name = "PROFILE")]
+    pub profile: Option<String>,
 
     /// Exclude these Chocolatey packages from the upgrade (repeatable,
     /// comma-separated). Chocolatey only runs on Windows.
@@ -260,8 +292,12 @@ impl Cli {
     /// A flag that was given on the command line wins over the same value in
     /// the configuration file, and the configuration file wins over the
     /// built-in default.
-    #[must_use]
-    pub fn run_options_with(&self, config: &Config) -> RunOptions {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CliError`] when `--profile` names a profile that the
+    /// configuration file does not define.
+    pub fn run_options_with(&self, config: &Config) -> Result<RunOptions, CliError> {
         let preflight = PreflightConfig::new()
             .with_check(
                 PreflightCheck::Network,
@@ -302,7 +338,7 @@ impl Cli {
                     .unwrap_or(DEFAULT_WAIT.as_secs()),
             ));
 
-        RunOptions::new()
+        Ok(RunOptions::new()
             .with_dry_run(self.dry_run)
             .with_assume_yes(self.yes)
             .with_force_kill(self.force_kill)
@@ -338,11 +374,44 @@ impl Cli {
                     .with_only(self.only.clone())
                     .with_skip(self.skip.clone()),
             )
-            .with_step_overrides(config.step_overrides())
+            .with_step_overrides(self.step_overrides(config)?)
             .with_filters(config.item_filters())
             .with_app_lists(config.app_lists())
             .with_pre_commit_repositories(config.pre_commit_repositories())
-            .with_chocolatey_except(self.except.clone())
+            .with_chocolatey_except(self.except.clone()))
+    }
+
+    /// The per-step enable and disable flags, with the selected profile's
+    /// steps applied on top of the top-level `[steps]` section.
+    fn step_overrides(&self, config: &Config) -> Result<BTreeMap<String, bool>, CliError> {
+        let mut overrides = config.step_overrides();
+
+        if let Some(profile) = &self.profile {
+            let profile_steps = config
+                .profile_steps(profile)
+                .ok_or_else(|| CliError::unknown_profile(profile, &config.profiles))?;
+            for (id, enabled) in profile_steps {
+                overrides.insert(id.clone(), *enabled);
+            }
+        }
+
+        Ok(overrides)
+    }
+}
+
+impl CliError {
+    fn unknown_profile(name: &str, profiles: &BTreeMap<String, BTreeMap<String, bool>>) -> Self {
+        let mut known: Vec<&str> = profiles.keys().map(String::as_str).collect();
+        known.sort_unstable();
+        let known = if known.is_empty() {
+            "none".to_owned()
+        } else {
+            known.join(", ")
+        };
+        Self::UnknownProfile {
+            name: name.to_owned(),
+            known,
+        }
     }
 }
 
@@ -368,15 +437,18 @@ fn timeout(seconds: Option<u64>) -> Option<Duration> {
 
 #[cfg(test)]
 mod tests {
-    use super::Cli;
+    use super::{Cli, CliError};
     use clap::Parser;
     use freshen_lib::{
         AppSection, Config, FilterSection, PreflightCheck, PreflightSection, RunSection,
     };
     use std::collections::BTreeMap;
 
-    fn options(cli: &Cli) -> freshen_lib::RunOptions {
-        cli.run_options_with(&Config::default())
+    fn options(cli: &Cli, config: &Config) -> freshen_lib::RunOptions {
+        match cli.run_options_with(config) {
+            Ok(options) => options,
+            Err(error) => panic!("failed to build run options: {error}"),
+        }
     }
 
     fn parse(args: &[&str]) -> Cli {
@@ -389,7 +461,7 @@ mod tests {
     #[test]
     fn flags_default_to_off() {
         let cli = parse(&["freshen"]);
-        let options = options(&cli);
+        let options = options(&cli, &Config::default());
 
         assert!(!cli.list_steps);
         assert!(!cli.check);
@@ -495,7 +567,7 @@ mod tests {
             "--except",
             "python",
         ]);
-        let options = options(&cli);
+        let options = options(&cli, &Config::default());
 
         assert!(cli.list_steps);
         assert!(cli.check);
@@ -572,7 +644,7 @@ mod tests {
             "--skip",
             "docker,uv",
         ]);
-        let options = options(&cli);
+        let options = options(&cli, &Config::default());
 
         assert_eq!(options.selection().only(), ["brew", "uv", "mise"]);
         assert_eq!(options.selection().skip(), ["casks", "docker", "uv"]);
@@ -582,7 +654,7 @@ mod tests {
     fn yes_has_a_short_alias() {
         let cli = parse(&["freshen", "-y"]);
 
-        assert!(options(&cli).assume_yes());
+        assert!(options(&cli, &Config::default()).assume_yes());
     }
 
     #[test]
@@ -597,7 +669,7 @@ mod tests {
         let cli = parse(&["freshen", "--skip-network-check=false"]);
 
         assert_eq!(cli.skip_network_check, Some(false));
-        assert!(options(&cli)
+        assert!(options(&cli, &Config::default())
             .preflight()
             .is_enabled(PreflightCheck::Network));
     }
@@ -617,7 +689,8 @@ mod tests {
             ..Config::default()
         };
 
-        let options = parse(&["freshen"]).run_options_with(&config);
+        let cli = parse(&["freshen"]);
+        let options = options(&cli, &config);
 
         assert!(!options.preflight().is_enabled(PreflightCheck::Network));
         assert!(options.preflight().is_enabled(PreflightCheck::DiskSpace));
@@ -645,7 +718,8 @@ mod tests {
             ..Config::default()
         };
 
-        let options = parse(&["freshen"]).run_options_with(&config);
+        let cli = parse(&["freshen"]);
+        let options = options(&cli, &config);
 
         assert!(!options.is_step_enabled("brew-casks"));
         assert!(options.is_step_enabled("brew"));
@@ -663,7 +737,8 @@ mod tests {
 
     #[test]
     fn without_a_configuration_file_nothing_is_filtered() {
-        let options = parse(&["freshen"]).run_options_with(&Config::default());
+        let cli = parse(&["freshen"]);
+        let options = options(&cli, &Config::default());
 
         assert!(options.step_overrides().is_empty());
         assert!(options.filters().is_empty());
@@ -685,7 +760,7 @@ mod tests {
             ..Config::default()
         };
 
-        let options = parse(&[
+        let cli = parse(&[
             "freshen",
             "--skip-network-check=false",
             "--battery-threshold",
@@ -694,13 +769,90 @@ mod tests {
             "3",
             "--snapshot-retention",
             "7",
-        ])
-        .run_options_with(&config);
+        ]);
+        let options = options(&cli, &config);
 
         assert!(options.preflight().is_enabled(PreflightCheck::Network));
         assert_eq!(options.preflight().min_battery_percent(), 10);
         assert_eq!(options.jobs(), 3);
         assert_eq!(options.snapshot_retention(), 7);
+    }
+
+    #[test]
+    fn a_profile_selects_its_steps_over_the_top_level_steps() {
+        let config = Config {
+            steps: BTreeMap::from([("brew-casks".to_owned(), false)]),
+            profiles: BTreeMap::from([
+                (
+                    "work".to_owned(),
+                    BTreeMap::from([
+                        ("brew-casks".to_owned(), true),
+                        ("docker".to_owned(), false),
+                    ]),
+                ),
+                (
+                    "minimal".to_owned(),
+                    BTreeMap::from([("brew".to_owned(), false)]),
+                ),
+            ]),
+            ..Config::default()
+        };
+
+        let cli = parse(&["freshen", "--profile", "work"]);
+        let options = options(&cli, &config);
+
+        assert!(options.is_step_enabled("brew-casks"));
+        assert!(!options.is_step_enabled("docker"));
+        assert!(options.is_step_enabled("brew"));
+    }
+
+    #[test]
+    fn a_profile_can_disable_a_step_that_the_top_level_section_enabled() {
+        let config = Config {
+            steps: BTreeMap::from([("docker".to_owned(), true)]),
+            profiles: BTreeMap::from([(
+                "minimal".to_owned(),
+                BTreeMap::from([("docker".to_owned(), false)]),
+            )]),
+            ..Config::default()
+        };
+
+        let cli = parse(&["freshen", "--profile", "minimal"]);
+        let options = options(&cli, &config);
+
+        assert!(!options.is_step_enabled("docker"));
+    }
+
+    #[test]
+    fn an_unknown_profile_is_rejected_with_the_known_profiles() {
+        let config = Config {
+            profiles: BTreeMap::from([(
+                "work".to_owned(),
+                BTreeMap::from([("brew".to_owned(), false)]),
+            )]),
+            ..Config::default()
+        };
+
+        let cli = parse(&["freshen", "--profile", "nope"]);
+        let error = cli.run_options_with(&config).err();
+
+        let Some(CliError::UnknownProfile { name, known }) = error else {
+            panic!("expected an unknown profile error, got {error:?}");
+        };
+        assert_eq!(name, "nope");
+        assert_eq!(known, "work");
+    }
+
+    #[test]
+    fn an_unknown_profile_is_rejected_even_when_no_profiles_are_defined() {
+        let cli = parse(&["freshen", "--profile", "work"]);
+        let error = cli.run_options_with(&Config::default()).err();
+
+        let Some(CliError::UnknownProfile { name, known }) = error else {
+            panic!("expected an unknown profile error, got {error:?}");
+        };
+        assert_eq!(name, "work");
+        assert_eq!(known, "none");
     }
 
     #[test]
@@ -719,6 +871,7 @@ mod tests {
             "--config",
             "--only",
             "--skip",
+            "--profile",
             "--yes",
             "--force-kill",
             "--cleanup",

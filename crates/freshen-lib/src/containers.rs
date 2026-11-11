@@ -3474,6 +3474,8 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     fn ordered_ids(platform: Platform) -> Vec<StepId> {
         homebrew::register(register(Registry::new()))
@@ -4800,7 +4802,18 @@ mod tests {
         let step = DockerStep::new(runtime, None, "docker");
         let result = step.run_with_options(&options);
 
-        let calls = read_docker_calls(&log);
+        let calls = {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                let calls = read_docker_calls(&log);
+                if calls.iter().any(|call| call == "docker builder prune -f")
+                    || Instant::now() >= deadline
+                {
+                    break calls;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+        };
 
         if let Some(previous) = previous_path {
             std::env::set_var("PATH", previous);
