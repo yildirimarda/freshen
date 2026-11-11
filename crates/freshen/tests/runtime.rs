@@ -212,3 +212,32 @@ fn the_run_summary_shows_an_overridden_runtime() {
         stdout(&output)
     );
 }
+
+#[test]
+fn a_remote_docker_host_is_not_managed() {
+    let tools = StubTools::new(&["docker"]);
+
+    let output = tools
+        .command()
+        .env("DOCKER_HOST", "tcp://remote.example.com:2375")
+        .arg("--list-steps")
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    // A remote engine is never listed as the runtime freshen manages.
+    assert!(
+        !stdout(&output).contains("Container runtime:"),
+        "listing: {}",
+        stdout(&output)
+    );
+    // No command reaches the remote engine during detection either.
+    assert!(
+        !tools
+            .step_calls()
+            .iter()
+            .any(|call| call.starts_with("docker ")),
+        "calls: {:?}",
+        tools.step_calls()
+    );
+}

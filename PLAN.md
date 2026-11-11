@@ -348,7 +348,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add a report-only prune mode that shows the reclaimable space without removing anything, covered by tests
 - [x] Report build cache and volume usage with `docker system df` in the summary, covered by stub-based tests
 - [x] Add opt-in `docker builder prune` as a cleanup step that runs only with `--cleanup`, covered by stub-based tests
-- [ ] Support Docker contexts and remote engines safely (never touch a non-local context unless selected), covered by tests
+- [x] Support Docker contexts and remote engines safely (never touch a non-local context unless selected), covered by tests
 - [ ] Restart containers that were running before a runtime restart even if they were started with `docker run --restart no`, using the recorded snapshot, covered by stub-based tests Platform guard: tests that need Unix-only fixtures (executable shell-script stubs, `chmod`, `PermissionsExt`) go in a `#[cfg(unix)]` submodule that also owns every import only they use, never the shared `use` block at the top of `mod tests`; otherwise `windows-latest` fails with `unused_imports` under `-D warnings`, which does not reproduce on Linux
 - [ ] Detect and control a rootless Docker Engine (`$XDG_RUNTIME_DIR/docker.sock`, `systemctl --user restart docker`), so it is not mistaken for an unreachable system daemon, covered by tests with injected facts Platform guard: tests that need Unix-only fixtures (executable shell-script stubs, `chmod`, `PermissionsExt`) go in a `#[cfg(unix)]` submodule that also owns every import only they use, never the shared `use` block at the top of `mod tests`; otherwise `windows-latest` fails with `unused_imports` under `-D warnings`, which does not reproduce on Linux
 
