@@ -308,3 +308,64 @@ esac"#,
         "calls: {calls:?}"
     );
 }
+
+#[test]
+fn standalone_containers_are_restarted_from_the_recorded_snapshot() {
+    let tools = StubTools::new(&["brew", "docker", "osascript"]);
+    install_brew(&tools);
+    install_docker(&tools);
+
+    // No compose projects: only standalone containers, for example ones started
+    // with `docker run --restart no`. Docker Desktop does not restore those
+    // after a restart, so freshen must restart them explicitly from the
+    // snapshot it recorded before stopping the runtime.
+    let output = tools
+        .command()
+        .env("DOCKER_HOST", "unix:///Users/me/.docker/run/docker.sock")
+        .env("FRESHEN_OUTDATED_FORMULAE", "")
+        .env("FRESHEN_OUTDATED_CASKS", "docker-desktop\n")
+        .env("FRESHEN_DOCKER_STOP_STATUS", "0")
+        .env("FRESHEN_COMPOSE_JSON", "[]")
+        .env("FRESHEN_PS_OUTPUT", "def\tlonely\t\t\nghi\tlonely2\t\t\n")
+        .args(["--only", ALL_STEPS, "--cleanup"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    let stop = index_of(&calls, "docker desktop stop");
+    let upgrade = index_of(&calls, "brew upgrade --cask");
+    let start = index_of(&calls, "docker desktop start");
+
+    assert!(stop < upgrade, "calls: {calls:?}");
+    assert!(upgrade < start, "calls: {calls:?}");
+    // The standalone containers were snapshotted before the stop and are
+    // restarted from the snapshot afterwards, even though `--restart no`
+    // containers are not auto-restarted by Docker Desktop.
+    assert!(
+        index_of(&calls, "docker stop def") < stop,
+        "calls: {calls:?}"
+    );
+    assert!(
+        index_of(&calls, "docker stop ghi") < stop,
+        "calls: {calls:?}"
+    );
+    assert!(
+        index_of(&calls, "docker start def") > start,
+        "calls: {calls:?}"
+    );
+    assert!(
+        index_of(&calls, "docker start ghi") > start,
+        "calls: {calls:?}"
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.starts_with("docker compose -p")),
+        "calls: {calls:?}"
+    );
+    assert!(
+        calls.contains(&"docker image prune -f".to_owned()),
+        "calls: {calls:?}"
+    );
+}
