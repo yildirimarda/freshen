@@ -3004,6 +3004,15 @@ impl Step for DockerStep {
                 failures.push(error);
             }
 
+            let builder_spec = CommandSpec::new(self.container_cli)
+                .args(["builder", "prune", "-f"])
+                .neutral_locale();
+            if let Err(error) =
+                cleanup::run(DOCKER, "Docker: prune build cache", builder_spec, options)
+            {
+                failures.push(error);
+            }
+
             // Report build cache and volume usage; failures here are
             // informational only and must not fail the step.
             if let Ok(output) = CommandSpec::new(self.container_cli)
@@ -3317,9 +3326,9 @@ mod tests {
         selected_projects, ActiveContainerRuntime, ColimaRuntime, ComposeCommand,
         ComposeCommandProbe, ComposeProject, ContainerRuntime, ContainerRuntimeKind,
         ContainerRuntimeProbe, ContainerRuntimeSource, DockerDesktopRuntime, DockerEngineProbe,
-        ImagePin, K3dRuntime, KindRuntime, MinikubeProfile, MinikubeRuntime, NativeDockerRuntime,
-        OrbStackRuntime, PodmanRuntime, RancherDesktopRuntime, StandaloneContainer, COLIMA_START,
-        COLIMA_STOP, COMPOSE_SKIP_LABEL, DOCKER, PS_FORMAT,
+        DockerStep, ImagePin, K3dRuntime, KindRuntime, MinikubeProfile, MinikubeRuntime,
+        NativeDockerRuntime, OrbStackRuntime, PodmanRuntime, RancherDesktopRuntime,
+        StandaloneContainer, COLIMA_START, COLIMA_STOP, COMPOSE_SKIP_LABEL, DOCKER, PS_FORMAT,
     };
     #[cfg(windows)]
     use super::{DockerDesktopWindowsRuntime, PodmanDesktopWindowsRuntime};
@@ -3327,14 +3336,15 @@ mod tests {
     use crate::options::RunOptions;
     use crate::platform::Platform;
     use crate::policy::{ItemFilters, NameFilter};
-    use crate::process::ProcessError;
+    use crate::process::{ProcessError, PATH_GUARD};
     use crate::registry::Registry;
-    use crate::step::{Detection, StepId};
+    use crate::step::{Detection, Step, StepId};
     #[cfg(windows)]
     use crate::wsl::WSL;
     use std::collections::{HashMap, HashSet};
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
 
     fn ordered_ids(platform: Platform) -> Vec<StepId> {
@@ -4508,6 +4518,156 @@ mod tests {
             .collect();
 
         assert_eq!(names, ["Fake stop", "Fake start", "Docker images"]);
+    }
+
+    /// Writes a stub `docker` that logs every invocation to
+    /// `$FRESHEN_DOCKER_LOG` and always succeeds, returning the stub directory
+    /// and the log path.
+    fn stub_docker_logging_calls() -> (PathBuf, PathBuf) {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "freshen-docker-calls-{pid}-{id}",
+            pid = std::process::id(),
+            id = id
+        ));
+        std::fs::create_dir_all(&dir).unwrap_or_else(|error| {
+            panic!("failed to create stub directory {}: {error}", dir.display())
+        });
+        let log = dir.join("calls.log");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let script = "#!/bin/sh\n\
+                 {\n\
+                   printf '%s' docker\n\
+                   for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
+                   printf '\\n'\n\
+                 } >> \"$FRESHEN_DOCKER_LOG\"\n\
+                 exit 0\n";
+            let stub = dir.join("docker");
+            std::fs::write(&stub, script)
+                .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+                .unwrap_or_else(|error| panic!("failed to make stub executable: {error}"));
+        }
+
+        #[cfg(windows)]
+        {
+            let script = "@echo off\r\n>>\"%FRESHEN_DOCKER_LOG%\" echo docker %*\r\nexit /b 0\r\n";
+            let stub = dir.join("docker.cmd");
+            std::fs::write(&stub, script)
+                .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
+        }
+
+        (dir, log)
+    }
+
+    fn read_docker_calls(log: &Path) -> Vec<String> {
+        std::fs::read_to_string(log)
+            .unwrap_or_default()
+            .lines()
+            .map(|line| line.trim().to_owned())
+            .filter(|line| !line.is_empty())
+            .collect()
+    }
+
+    #[test]
+    fn docker_builder_prune_runs_only_with_cleanup() {
+        let (dir, log) = stub_docker_logging_calls();
+        let _guard = PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous_path = std::env::var("PATH").ok();
+        let previous_log = std::env::var("FRESHEN_DOCKER_LOG").ok();
+        std::env::set_var("PATH", &dir);
+        std::env::set_var("FRESHEN_DOCKER_LOG", &log);
+
+        let options = RunOptions::new().with_cleanup(true);
+        let runtime: Arc<dyn ContainerRuntime> = Arc::new(FakeRuntime);
+        let step = DockerStep::new(runtime, None, "docker");
+        let result = step.run_with_options(&options);
+
+        let calls = read_docker_calls(&log);
+
+        if let Some(previous) = previous_path {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(previous) = previous_log {
+            std::env::set_var("FRESHEN_DOCKER_LOG", previous);
+        } else {
+            std::env::remove_var("FRESHEN_DOCKER_LOG");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(result.is_ok(), "docker run with cleanup should succeed");
+
+        let image_idx = calls
+            .iter()
+            .position(|call| call == "docker image prune -f")
+            .unwrap_or_else(|| {
+                panic!("docker image prune -f should run with --cleanup: {calls:?}")
+            });
+        let builder_idx = calls
+            .iter()
+            .position(|call| call == "docker builder prune -f")
+            .unwrap_or_else(|| {
+                panic!("docker builder prune -f should run with --cleanup: {calls:?}")
+            });
+        assert!(
+            image_idx < builder_idx,
+            "builder prune should run after image prune: {calls:?}"
+        );
+        assert!(
+            calls.iter().any(|call| call == "docker system df"),
+            "docker system df should run: {calls:?}"
+        );
+    }
+
+    #[test]
+    fn docker_builder_prune_is_skipped_without_cleanup() {
+        let (dir, log) = stub_docker_logging_calls();
+        let _guard = PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous_path = std::env::var("PATH").ok();
+        let previous_log = std::env::var("FRESHEN_DOCKER_LOG").ok();
+        std::env::set_var("PATH", &dir);
+        std::env::set_var("FRESHEN_DOCKER_LOG", &log);
+
+        let options = RunOptions::new();
+        let runtime: Arc<dyn ContainerRuntime> = Arc::new(FakeRuntime);
+        let step = DockerStep::new(runtime, None, "docker");
+        let result = step.run_with_options(&options);
+
+        let calls = read_docker_calls(&log);
+
+        if let Some(previous) = previous_path {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(previous) = previous_log {
+            std::env::set_var("FRESHEN_DOCKER_LOG", previous);
+        } else {
+            std::env::remove_var("FRESHEN_DOCKER_LOG");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(result.is_ok(), "docker run without cleanup should succeed");
+
+        assert!(
+            !calls.iter().any(|call| call == "docker image prune -f"),
+            "docker image prune -f should be skipped without --cleanup: {calls:?}"
+        );
+        assert!(
+            !calls.iter().any(|call| call == "docker builder prune -f"),
+            "docker builder prune -f should be skipped without --cleanup: {calls:?}"
+        );
     }
 
     #[derive(Default)]

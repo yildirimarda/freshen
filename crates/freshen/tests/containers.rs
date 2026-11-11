@@ -17,9 +17,9 @@ use serde_json::Value;
 
 use support::{
     brew_autoremove, brew_cask_query, brew_cleanup, brew_formula_query, brew_formula_upgrade,
-    brew_update, colima_start, colima_stop, db, docker_image_prune, docker_start_containers,
-    docker_stop_containers, docker_version, project_ps, web, StubTools, ALL_STEPS, COMPOSE_JSON,
-    PS_CALL, PS_OUTPUT,
+    brew_update, colima_start, colima_stop, db, docker_builder_prune, docker_image_prune,
+    docker_start_containers, docker_stop_containers, docker_version, project_ps, web, StubTools,
+    ALL_STEPS, COMPOSE_JSON, PS_CALL, PS_OUTPUT,
 };
 
 fn stdout(output: &Output) -> String {
@@ -234,6 +234,7 @@ fn stops_colima_and_restores_containers_around_the_formula_upgrade() {
     expected.push(project_ps("db"));
     expected.push(inspect_def.to_string());
     expected.extend(docker_image_prune().iter().map(|&s| s.to_string()));
+    expected.extend(docker_builder_prune().iter().map(|&s| s.to_string()));
     expected.push("docker system df".to_string());
     assert_eq!(tools.step_calls(), expected);
 
@@ -259,6 +260,7 @@ fn stops_colima_and_restores_containers_around_the_formula_upgrade() {
         text.contains("Docker: prune dangling images"),
         "output: {text}"
     );
+    assert!(text.contains("Docker: prune build cache"), "output: {text}");
 }
 
 #[test]
@@ -493,6 +495,7 @@ fn up_to_date_colima_is_never_stopped() {
     expected.push("colima status".to_string());
     expected.push("docker compose ls --format json".to_string());
     expected.extend(docker_image_prune().iter().map(|&s| s.to_string()));
+    expected.extend(docker_builder_prune().iter().map(|&s| s.to_string()));
     expected.push("docker system df".to_string());
     assert_eq!(tools.step_calls(), expected);
     assert!(

@@ -110,6 +110,10 @@ pub fn docker_image_prune() -> &'static [&'static str] {
     &["docker image prune -f"]
 }
 
+pub fn docker_builder_prune() -> &'static [&'static str] {
+    &["docker builder prune -f"]
+}
+
 pub fn limactl_stop(name: &str) -> String {
     format!("limactl stop {name}")
 }
