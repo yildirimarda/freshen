@@ -232,3 +232,139 @@ esac"#,
     );
     assert!(!text.contains("MUTATION RAN"), "output: {text}");
 }
+
+fn run_report_only(tools: &StubTools) -> Output {
+    tools
+        .command()
+        .args(["--only", "brew-cleanup", "--prune-report"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
+}
+
+#[test]
+fn report_only_prune_shows_reclaimable_space_without_removing() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_script(
+        "brew",
+        r#"case "$*" in
+  "cleanup --dry-run --prune=all")
+    printf 'Would remove: /tmp/foo (2.5MB)\n'
+    printf '==> This operation would free approximately 2.5MB of disk space.\n'
+    ;;
+  "cleanup --prune=all")
+    printf 'MUTATION RAN\n'
+    ;;
+esac"#,
+    );
+
+    let output = run_report_only(&tools);
+
+    assert!(
+        output.status.success(),
+        "stdout: {} stderr: {}",
+        stdout(&output),
+        stderr(&output)
+    );
+
+    let calls = tools.step_calls();
+    assert!(
+        calls
+            .iter()
+            .any(|call| call == "brew cleanup --dry-run --prune=all"),
+        "dry-run listing did not run: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call == "brew cleanup --prune=all"),
+        "mutating cleanup ran in report-only mode: {calls:?}"
+    );
+
+    let text = stdout(&output);
+    assert!(
+        text.contains("Homebrew cleanup: would reclaim 2.5MB"),
+        "output: {text}"
+    );
+}
+
+#[test]
+fn report_only_prune_reports_reclaimed_space_in_json() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_script(
+        "brew",
+        r#"case "$*" in
+  "cleanup --dry-run --prune=all")
+    printf 'Would remove: /tmp/foo (2.5MB)\n'
+    printf '==> This operation would free approximately 2.5MB of disk space.\n'
+    ;;
+  "cleanup --prune=all")
+    printf 'MUTATION RAN\n'
+    ;;
+esac"#,
+    );
+
+    let output = tools
+        .command()
+        .args(["--only", "brew-cleanup", "--prune-report", "--json"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(
+        output.status.success(),
+        "stdout: {} stderr: {}",
+        stdout(&output),
+        stderr(&output)
+    );
+
+    let calls = tools.step_calls();
+    assert!(
+        !calls.iter().any(|call| call == "brew cleanup --prune=all"),
+        "mutating cleanup ran in report-only mode: {calls:?}"
+    );
+
+    let text = stdout(&output);
+    let report: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(report) => report,
+        Err(error) => panic!("invalid JSON report: {error}: {text}"),
+    };
+
+    assert_eq!(report["steps"][0]["id"], "brew-cleanup");
+    assert_eq!(
+        report["steps"][0]["cleanup"][0]["removed"][0],
+        "Would remove: /tmp/foo (2.5MB)"
+    );
+    assert_eq!(report["steps"][0]["cleanup"][0]["reclaimed"], "2.5MB");
+}
+
+#[test]
+fn report_only_prune_does_not_require_cleanup_flag() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_script(
+        "brew",
+        r#"case "$*" in
+  "cleanup --dry-run --prune=all")
+    printf 'Would remove: /tmp/foo (2.5MB)\n'
+    ;;
+  "cleanup --prune=all")
+    printf 'MUTATION RAN\n'
+    ;;
+esac"#,
+    );
+
+    let output = run_report_only(&tools);
+
+    assert!(
+        output.status.success(),
+        "stdout: {} stderr: {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    let calls = tools.step_calls();
+    assert!(
+        !calls.iter().any(|call| call == "brew cleanup --prune=all"),
+        "mutating cleanup ran without --cleanup: {calls:?}"
+    );
+    assert!(
+        !stdout(&output).contains("skipped destructive cleanup"),
+        "output: {}",
+        stdout(&output)
+    );
+}

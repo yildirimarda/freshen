@@ -84,6 +84,12 @@ pub struct Cli {
     #[arg(long, alias = "allow-cleanup", alias = "destructive-cleanup")]
     pub cleanup: bool,
 
+    /// Report the reclaimable space from each cleanup step's dry-run listing
+    /// without removing anything. Implies a read-only prune: no mutating
+    /// cleanup command is ever run.
+    #[arg(long)]
+    pub prune_report: bool,
+
     /// Install the macOS system updates instead of only reporting them
     /// (macOS only).
     #[arg(long)]
@@ -301,6 +307,7 @@ impl Cli {
             .with_assume_yes(self.yes)
             .with_force_kill(self.force_kill)
             .with_cleanup(self.cleanup)
+            .with_prune_report(self.prune_report)
             .with_install_macos_updates(self.install_macos_updates)
             .with_install_firmware_updates(self.install_firmware_updates)
             .with_install_wsl_updates(self.install_wsl_updates)

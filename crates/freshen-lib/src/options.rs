@@ -239,6 +239,7 @@ pub struct RunOptions {
     bump: bool,
     docker_bump: bool,
     prune_unused_older_than: Option<usize>,
+    prune_report: bool,
     go_update: bool,
     install_aws_cli_updates: bool,
 }
@@ -505,6 +506,14 @@ impl RunOptions {
         self
     }
 
+    /// Sets `--prune-report`: report the reclaimable space from each cleanup
+    /// step's dry-run listing without removing anything.
+    #[must_use]
+    pub fn with_prune_report(mut self, prune_report: bool) -> Self {
+        self.prune_report = prune_report;
+        self
+    }
+
     /// Sets `--reinstall-go`: reinstall outdated `go install` binaries instead
     /// of only reporting them. Without the flag the Go step is check-only and
     /// never changes the pinned Go toolchain.
@@ -756,6 +765,13 @@ impl RunOptions {
     #[must_use]
     pub fn prune_unused_older_than(&self) -> Option<usize> {
         self.prune_unused_older_than
+    }
+
+    /// Returns `true` when `--prune-report` asks for a report-only prune that
+    /// shows the reclaimable space without removing anything.
+    #[must_use]
+    pub fn prune_report(&self) -> bool {
+        self.prune_report
     }
 
     /// Returns `true` when `--reinstall-go` asks to reinstall outdated `go
