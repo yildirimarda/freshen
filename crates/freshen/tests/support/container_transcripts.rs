@@ -133,3 +133,15 @@ pub fn k3d_cluster_stop(name: &str) -> String {
 pub fn k3d_cluster_start(name: &str) -> String {
     format!("k3d cluster start {name}")
 }
+
+pub fn kind_get_clusters() -> &'static [&'static str] {
+    &["kind get clusters"]
+}
+
+pub fn kind_cluster_stop(name: &str) -> String {
+    format!("kind cluster stop {name}")
+}
+
+pub fn kind_cluster_start(name: &str) -> String {
+    format!("kind cluster start {name}")
+}
