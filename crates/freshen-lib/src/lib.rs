@@ -30,6 +30,7 @@ pub(crate) mod deadline;
 #[cfg(target_os = "linux")]
 pub mod desktop_apps;
 pub mod dnf;
+pub mod docker_df;
 pub mod doctor_warnings;
 pub mod dotnet_tools;
 pub mod elevation;

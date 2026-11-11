@@ -3003,6 +3003,16 @@ impl Step for DockerStep {
             {
                 failures.push(error);
             }
+
+            // Report build cache and volume usage; failures here are
+            // informational only and must not fail the step.
+            if let Ok(output) = CommandSpec::new(self.container_cli)
+                .args(["system", "df"])
+                .neutral_locale()
+                .run()
+            {
+                crate::docker_df::record(crate::docker_df::parse(output.stdout()));
+            }
         }
 
         finish(failures)
