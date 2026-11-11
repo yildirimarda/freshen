@@ -4672,8 +4672,10 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let previous_path = std::env::var("PATH").ok();
         let previous_log = std::env::var("FRESHEN_DOCKER_LOG").ok();
+        let previous_host = std::env::var("DOCKER_HOST").ok();
         std::env::set_var("PATH", &dir);
         std::env::set_var("FRESHEN_DOCKER_LOG", &log);
+        std::env::remove_var("DOCKER_HOST");
 
         let options = RunOptions::new().with_cleanup(true);
         let runtime: Arc<dyn ContainerRuntime> = Arc::new(FakeRuntime);
@@ -4691,6 +4693,11 @@ mod tests {
             std::env::set_var("FRESHEN_DOCKER_LOG", previous);
         } else {
             std::env::remove_var("FRESHEN_DOCKER_LOG");
+        }
+        if let Some(previous) = previous_host {
+            std::env::set_var("DOCKER_HOST", previous);
+        } else {
+            std::env::remove_var("DOCKER_HOST");
         }
         let _ = std::fs::remove_dir_all(&dir);
 
@@ -4726,8 +4733,10 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let previous_path = std::env::var("PATH").ok();
         let previous_log = std::env::var("FRESHEN_DOCKER_LOG").ok();
+        let previous_host = std::env::var("DOCKER_HOST").ok();
         std::env::set_var("PATH", &dir);
         std::env::set_var("FRESHEN_DOCKER_LOG", &log);
+        std::env::remove_var("DOCKER_HOST");
 
         let options = RunOptions::new();
         let runtime: Arc<dyn ContainerRuntime> = Arc::new(FakeRuntime);
@@ -4745,6 +4754,11 @@ mod tests {
             std::env::set_var("FRESHEN_DOCKER_LOG", previous);
         } else {
             std::env::remove_var("FRESHEN_DOCKER_LOG");
+        }
+        if let Some(previous) = previous_host {
+            std::env::set_var("DOCKER_HOST", previous);
+        } else {
+            std::env::remove_var("DOCKER_HOST");
         }
         let _ = std::fs::remove_dir_all(&dir);
 
