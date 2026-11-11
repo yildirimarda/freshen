@@ -95,11 +95,13 @@ pub enum ContainerRuntimeKind {
     K3d,
     /// kind, running Kubernetes clusters inside Docker containers.
     Kind,
+    /// minikube, running Kubernetes clusters inside virtual machines.
+    Minikube,
 }
 
 impl ContainerRuntimeKind {
     /// Every known runtime.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Colima,
         Self::OrbStack,
         Self::DockerDesktop,
@@ -109,6 +111,7 @@ impl ContainerRuntimeKind {
         Self::NativeDocker,
         Self::K3d,
         Self::Kind,
+        Self::Minikube,
     ];
 
     /// Canonical name accepted by `--container-runtime` and used in reports.
@@ -124,6 +127,7 @@ impl ContainerRuntimeKind {
             Self::NativeDocker => "docker",
             Self::K3d => "k3d",
             Self::Kind => "kind",
+            Self::Minikube => "minikube",
         }
     }
 
@@ -140,6 +144,7 @@ impl ContainerRuntimeKind {
             Self::NativeDocker => "Docker Engine",
             Self::K3d => "K3d",
             Self::Kind => "Kind",
+            Self::Minikube => "Minikube",
         }
     }
 }
@@ -165,6 +170,7 @@ impl FromStr for ContainerRuntimeKind {
             "docker" | "native" | "native-docker" | "docker-engine" => Ok(Self::NativeDocker),
             "k3d" => Ok(Self::K3d),
             "kind" => Ok(Self::Kind),
+            "minikube" => Ok(Self::Minikube),
             _ => Err(format!(
                 "unknown container runtime `{value}` (known: {})",
                 Self::ALL
@@ -1792,6 +1798,173 @@ fn parse_kind_clusters(output: &str) -> Vec<KindCluster> {
         .collect()
 }
 
+/// The minikube runtime on macOS and Linux.
+///
+/// minikube runs Kubernetes clusters inside virtual machines managed through
+/// profiles. Upgrading the `minikube` formula can restart those VMs, so the
+/// formula triggers a stop/start cycle: the running profiles are listed with
+/// `minikube profile list -o json`, stopped with `minikube stop -p <name>`
+/// before the `minikube` formula is upgraded, and started again with
+/// `minikube start -p <name>` afterwards. Profiles that were already stopped
+/// are left alone.
+#[derive(Debug, Default, Clone)]
+pub struct MinikubeRuntime {
+    state: Arc<Mutex<MinikubeState>>,
+}
+
+#[derive(Debug, Default)]
+struct MinikubeState {
+    profiles: Vec<MinikubeProfile>,
+}
+
+/// A minikube profile and whether it was running when it was last observed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MinikubeProfile {
+    name: String,
+    running: bool,
+}
+
+impl MinikubeRuntime {
+    /// Creates the minikube runtime.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl ContainerRuntime for MinikubeRuntime {
+    fn name(&self) -> &'static str {
+        "minikube"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Minikube"
+    }
+
+    fn command(&self) -> &'static str {
+        "minikube"
+    }
+
+    fn detection_commands(&self) -> &'static [&'static str] {
+        &["minikube"]
+    }
+
+    fn detect(&self) -> Detection {
+        if command_exists("minikube") {
+            Detection::Installed
+        } else {
+            Detection::NotInstalled
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        let Ok(output) = CommandSpec::new("minikube")
+            .args(["profile", "list", "-o", "json"])
+            .neutral_locale()
+            .run()
+        else {
+            return false;
+        };
+
+        let profiles = parse_minikube_profiles(output.stdout());
+        {
+            let mut state = lock(&self.state);
+            state.profiles = profiles;
+        }
+        self.observed_profiles()
+            .iter()
+            .any(|profile| profile.running)
+    }
+
+    fn stop(&self) -> Result<(), ProcessError> {
+        let profiles = self.observed_profiles();
+        let mut failures = Vec::new();
+
+        for profile in &profiles {
+            if profile.running {
+                human!("minikube stop: {}", profile.name);
+                if let Err(error) = CommandSpec::new("minikube")
+                    .args(["stop", "-p", &profile.name])
+                    .run()
+                {
+                    failures.push(error);
+                }
+            }
+        }
+
+        first_process_failure(failures)
+    }
+
+    fn start(&self) -> Result<(), ProcessError> {
+        let profiles = self.observed_profiles();
+        let mut failures = Vec::new();
+
+        for profile in &profiles {
+            if profile.running {
+                human!("minikube start: {}", profile.name);
+                if let Err(error) = CommandSpec::new("minikube")
+                    .args(["start", "-p", &profile.name])
+                    .run()
+                {
+                    failures.push(error);
+                }
+            }
+        }
+
+        first_process_failure(failures)
+    }
+
+    fn restart_formulae(&self) -> &'static [&'static str] {
+        &["minikube"]
+    }
+
+    fn restart_casks(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn platforms(&self) -> &'static [Platform] {
+        &CONTAINER_PLATFORMS
+    }
+}
+
+impl MinikubeRuntime {
+    /// The profiles observed by the last `is_running` call, or empty when the
+    /// runtime has not been observed yet.
+    fn observed_profiles(&self) -> Vec<MinikubeProfile> {
+        let state = lock(&self.state);
+        if state.profiles.is_empty() {
+            return Vec::new();
+        }
+        state.profiles.clone()
+    }
+}
+
+/// Parses the JSON array printed by `minikube profile list -o json`.
+///
+/// Each entry carries a `name` and a `status`; a profile counts as running
+/// when its `status` is `Running`. Malformed output yields no profiles.
+fn parse_minikube_profiles(output: &str) -> Vec<MinikubeProfile> {
+    let Ok(Value::Array(values)) = serde_json::from_str::<Value>(output.trim()) else {
+        return Vec::new();
+    };
+
+    values
+        .iter()
+        .filter_map(|value| {
+            let name = value.get("name")?.as_str()?;
+            let running = value
+                .get("status")
+                .and_then(Value::as_str)
+                .map(|status| status.eq_ignore_ascii_case("running"))
+                .unwrap_or(false);
+            Some(MinikubeProfile {
+                name: name.to_owned(),
+                running,
+            })
+        })
+        .collect()
+}
+
 /// Docker ships Compose v2 as the `docker compose` plugin, older installations
 /// have the standalone `docker-compose` binary, and Podman provides
 /// `podman compose`. The detected command is used for every compose action so
@@ -2169,8 +2342,8 @@ pub fn register_with_compose(
 ///
 /// A runtime that has no implementation yet keeps the Colima/lima steps, so
 /// detection never removes container handling from a run. Colima/lima,
-/// OrbStack, Docker Desktop, Rancher Desktop, Podman and native Docker Engine
-/// have their own implementations.
+/// OrbStack, Docker Desktop, Rancher Desktop, Podman, native Docker Engine,
+/// k3d, kind and minikube have their own implementations.
 #[must_use]
 pub fn register_for(registry: Registry, kind: Option<ContainerRuntimeKind>) -> Registry {
     match kind {
@@ -2206,6 +2379,9 @@ pub fn register_for(registry: Registry, kind: Option<ContainerRuntimeKind>) -> R
         }
         Some(ContainerRuntimeKind::Kind) => {
             register_with_compose(registry, KindRuntime::new(), None, "docker")
+        }
+        Some(ContainerRuntimeKind::Minikube) => {
+            register_with_compose(registry, MinikubeRuntime::new(), None, "docker")
         }
         _ => register(registry),
     }
@@ -3125,15 +3301,15 @@ fn command_exists(program: &str) -> bool {
 mod tests {
     use super::{
         detect_active_runtime, detect_compose_command, image_pin, live_restore_warning,
-        parse_compose_projects, parse_live_restore_enabled,
+        parse_compose_projects, parse_live_restore_enabled, parse_minikube_profiles,
         parse_running_standalone_lima_instances, parse_service_images, parse_standalone_containers,
         podman_machine_running, project_services, register, register_for, register_with_runtime,
         selected_projects, ActiveContainerRuntime, ColimaRuntime, ComposeCommand,
         ComposeCommandProbe, ComposeProject, ContainerRuntime, ContainerRuntimeKind,
         ContainerRuntimeProbe, ContainerRuntimeSource, DockerDesktopRuntime, DockerEngineProbe,
-        ImagePin, K3dRuntime, KindRuntime, NativeDockerRuntime, OrbStackRuntime, PodmanRuntime,
-        RancherDesktopRuntime, StandaloneContainer, COLIMA_START, COLIMA_STOP, COMPOSE_SKIP_LABEL,
-        DOCKER, PS_FORMAT,
+        ImagePin, K3dRuntime, KindRuntime, MinikubeProfile, MinikubeRuntime, NativeDockerRuntime,
+        OrbStackRuntime, PodmanRuntime, RancherDesktopRuntime, StandaloneContainer, COLIMA_START,
+        COLIMA_STOP, COMPOSE_SKIP_LABEL, DOCKER, PS_FORMAT,
     };
     #[cfg(windows)]
     use super::{DockerDesktopWindowsRuntime, PodmanDesktopWindowsRuntime};
@@ -3939,6 +4115,78 @@ mod tests {
                 "docker",
             ]
         );
+    }
+
+    #[test]
+    fn minikube_runtime_declares_its_formula_as_the_restart_trigger() {
+        let runtime = MinikubeRuntime::new();
+
+        assert_eq!(runtime.name(), "minikube");
+        assert_eq!(runtime.display_name(), "Minikube");
+        assert_eq!(runtime.command(), "minikube");
+        assert_eq!(runtime.detection_commands(), &["minikube"]);
+        assert_eq!(runtime.restart_formulae(), ["minikube"]);
+        assert!(runtime.restart_casks().is_empty());
+        assert!(runtime.triggers_restart("minikube"));
+        assert!(!runtime.triggers_restart("minikube-profile"));
+        assert!(!runtime.triggers_restart("docker"));
+        assert!(!runtime.triggers_restart("colima"));
+        assert_eq!(runtime.platforms(), super::CONTAINER_PLATFORMS);
+    }
+
+    #[test]
+    fn minikube_stops_before_formulae_and_starts_after_them() {
+        let registry = homebrew::register(register_for(
+            Registry::new(),
+            Some(ContainerRuntimeKind::Minikube),
+        ));
+        let ordered: Vec<StepId> = registry
+            .ordered_for(Platform::Macos)
+            .unwrap_or_else(|error| panic!("registry order failed: {error}"))
+            .iter()
+            .map(|step| step.id())
+            .collect();
+
+        assert_eq!(
+            ordered,
+            [
+                "macos-updates",
+                "brew",
+                "colima-stop",
+                "brew-formulae",
+                "colima-start",
+                "brew-services",
+                "brew-casks",
+                "brew-autoremove",
+                "brew-cleanup",
+                "brew-doctor",
+                "brew-bundle-cleanup",
+                "brew-reopen",
+                "docker",
+            ]
+        );
+    }
+
+    #[test]
+    fn minikube_stops_and_starts_only_the_running_profiles() {
+        assert_eq!(
+            parse_minikube_profiles(
+                r#"[{"name":"minikube","status":"Running"},{"name":"work","status":"Stopped"}]"#
+            ),
+            [
+                MinikubeProfile {
+                    name: "minikube".to_owned(),
+                    running: true,
+                },
+                MinikubeProfile {
+                    name: "work".to_owned(),
+                    running: false,
+                },
+            ]
+        );
+        assert_eq!(parse_minikube_profiles("[]"), []);
+        assert_eq!(parse_minikube_profiles("not json"), []);
+        assert_eq!(parse_minikube_profiles(""), []);
     }
 
     #[test]
