@@ -4632,9 +4632,7 @@ mod tests {
 
             let script = "#!/bin/sh\n\
                  {\n\
-                   printf '%s' docker\n\
-                   for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
-                   printf '\\n'\n\
+                   printf 'docker %s\\n' \"$*\"\n\
                  } >> \"$FRESHEN_DOCKER_LOG\"\n\
                  exit 0\n";
             let stub = dir.join("docker");
