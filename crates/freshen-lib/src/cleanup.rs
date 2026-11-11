@@ -118,6 +118,9 @@ pub fn run_guarded(
     spec: CommandSpec,
     options: &RunOptions,
 ) -> Result<Option<CleanupReport>, StepError> {
+    if options.prune_report() {
+        return report_only(step, label, listing);
+    }
     if !options.cleanup_enabled() {
         return skipped(label);
     }
@@ -131,6 +134,46 @@ pub fn run_guarded(
     }
 
     run_enabled(step, label, spec)
+}
+
+/// Runs a cleanup step's dry-run listing and reports what would be reclaimed,
+/// without ever running the mutating cleanup command.
+///
+/// This is the report-only prune mode: it shows the reclaimable space and the
+/// items that would be removed, but nothing is deleted. It does not require
+/// [`ENABLE_FLAG`] because it never changes anything.
+fn report_only(
+    step: StepId,
+    label: &str,
+    listing: CommandSpec,
+) -> Result<Option<CleanupReport>, StepError> {
+    let output = listing
+        .run()
+        .map_err(|error| StepError::run_from_process(step, &error))?;
+
+    let mut text = String::new();
+    text.push_str(output.stdout());
+    text.push('\n');
+    text.push_str(output.stderr());
+
+    let reclaimed = parse_reclaimed_space(&text);
+
+    let removed: Vec<String> = output
+        .stdout()
+        .lines()
+        .filter(|line| listing_line_reports_removal(line))
+        .map(|line| line.trim().to_owned())
+        .collect();
+
+    match &reclaimed {
+        Some(space) => human!("{label}: would reclaim {space}"),
+        None => human!("{label}: reclaimed space: not reported by the tool"),
+    }
+
+    let report = CleanupReport { removed, reclaimed };
+    record(&report);
+
+    Ok(Some(report))
 }
 
 fn skipped(label: &str) -> Result<Option<CleanupReport>, StepError> {
@@ -177,12 +220,16 @@ fn run_enabled(
 /// lines that describe removals. Anything else (including an empty listing) is
 /// treated as nothing to remove, so a warning cannot trigger a mutation.
 fn listing_reports_removals(stdout: &str) -> bool {
-    stdout.lines().any(|line| {
-        let line = line.trim();
-        line.contains("Would autoremove")
-            || line.contains("Would remove")
-            || line.contains("Would prune")
-    })
+    stdout.lines().any(listing_line_reports_removal)
+}
+
+/// Returns `true` when a single dry-run cleanup line reports something that
+/// would be removed, e.g. `Would remove: /tmp/foo (2.5MB)`.
+fn listing_line_reports_removal(line: &str) -> bool {
+    let lower = line.trim().to_ascii_lowercase();
+    lower.contains("would autoremove")
+        || lower.contains("would remove")
+        || lower.contains("would prune")
 }
 
 /// Extracts the reclaimed space from a cleanup command's output.
@@ -217,6 +264,15 @@ pub fn parse_reclaimed_space(output: &str) -> Option<String> {
         }
 
         if lower.contains("removed ") {
+            if let Some(size) = parenthesized_size(line) {
+                return Some(size);
+            }
+        }
+
+        // Dry-run listings report each removal with its size in parentheses,
+        // e.g. `Would remove: /tmp/foo (2.5MB)`. Report the reclaimable space
+        // so the report-only prune mode can show it.
+        if listing_line_reports_removal(&lower) {
             if let Some(size) = parenthesized_size(line) {
                 return Some(size);
             }
@@ -311,8 +367,14 @@ mod tests {
         assert!(listing_reports_removals(
             "==> Would autoremove 1 unneeded formula:\nold-dependency\n"
         ));
-        assert!(listing_reports_removals("Would remove: /tmp/old (1.2MB)\n"));
+        assert!(listing_reports_removals("Would remove: /tmp/foo (2.5MB)\n"));
         assert!(listing_reports_removals("Would prune 2 files from: /tmp\n"));
+    }
+
+    #[test]
+    fn parses_dry_run_reclaimed_space() {
+        let output = "Would remove: /tmp/foo (2.5MB)\nWould remove: /tmp/bar (1.0MB)\n";
+        assert_eq!(parse_reclaimed_space(output).as_deref(), Some("1.0MB"));
     }
 
     #[test]
