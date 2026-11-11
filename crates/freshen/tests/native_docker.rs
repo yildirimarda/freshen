@@ -267,6 +267,50 @@ fn apt_upgrading_docker_io_stops_and_restarts_docker_engine() {
 }
 
 #[test]
+fn apt_upgrading_rootless_docker_uses_user_systemd() {
+    let tools = StubTools::new(&["apt-get", "docker", "systemctl"]);
+    install_apt_docker_upgrade(&tools);
+    install_docker(&tools);
+    install_systemctl(&tools);
+
+    // `$XDG_RUNTIME_DIR/docker.sock` marks the engine as rootless, so it is
+    // controlled through `systemctl --user` instead of the system daemon.
+    std::fs::File::create(tools.stub_dir().join("docker.sock"))
+        .unwrap_or_else(|error| panic!("failed to create rootless socket: {error}"));
+
+    let output = tools
+        .command()
+        .env("FRESHEN_LIVE_RESTORE", "false")
+        .env("XDG_RUNTIME_DIR", tools.stub_dir())
+        .args([
+            "--container-runtime",
+            "docker",
+            "--only",
+            "apt",
+            "--cleanup",
+        ])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    let stop = index_of(&calls, "systemctl --user stop docker");
+    let upgrade = index_of(&calls, "apt-get upgrade -y");
+    let restart = index_of(&calls, "systemctl --user restart docker");
+
+    assert!(stop < upgrade, "calls: {calls:?}");
+    assert!(upgrade < restart, "calls: {calls:?}");
+
+    let text = stdout(&output);
+    assert!(
+        text.contains(
+            "warning: Docker live-restore is off; restarting Docker will stop running containers."
+        ),
+        "output: {text}"
+    );
+}
+
+#[test]
 fn apt_not_upgrading_docker_does_not_stop_docker_engine() {
     let tools = StubTools::new(&["apt-get", "docker", "systemctl"]);
     install_apt_no_docker_upgrade(&tools);

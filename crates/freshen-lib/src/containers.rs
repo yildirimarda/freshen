@@ -509,6 +509,10 @@ fn socket_candidates(probe: &dyn ContainerRuntimeProbe) -> Vec<(PathBuf, Contain
             runtime_dir.join("podman/podman.sock"),
             ContainerRuntimeKind::Podman,
         ));
+        candidates.push((
+            runtime_dir.join("docker.sock"),
+            ContainerRuntimeKind::NativeDocker,
+        ));
     }
 
     if let Some(uid) = probe.variable("UID") {
@@ -1152,15 +1156,26 @@ pub trait DockerEngineProbe: Send + Sync {
     /// Returns `true` when `program` is an executable on `PATH`.
     fn command_exists(&self, program: &str) -> bool;
 
-    /// Returns `true` when the systemd unit is active.
-    fn unit_active(&self, unit: &str) -> bool;
+    /// Returns `true` when the Docker Engine is rootless, i.e. the
+    /// `$XDG_RUNTIME_DIR/docker.sock` socket exists. A rootless engine is
+    /// controlled through the user systemd instance (`systemctl --user`)
+    /// rather than the system one, so it must not be mistaken for an
+    /// unreachable system daemon.
+    fn is_rootless(&self) -> bool;
+
+    /// Returns `true` when the systemd `unit` is active. When `user` is true
+    /// the user instance is queried (`systemctl --user is-active`), otherwise
+    /// the system instance.
+    fn unit_active(&self, unit: &str, user: bool) -> bool;
 
     /// Returns the Docker daemon's live-restore setting, or `None` when it
     /// cannot be read.
     fn live_restore_enabled(&self) -> Option<bool>;
 
-    /// Runs a systemctl action such as `stop` or `restart` for `unit`.
-    fn run_systemctl(&self, action: &str, unit: &str) -> Result<(), ProcessError>;
+    /// Runs a systemctl action such as `stop` or `restart` for `unit`. When
+    /// `user` is true the action runs in the user instance
+    /// (`systemctl --user`), otherwise in the system instance.
+    fn run_systemctl(&self, action: &str, unit: &str, user: bool) -> Result<(), ProcessError>;
 }
 
 /// Reads the native Docker Engine facts from the running host.
@@ -1172,15 +1187,29 @@ impl DockerEngineProbe for HostDockerEngineProbe {
         crate::executable::command_exists(program)
     }
 
-    fn unit_active(&self, unit: &str) -> bool {
+    fn is_rootless(&self) -> bool {
+        let Some(runtime_dir) = std::env::var("XDG_RUNTIME_DIR")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+        else {
+            return false;
+        };
+        PathBuf::from(runtime_dir).join("docker.sock").exists()
+    }
+
+    fn unit_active(&self, unit: &str, user: bool) -> bool {
         if !self.command_exists("systemctl") {
             return false;
         }
 
-        CommandSpec::new("systemctl")
-            .args(["is-active", "--quiet", unit])
-            .run()
-            .is_ok()
+        let mut args = Vec::with_capacity(4);
+        if user {
+            args.push("--user");
+        }
+        args.extend(["is-active", "--quiet", unit]);
+
+        CommandSpec::new("systemctl").args(args).run().is_ok()
     }
 
     fn live_restore_enabled(&self) -> Option<bool> {
@@ -1196,11 +1225,14 @@ impl DockerEngineProbe for HostDockerEngineProbe {
         parse_live_restore_enabled(output.stdout())
     }
 
-    fn run_systemctl(&self, action: &str, unit: &str) -> Result<(), ProcessError> {
-        CommandSpec::new("systemctl")
-            .args([action, unit])
-            .run()
-            .map(|_| ())
+    fn run_systemctl(&self, action: &str, unit: &str, user: bool) -> Result<(), ProcessError> {
+        let mut args = Vec::with_capacity(3);
+        if user {
+            args.push("--user");
+        }
+        args.extend([action, unit]);
+
+        CommandSpec::new("systemctl").args(args).run().map(|_| ())
     }
 }
 
@@ -1229,22 +1261,28 @@ fn live_restore_warning(enabled: Option<bool>) -> Option<&'static str> {
 /// warns about that first.
 pub struct NativeDockerRuntime {
     probe: Arc<dyn DockerEngineProbe>,
+    /// Whether the engine is rootless (`$XDG_RUNTIME_DIR/docker.sock`), in
+    /// which case it is controlled through `systemctl --user` rather than the
+    /// system systemd instance.
+    rootless: bool,
 }
 
 impl NativeDockerRuntime {
     /// Creates the native Docker Engine runtime.
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            probe: Arc::new(HostDockerEngineProbe),
-        }
+        let probe = Arc::new(HostDockerEngineProbe);
+        let rootless = probe.is_rootless();
+        Self { probe, rootless }
     }
 
     /// Creates the runtime with injected facts and commands.
     #[must_use]
     pub fn with_probe(probe: impl DockerEngineProbe + 'static) -> Self {
+        let rootless = probe.is_rootless();
         Self {
             probe: Arc::new(probe),
+            rootless,
         }
     }
 }
@@ -1281,18 +1319,18 @@ impl ContainerRuntime for NativeDockerRuntime {
     }
 
     fn is_running(&self) -> bool {
-        self.probe.unit_active("docker")
+        self.probe.unit_active("docker", self.rootless)
     }
 
     fn stop(&self) -> Result<(), ProcessError> {
         if let Some(warning) = live_restore_warning(self.probe.live_restore_enabled()) {
             human!("{warning}");
         }
-        self.probe.run_systemctl("stop", "docker")
+        self.probe.run_systemctl("stop", "docker", self.rootless)
     }
 
     fn start(&self) -> Result<(), ProcessError> {
-        self.probe.run_systemctl("restart", "docker")
+        self.probe.run_systemctl("restart", "docker", self.rootless)
     }
 
     fn restart_formulae(&self) -> &'static [&'static str] {
@@ -4374,7 +4412,9 @@ mod tests {
 
     struct FakeDockerEngineProbe {
         commands: HashSet<&'static str>,
-        active: bool,
+        rootless: bool,
+        system_active: bool,
+        user_active: bool,
         live_restore: Option<bool>,
         calls: Arc<Mutex<Vec<String>>>,
     }
@@ -4384,7 +4424,9 @@ mod tests {
             let calls = Arc::new(Mutex::new(Vec::new()));
             let probe = Self {
                 commands: ["docker", "systemctl"].into_iter().collect(),
-                active: true,
+                rootless: false,
+                system_active: true,
+                user_active: true,
                 live_restore: Some(true),
                 calls: Arc::clone(&calls),
             };
@@ -4404,20 +4446,33 @@ mod tests {
             self.commands.contains(program)
         }
 
-        fn unit_active(&self, unit: &str) -> bool {
-            self.active && unit == "docker"
+        fn is_rootless(&self) -> bool {
+            self.rootless
+        }
+
+        fn unit_active(&self, unit: &str, user: bool) -> bool {
+            let active = if user {
+                self.user_active
+            } else {
+                self.system_active
+            };
+            active && unit == "docker"
         }
 
         fn live_restore_enabled(&self) -> Option<bool> {
             self.live_restore
         }
 
-        fn run_systemctl(&self, action: &str, unit: &str) -> Result<(), ProcessError> {
+        fn run_systemctl(&self, action: &str, unit: &str, user: bool) -> Result<(), ProcessError> {
             let mut calls = self
                 .calls
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            calls.push(format!("{action} {unit}"));
+            if user {
+                calls.push(format!("--user {action} {unit}"));
+            } else {
+                calls.push(format!("{action} {unit}"));
+            }
             Ok(())
         }
     }
@@ -4461,7 +4516,7 @@ mod tests {
     #[test]
     fn native_docker_is_running_only_when_the_systemd_unit_is_active() {
         let (mut probe, _) = FakeDockerEngineProbe::installed();
-        probe.active = false;
+        probe.system_active = false;
 
         assert!(!NativeDockerRuntime::with_probe(probe).is_running());
     }
@@ -4482,6 +4537,71 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         assert_eq!(*calls, ["stop docker", "restart docker"]);
+    }
+
+    #[test]
+    fn native_docker_rootless_is_detected() {
+        let (mut probe, _) = FakeDockerEngineProbe::installed();
+        probe.rootless = true;
+
+        let runtime = NativeDockerRuntime::with_probe(probe);
+
+        assert_eq!(runtime.detect(), Detection::Installed);
+        assert!(runtime.rootless);
+    }
+
+    #[test]
+    fn native_docker_rootless_is_not_detected_without_the_socket() {
+        let (probe, _) = FakeDockerEngineProbe::installed();
+
+        assert!(!NativeDockerRuntime::with_probe(probe).rootless);
+    }
+
+    #[test]
+    fn native_docker_rootless_is_running_only_when_the_user_unit_is_active() {
+        let (mut probe, _) = FakeDockerEngineProbe::installed();
+        probe.rootless = true;
+        probe.user_active = true;
+
+        assert!(NativeDockerRuntime::with_probe(probe).is_running());
+
+        let (mut probe, _) = FakeDockerEngineProbe::installed();
+        probe.rootless = true;
+        probe.user_active = false;
+
+        assert!(!NativeDockerRuntime::with_probe(probe).is_running());
+    }
+
+    #[test]
+    fn native_docker_rootless_is_not_mistaken_for_an_unreachable_system_daemon() {
+        // The user systemd unit is active while the system unit is not: a
+        // rootless engine is running and must be controlled through
+        // `systemctl --user`.
+        let (mut probe, _) = FakeDockerEngineProbe::installed();
+        probe.rootless = true;
+        probe.system_active = false;
+        probe.user_active = true;
+
+        assert!(NativeDockerRuntime::with_probe(probe).is_running());
+    }
+
+    #[test]
+    fn native_docker_rootless_stops_and_restarts_via_user_systemd() {
+        let (mut probe, calls) = FakeDockerEngineProbe::installed();
+        probe.rootless = true;
+        let runtime = NativeDockerRuntime::with_probe(probe);
+
+        runtime
+            .stop()
+            .unwrap_or_else(|error| panic!("stop failed: {error}"));
+        runtime
+            .start()
+            .unwrap_or_else(|error| panic!("start failed: {error}"));
+
+        let calls = calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(*calls, ["--user stop docker", "--user restart docker"]);
     }
 
     #[test]
@@ -4947,6 +5067,20 @@ mod tests {
         let runtime = detected(&probe).unwrap_or_else(|| panic!("podman was not detected"));
 
         assert_eq!(runtime.kind(), ContainerRuntimeKind::Podman);
+        assert_eq!(runtime.source(), &ContainerRuntimeSource::Socket(path));
+    }
+
+    #[test]
+    fn the_xdg_runtime_directory_identifies_rootless_docker() {
+        let path = PathBuf::from("/run/user/1000/docker.sock");
+        let probe = FakeProbe::default()
+            .with_var("XDG_RUNTIME_DIR", "/run/user/1000")
+            .with_socket(&path);
+
+        let runtime =
+            detected(&probe).unwrap_or_else(|| panic!("rootless docker was not detected"));
+
+        assert_eq!(runtime.kind(), ContainerRuntimeKind::NativeDocker);
         assert_eq!(runtime.source(), &ContainerRuntimeSource::Socket(path));
     }
 
