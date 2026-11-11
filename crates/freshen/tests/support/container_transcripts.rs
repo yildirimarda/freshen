@@ -145,3 +145,15 @@ pub fn kind_cluster_stop(name: &str) -> String {
 pub fn kind_cluster_start(name: &str) -> String {
     format!("kind cluster start {name}")
 }
+
+pub fn minikube_profile_list() -> &'static [&'static str] {
+    &["minikube profile list -o json"]
+}
+
+pub fn minikube_stop(name: &str) -> String {
+    format!("minikube stop -p {name}")
+}
+
+pub fn minikube_start(name: &str) -> String {
+    format!("minikube start -p {name}")
+}
