@@ -99,6 +99,36 @@ because they need the disabled step to run.
 `freshen --list-steps` names every step, so the ids to use here are the ones
 in that listing.
 
+### `[profiles]`
+
+Named profiles that select a set of steps. Each profile is a table whose keys
+are step ids and whose values are `true` (enabled) or `false` (disabled), with
+the same semantics as the top-level `[steps]` section. A step that is not
+named in a profile keeps its default, which is enabled.
+
+```toml
+[profiles.work]
+brew-casks = false
+docker = false
+
+[profiles.minimal]
+brew = false
+uv = false
+```
+
+Select a profile with `freshen --profile <name>`. The profile's steps override
+the top-level `[steps]` section, so a profile can re-enable a step that the
+top-level section disables, or disable a step it enables.
+
+A profile that does not exist in the configuration file is an error:
+
+```
+freshen: unknown profile `nope` (known profiles: work, minimal)
+```
+
+A step id in a profile that is not registered is refused as well, with the
+known step ids.
+
 ### `[include]` and `[exclude]`
 
 Which items a run may touch. Both sections take the same five keys, and the

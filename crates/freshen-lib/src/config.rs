@@ -98,6 +98,15 @@ pub struct Config {
     #[serde(default)]
     pub steps: BTreeMap<String, bool>,
 
+    /// The named profiles that select a set of steps.
+    ///
+    /// Each profile maps a step id to `false` (disabled) or `true` (enabled).
+    /// A step that is not named keeps its default, which is enabled. A profile
+    /// is selected with `--profile <name>`; its steps override the top-level
+    /// `[steps]` section.
+    #[serde(default)]
+    pub profiles: BTreeMap<String, BTreeMap<String, bool>>,
+
     /// The items that are always in scope.
     #[serde(default)]
     pub include: FilterSection,
@@ -308,6 +317,13 @@ impl Config {
     pub fn step_overrides(&self) -> BTreeMap<String, bool> {
         self.steps.clone()
     }
+
+    /// The step overrides of the named profile, or `None` when the profile
+    /// does not exist.
+    #[must_use]
+    pub fn profile_steps(&self, name: &str) -> Option<&BTreeMap<String, bool>> {
+        self.profiles.get(name)
+    }
 }
 
 /// Builds the filter of one kind of item from its include and exclude lists.
@@ -459,6 +475,7 @@ where
 mod tests {
     use super::{Config, ConfigEnvironment, ConfigError, CONFIG_DIR_NAME, CONFIG_FILE_NAME};
     use crate::platform::Platform;
+    use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
 
     fn parse(text: &str) -> Result<Config, ConfigError> {
@@ -505,6 +522,44 @@ docker = true
         assert_eq!(config.steps.get("brew-casks"), Some(&false));
         assert_eq!(config.steps.get("docker"), Some(&true));
         assert_eq!(config.step_overrides().len(), 2);
+    }
+
+    #[test]
+    fn the_profiles_are_read() {
+        let config = parsed(
+            r#"
+[profiles.work]
+brew-casks = true
+docker = false
+
+[profiles.minimal]
+brew = false
+uv = false
+"#,
+        );
+
+        assert_eq!(
+            config.profile_steps("work"),
+            Some(&BTreeMap::from([
+                ("brew-casks".to_owned(), true),
+                ("docker".to_owned(), false),
+            ]))
+        );
+        assert_eq!(
+            config.profile_steps("minimal"),
+            Some(&BTreeMap::from([
+                ("brew".to_owned(), false),
+                ("uv".to_owned(), false),
+            ]))
+        );
+        assert_eq!(config.profile_steps("nope"), None);
+    }
+
+    #[test]
+    fn a_profile_without_steps_selects_nothing() {
+        let config = parsed("[profiles.work]\n");
+
+        assert_eq!(config.profile_steps("work"), Some(&BTreeMap::new()));
     }
 
     #[test]

@@ -3,7 +3,7 @@
 //! These tests never run a package manager: detection only looks for an
 //! executable on `PATH`, and the run cases exclude every built-in step.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 /// A directory without a configuration file, so the binary never reads the
@@ -60,6 +60,7 @@ fn help_lists_every_flag() {
         "--container-runtime",
         "--only",
         "--skip",
+        "--profile",
         "--yes",
         "--force-kill",
         "--step-timeout",
@@ -242,4 +243,77 @@ fn unknown_skip_step_fails_with_a_clear_message() {
 
     assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
     assert!(stderr(&output).contains("unknown step `nope` in --skip"));
+}
+
+/// Writes `text` to a configuration file in `home` and returns its path.
+fn write_config(home: &Path, text: &str) -> PathBuf {
+    let path = home.join("config.toml");
+    std::fs::write(&path, text).unwrap_or_else(|error| panic!("failed to write {path:?}: {error}"));
+    path
+}
+
+/// Returns the `brew-casks` line of a `--list-steps` output.
+/// Returns the `apt` line of a `--list-steps` output, or `None` when apt is
+/// not known to the listing.
+fn apt_line(text: &str) -> Option<&str> {
+    text.lines().find(|line| line.contains("apt"))
+}
+
+/// Returns `true` when `apt` is detected as installed on this machine.
+fn apt_is_installed(text: &str) -> bool {
+    apt_line(text)
+        .map(|line| line.contains("installed") && !line.contains("not installed"))
+        .unwrap_or(false)
+}
+
+#[test]
+fn a_profile_disables_a_step_it_names() {
+    let home = empty_home();
+    let config = write_config(&home, "[profiles.work]\napt = false\n");
+    let config = config
+        .to_str()
+        .unwrap_or_else(|| panic!("config path is not valid UTF-8"));
+
+    let baseline = run(&["--config", config, "--list-steps"]);
+    assert_eq!(
+        baseline.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr(&baseline)
+    );
+    let apt_installed = apt_is_installed(&stdout(&baseline));
+
+    let with_profile = run(&["--config", config, "--profile", "work", "--list-steps"]);
+    assert_eq!(
+        with_profile.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr(&with_profile)
+    );
+    let text = stdout(&with_profile);
+
+    if apt_installed {
+        assert!(
+            apt_line(&text)
+                .map(|line| line.contains("disabled in the configuration file"))
+                .unwrap_or(false),
+            "listing: {text}"
+        );
+    } else {
+        // On machines without apt the profile is still accepted and applied;
+        // nothing should reference an unknown profile.
+        assert!(!text.contains("unknown profile"), "listing: {text}");
+    }
+}
+
+#[test]
+fn an_unknown_profile_fails_with_a_clear_message() {
+    let output = run(&["--profile", "nope"]);
+
+    assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
+    assert!(
+        stderr(&output).contains("unknown profile `nope`"),
+        "stderr: {}",
+        stderr(&output)
+    );
 }
