@@ -13,6 +13,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
+use serde_json::Value;
+
 use support::{
     brew_autoremove, brew_cask_query, brew_cleanup, brew_formula_query, brew_formula_upgrade,
     brew_update, colima_start, colima_stop, db, docker_image_prune, docker_start_containers,
@@ -232,6 +234,7 @@ fn stops_colima_and_restores_containers_around_the_formula_upgrade() {
     expected.push(project_ps("db"));
     expected.push(inspect_def.to_string());
     expected.extend(docker_image_prune().iter().map(|&s| s.to_string()));
+    expected.push("docker system df".to_string());
     assert_eq!(tools.step_calls(), expected);
 
     let text = stdout(&output);
@@ -490,6 +493,7 @@ fn up_to_date_colima_is_never_stopped() {
     expected.push("colima status".to_string());
     expected.push("docker compose ls --format json".to_string());
     expected.extend(docker_image_prune().iter().map(|&s| s.to_string()));
+    expected.push("docker system df".to_string());
     assert_eq!(tools.step_calls(), expected);
     assert!(
         stdout(&output).contains("No running compose projects."),
@@ -1052,4 +1056,83 @@ fn a_fixed_tag_is_treated_as_pinned() {
         !calls.iter().any(|call| call == &pull_all),
         "the pinned node:20 image should not be pulled: {calls:?}"
     );
+}
+
+#[test]
+fn docker_system_df_reports_build_cache_and_volume_usage() {
+    let tools = StubTools::new(&["brew", "colima", "docker"]);
+    install_brew(&tools);
+    install_colima(&tools);
+
+    tools.set_script(
+        "docker",
+        r#"case "$*" in
+  "compose version")
+    exit 0
+    ;;
+  "compose ls --format json")
+    printf '[]'
+    ;;
+  "ps --format "*)
+    printf ''
+    ;;
+  "image prune -f")
+    exit 0
+    ;;
+  "system df")
+    printf '%s' "$FRESHEN_DOCKER_SYSTEM_DF"
+    ;;
+esac"#,
+    );
+
+    const DOCKER_SYSTEM_DF: &str = "\
+TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE
+Images          2         2         1.2GB     0B
+Containers      1         1         50MB      0B
+Local Volumes   3         2         500MB     100MB
+Build Cache     10        2         2.5GB     1.5GB
+";
+
+    let output = tools
+        .command()
+        .env("FRESHEN_OUTDATED_FORMULAE", "")
+        .env("FRESHEN_OUTDATED_CASKS", "")
+        .env("FRESHEN_BREW_UPGRADE_STATUS", "0")
+        .env("FRESHEN_COLIMA_STATUS", "0")
+        .env("FRESHEN_COLIMA_START_STATUS", "0")
+        .env("FRESHEN_COMPOSE_JSON", "[]")
+        .env("FRESHEN_PS_OUTPUT", "")
+        .env("FRESHEN_DOCKER_SYSTEM_DF", DOCKER_SYSTEM_DF)
+        .env("FRESHEN_HEALTH_WAIT_SECS", "0")
+        .args(["--only", ALL_STEPS, "--cleanup", "--json"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let calls = tools.step_calls();
+    assert!(
+        calls.contains(&"docker system df".to_owned()),
+        "calls: {calls:?}"
+    );
+
+    let text = stdout(&output);
+    let report: Value = serde_json::from_str(&text)
+        .unwrap_or_else(|error| panic!("invalid JSON report: {error}: {text}"));
+
+    let docker_step = report["steps"]
+        .as_array()
+        .and_then(|steps| steps.iter().find(|step| step["id"] == "docker"))
+        .unwrap_or_else(|| panic!("docker step not found in report: {text}"));
+
+    let volumes = &docker_step["docker_df"]["volumes"];
+    assert_eq!(volumes["total"], 3);
+    assert_eq!(volumes["active"], 2);
+    assert_eq!(volumes["size"], "500MB");
+    assert_eq!(volumes["reclaimable"], "100MB");
+
+    let build_cache = &docker_step["docker_df"]["build_cache"];
+    assert_eq!(build_cache["total"], 10);
+    assert_eq!(build_cache["active"], 2);
+    assert_eq!(build_cache["size"], "2.5GB");
+    assert_eq!(build_cache["reclaimable"], "1.5GB");
 }

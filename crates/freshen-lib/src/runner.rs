@@ -22,6 +22,7 @@ use crate::check::{CheckResult, CheckSummary};
 use crate::cleanup::{self, CleanupReport};
 use crate::containers::{ActiveContainerRuntime, COLIMA_STOP, DOCKER};
 use crate::deadline::{self, Deadline};
+use crate::docker_df::DockerDfUsage;
 use crate::elevation::{
     decide, ElevationDecision, ElevationOutcome, ElevationProbe, ElevationState, NoElevationProbe,
 };
@@ -153,6 +154,7 @@ pub struct StepResult {
     reopened_hidden: Vec<String>,
     restored_windows: Vec<String>,
     pacman_findings: Vec<crate::pacman_findings::PacmanFinding>,
+    docker_df: DockerDfUsage,
     restart_needed: bool,
     skip_reason: Option<SkipReason>,
     error: Option<StepError>,
@@ -176,6 +178,7 @@ impl StepResult {
             reopened_hidden: Vec::new(),
             restored_windows: Vec::new(),
             pacman_findings: Vec::new(),
+            docker_df: DockerDfUsage::default(),
             restart_needed: false,
             skip_reason: None,
             error: None,
@@ -237,6 +240,11 @@ impl StepResult {
         findings: Vec<crate::pacman_findings::PacmanFinding>,
     ) -> Self {
         self.pacman_findings = findings;
+        self
+    }
+
+    fn with_docker_df(mut self, docker_df: DockerDfUsage) -> Self {
+        self.docker_df = docker_df;
         self
     }
 
@@ -384,6 +392,13 @@ impl StepResult {
     #[must_use]
     pub fn pacman_findings(&self) -> &[crate::pacman_findings::PacmanFinding] {
         &self.pacman_findings
+    }
+
+    /// Build cache and volume usage reported by `docker system df`, when the
+    /// Docker step ran.
+    #[must_use]
+    pub fn docker_df(&self) -> &DockerDfUsage {
+        &self.docker_df
     }
 
     /// Whether the step reports that a restart is needed (for example after an
@@ -1241,6 +1256,7 @@ fn run_step(
             let doctor_warnings = crate::doctor_warnings::take();
             let bundle_cleanup_packages = crate::bundle_cleanup_packages::take();
             let pacman_findings = crate::pacman_findings::take();
+            let docker_df = crate::docker_df::take();
             let restart_needed = crate::restart_needed::take();
 
             let changes =
@@ -1270,6 +1286,7 @@ fn run_step(
                 .with_doctor_warnings(doctor_warnings)
                 .with_bundle_cleanup_packages(bundle_cleanup_packages)
                 .with_pacman_findings(pacman_findings)
+                .with_docker_df(docker_df)
                 .with_restart_needed(restart_needed)
         }
         Err(_error) if interrupt() => StepResult::interrupted(step, started.elapsed()),

@@ -85,6 +85,24 @@ pub(crate) fn run_json(summary: &RunSummary) -> String {
                         })
                     })
                     .collect::<Vec<_>>(),
+                "docker_df": {
+                    "volumes": result.docker_df().volumes.as_ref().map(|v| {
+                        json!({
+                            "total": v.total,
+                            "active": v.active,
+                            "size": v.size,
+                            "reclaimable": v.reclaimable,
+                        })
+                    }),
+                    "build_cache": result.docker_df().build_cache.as_ref().map(|v| {
+                        json!({
+                            "total": v.total,
+                            "active": v.active,
+                            "size": v.size,
+                            "reclaimable": v.reclaimable,
+                        })
+                    }),
+                },
                 "restart_needed": result.restart_needed(),
                 "error": result.error().map(|error| error.to_string()),
             })
@@ -451,6 +469,38 @@ pub(crate) fn run_markdown(summary: &RunSummary) -> String {
                     "- {}: `{}`\n",
                     finding.kind(),
                     finding.path().display()
+                ));
+            }
+            out.push('\n');
+        }
+    }
+
+    if summary.steps().iter().any(|result| {
+        result.docker_df().volumes.is_some() || result.docker_df().build_cache.is_some()
+    }) {
+        out.push_str("\n## Docker disk usage\n\n");
+        for result in summary.steps().iter().filter(|result| {
+            result.docker_df().volumes.is_some() || result.docker_df().build_cache.is_some()
+        }) {
+            out.push_str(&format!(
+                "### {} (`{}`)\n\n",
+                escape_cell(result.name()),
+                result.id()
+            ));
+            let docker_df = result.docker_df();
+            if let Some(volumes) = &docker_df.volumes {
+                out.push_str(&format!(
+                    "- Volumes: {} total, {} active, size {}, reclaimable {}\n",
+                    volumes.total, volumes.active, volumes.size, volumes.reclaimable
+                ));
+            }
+            if let Some(build_cache) = &docker_df.build_cache {
+                out.push_str(&format!(
+                    "- Build cache: {} total, {} active, size {}, reclaimable {}\n",
+                    build_cache.total,
+                    build_cache.active,
+                    build_cache.size,
+                    build_cache.reclaimable
                 ));
             }
             out.push('\n');
