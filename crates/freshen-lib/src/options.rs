@@ -10,6 +10,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::config::{HookSection, Hooks};
 use crate::containers::ActiveContainerRuntime;
 use crate::package_manager::PackageManagerConfig;
 use crate::platform::Platform;
@@ -242,6 +243,7 @@ pub struct RunOptions {
     prune_report: bool,
     go_update: bool,
     install_aws_cli_updates: bool,
+    hooks: HookSection,
 }
 
 impl RunOptions {
@@ -532,6 +534,13 @@ impl RunOptions {
         self
     }
 
+    /// Replaces the per-step pre and post hooks.
+    #[must_use]
+    pub fn with_hooks(mut self, hooks: HookSection) -> Self {
+        self.hooks = hooks;
+        self
+    }
+
     /// Returns `true` when `--dry-run` is set.
     #[must_use]
     pub fn is_dry_run(&self) -> bool {
@@ -786,6 +795,12 @@ impl RunOptions {
     #[must_use]
     pub fn install_aws_cli_updates(&self) -> bool {
         self.install_aws_cli_updates
+    }
+
+    /// The per-step pre and post hooks, keyed by step id.
+    #[must_use]
+    pub fn hooks(&self) -> &BTreeMap<String, Hooks> {
+        &self.hooks.0
     }
 
     /// Builds the ordered list of steps this run should execute on `platform`.

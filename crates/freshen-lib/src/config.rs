@@ -122,6 +122,10 @@ pub struct Config {
     /// The repositories whose pre-commit hooks are kept up to date.
     #[serde(default)]
     pub pre_commit: PreCommitSection,
+
+    /// The per-step pre and post hooks.
+    #[serde(default)]
+    pub hooks: HookSection,
 }
 
 /// The `[preflight]` section: the checks that run before an update.
@@ -234,6 +238,31 @@ pub struct PreCommitSection {
     pub repositories: Option<Vec<String>>,
 }
 
+/// The `[hooks]` section: per-step commands that run before and after a step.
+///
+/// The table is keyed by step id, so `[hooks.brew]` configures the hooks for
+/// the `brew` step. A step that is not named has no hooks.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(transparent)]
+pub struct HookSection(
+    /// The per-step pre and post hooks, keyed by step id.
+    pub BTreeMap<String, Hooks>,
+);
+
+/// The commands that run before and after one step.
+///
+/// Each of `pre` and `post` is a command: its first entry is the program and
+/// the remaining entries are its arguments. When either is missing, that hook
+/// does not run for the step.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Hooks {
+    /// The command that runs before the step's upgrade.
+    pub pre: Option<Vec<String>>,
+    /// The command that runs after the step's upgrade.
+    pub post: Option<Vec<String>>,
+}
+
 impl Config {
     /// Parses configuration text.
     ///
@@ -308,6 +337,12 @@ impl Config {
     #[must_use]
     pub fn pre_commit_repositories(&self) -> Vec<String> {
         self.pre_commit.repositories.clone().unwrap_or_default()
+    }
+
+    /// The per-step pre and post hooks, keyed by step id.
+    #[must_use]
+    pub fn hooks(&self) -> &BTreeMap<String, Hooks> {
+        &self.hooks.0
     }
 
     /// The step ids the file enables or disables.
@@ -473,7 +508,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, ConfigEnvironment, ConfigError, CONFIG_DIR_NAME, CONFIG_FILE_NAME};
+    use super::{Config, ConfigEnvironment, ConfigError, Hooks, CONFIG_DIR_NAME, CONFIG_FILE_NAME};
     use crate::platform::Platform;
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
@@ -615,6 +650,58 @@ always_quit = ["com.spotify"]
         assert!(config.item_filters().is_empty());
         assert!(config.app_lists().is_empty());
         assert!(config.step_overrides().is_empty());
+    }
+
+    #[test]
+    fn the_hooks_are_read() {
+        let config = parsed(
+            r#"
+[hooks.brew]
+pre = ["echo", "starting brew"]
+post = ["echo", "done brew"]
+
+[hooks.uv]
+pre = ["uv", "hook"]
+"#,
+        );
+
+        let hooks = config.hooks();
+
+        assert_eq!(
+            hooks.get("brew"),
+            Some(&Hooks {
+                pre: Some(vec!["echo".to_owned(), "starting brew".to_owned()]),
+                post: Some(vec!["echo".to_owned(), "done brew".to_owned()]),
+            })
+        );
+        assert_eq!(
+            hooks.get("uv"),
+            Some(&Hooks {
+                pre: Some(vec!["uv".to_owned(), "hook".to_owned()]),
+                post: None,
+            })
+        );
+        assert_eq!(hooks.get("docker"), None);
+    }
+
+    #[test]
+    fn a_configuration_without_hooks_has_no_hooks() {
+        let config = parsed("[run]\njobs = 2\n");
+
+        assert!(config.hooks().is_empty());
+    }
+
+    #[test]
+    fn an_unknown_key_in_a_hook_points_at_its_line() {
+        let error = parse("[hooks.brew]\npre = [\"echo\"]\nnope = []\n").err();
+
+        let (_, line, _, message) = invalid(error);
+
+        assert_eq!(line, 3);
+        assert!(
+            message.contains("unknown field `nope`"),
+            "unexpected message: {message}"
+        );
     }
 
     #[test]

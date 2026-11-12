@@ -378,7 +378,8 @@ impl Cli {
             .with_filters(config.item_filters())
             .with_app_lists(config.app_lists())
             .with_pre_commit_repositories(config.pre_commit_repositories())
-            .with_chocolatey_except(self.except.clone()))
+            .with_chocolatey_except(self.except.clone())
+            .with_hooks(config.hooks.clone()))
     }
 
     /// The per-step enable and disable flags, with the selected profile's

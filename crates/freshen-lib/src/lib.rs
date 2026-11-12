@@ -131,8 +131,9 @@ pub use appstore::{MasClient, MasOutput, MAS};
 pub use check::{CheckResult, CheckStatus, CheckSummary};
 pub use cleanup::{CleanupReport, ENABLE_FLAG as CLEANUP_FLAG};
 pub use config::{
-    AppSection, Config, ConfigEnvironment, ConfigError, FilterSection, PackageManagerSection,
-    PreflightSection, RunSection, TimeoutSection, CONFIG_DIR_NAME, CONFIG_FILE_NAME,
+    AppSection, Config, ConfigEnvironment, ConfigError, FilterSection, HookSection, Hooks,
+    PackageManagerSection, PreflightSection, RunSection, TimeoutSection, CONFIG_DIR_NAME,
+    CONFIG_FILE_NAME,
 };
 pub use containers::{
     detect_active_runtime, detect_compose_command, parse_compose_projects,

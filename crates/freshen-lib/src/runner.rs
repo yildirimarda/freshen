@@ -11,6 +11,7 @@
 //! installed) is not a failure and therefore does not change the exit code.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -28,8 +29,9 @@ use crate::elevation::{
 };
 use crate::homebrew::{BundlePackage, DoctorFinding};
 use crate::options::RunOptions;
+use crate::process::{CommandSpec, ProcessError};
 use crate::snapshot::{RollbackCommand, SnapshotRecorder};
-use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
+use crate::step::{CheckReport, Detection, Operation, OutdatedItem, Step, StepError, StepId};
 use crate::system::Privilege;
 
 pub use crate::step::SkipReason;
@@ -1222,8 +1224,27 @@ fn run_step(
                 return StepResult::interrupted(step, started.elapsed());
             }
 
+            // --- pre hook: runs before the step's upgrade ---
+            if let Some(hook) = options.hooks().get(step.id()) {
+                if let Some(command) = &hook.pre {
+                    match run_hook(step, options, command) {
+                        Ok(()) => {}
+                        Err(ProcessError::Interrupted { .. }) => {
+                            return StepResult::interrupted(step, started.elapsed());
+                        }
+                        Err(error) => {
+                            return StepResult::failed(
+                                step,
+                                started.elapsed(),
+                                StepError::from_process(step.id(), Operation::Run, &error),
+                            );
+                        }
+                    }
+                }
+            }
+
             let recorder = cleanup::Recorder::start();
-            let result = match step.run_with_options(options) {
+            let mut result = match step.run_with_options(options) {
                 Ok(()) if interrupt() => StepResult::interrupted(step, started.elapsed()),
                 Ok(()) => match step.cleanup() {
                     Ok(()) if interrupt() => StepResult::interrupted(step, started.elapsed()),
@@ -1274,6 +1295,28 @@ fn run_step(
                     }
                 };
 
+            // --- post hook: runs after the step's upgrade (and cleanup) ---
+            if let Some(hook) = options.hooks().get(step.id()) {
+                if let Some(command) = &hook.post {
+                    if let Err(error) = run_hook(step, options, command) {
+                        if result.status() == StepStatus::Ok {
+                            match error {
+                                ProcessError::Interrupted { .. } => {
+                                    result = StepResult::interrupted(step, started.elapsed());
+                                }
+                                error => {
+                                    result = StepResult::failed(
+                                        step,
+                                        started.elapsed(),
+                                        StepError::from_process(step.id(), Operation::Run, &error),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             result
                 .with_changes(changes)
                 .with_cleanups(cleanups)
@@ -1295,6 +1338,45 @@ fn run_step(
         }
         Err(error) => StepResult::failed(step, started.elapsed(), error),
     }
+}
+
+/// Environment variables that describe the run to a pre or post hook.
+///
+/// Every hook inherits the environment of the freshen process and gets these
+/// variables set on top, so they win over anything the user exported. A hook
+/// can use them to decide what to do based on the step it surrounds and the
+/// kind of run it is part of.
+#[must_use]
+fn run_environment(step: &dyn Step, options: &RunOptions) -> Vec<(OsString, OsString)> {
+    vec![
+        (OsString::from("FRESHEN_STEP_ID"), OsString::from(step.id())),
+        (
+            OsString::from("FRESHEN_STEP_NAME"),
+            OsString::from(step.display_name()),
+        ),
+        (OsString::from("FRESHEN_OPERATION"), OsString::from("run")),
+        (
+            OsString::from("FRESHEN_DRY_RUN"),
+            OsString::from(if options.is_dry_run() { "1" } else { "0" }),
+        ),
+    ]
+}
+
+/// Runs one hook command (`pre` or `post`) for a step.
+///
+/// The command inherits the environment of the freshen process and gets the
+/// run environment variables set on top. A hook that cannot be started or
+/// that exits unsuccessfully is an error the caller turns into a step
+/// failure.
+fn run_hook(step: &dyn Step, options: &RunOptions, command: &[String]) -> Result<(), ProcessError> {
+    let mut spec = CommandSpec::new(command[0].as_str());
+    for argument in &command[1..] {
+        spec = spec.arg(argument.as_str());
+    }
+    for (key, value) in run_environment(step, options) {
+        spec = spec.env(key, value);
+    }
+    spec.run().map(|_| ())
 }
 
 fn capture_snapshot(step: &dyn Step, snapshots: &mut SnapshotRecorder) {
@@ -1364,21 +1446,27 @@ fn diff_reports(before: &CheckReport, after: &CheckReport) -> Vec<VersionChange>
 
 #[cfg(test)]
 mod tests {
-    use super::{RunSummary, Runner, SkipReason, StepStatus};
+    use super::{run_environment, RunSummary, Runner, SkipReason, StepStatus};
     use crate::check::CheckStatus;
+    #[cfg(unix)]
+    use crate::config::{HookSection, Hooks};
     use crate::elevation::{ElevationOutcome, ElevationProbe};
     use crate::options::{RunOptions, StepSelection};
     use crate::platform::Platform;
     use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
     use crate::system::Privilege;
     use crate::NoElevationProbe;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashMap};
     use std::process::ExitCode;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
 
     static INTERRUPT: AtomicBool = AtomicBool::new(false);
+
+    /// Serialises the creation of stub directories so parallel tests never collide.
+    #[cfg(unix)]
+    static STUB_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     fn interrupt_flag() -> bool {
         INTERRUPT.load(Ordering::SeqCst)
@@ -1647,6 +1735,228 @@ mod tests {
 
     fn run(steps: &[&dyn Step]) -> RunSummary {
         Runner::new(steps.iter().copied()).run()
+    }
+
+    /// Writes pre/post/fail stubs into a temporary directory on `PATH` for the
+    /// duration of `f`, then restores `PATH`. The stubs append `pre`/`post`
+    /// lines (carrying the run environment variables) to `log_path`.
+    #[cfg(unix)]
+    fn with_hook_stubs<R>(log_path: &str, f: impl FnOnce() -> R) -> R {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = crate::process::PATH_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dir = std::env::temp_dir().join(format!(
+            "freshen-hook-stubs-{pid}-{n}",
+            pid = std::process::id(),
+            n = STUB_COUNTER.fetch_add(1, Ordering::SeqCst),
+        ));
+        std::fs::create_dir_all(&dir).unwrap_or_else(|error| {
+            panic!("failed to create stub directory {}: {error}", dir.display())
+        });
+
+        let escaped = log_path.replace('\'', "'\\''");
+        let pre = format!(
+            "#!/bin/sh\necho \"pre $FRESHEN_STEP_ID $FRESHEN_STEP_NAME $FRESHEN_OPERATION $FRESHEN_DRY_RUN\" >> '{escaped}'\n"
+        );
+        let post = format!(
+            "#!/bin/sh\necho \"post $FRESHEN_STEP_ID $FRESHEN_STEP_NAME $FRESHEN_OPERATION $FRESHEN_DRY_RUN\" >> '{escaped}'\n"
+        );
+        let fail = "#!/bin/sh\nexit 1\n";
+
+        std::fs::write(dir.join("pre-hook"), pre).unwrap_or_else(|error| {
+            panic!(
+                "failed to write stub {}: {error}",
+                dir.join("pre-hook").display()
+            )
+        });
+        std::fs::write(dir.join("post-hook"), post).unwrap_or_else(|error| {
+            panic!(
+                "failed to write stub {}: {error}",
+                dir.join("post-hook").display()
+            )
+        });
+        std::fs::write(dir.join("fail-pre"), fail).unwrap_or_else(|error| {
+            panic!(
+                "failed to write stub {}: {error}",
+                dir.join("fail-pre").display()
+            )
+        });
+        std::fs::write(dir.join("fail-post"), fail).unwrap_or_else(|error| {
+            panic!(
+                "failed to write stub {}: {error}",
+                dir.join("fail-post").display()
+            )
+        });
+        for name in ["pre-hook", "post-hook", "fail-pre", "fail-post"] {
+            std::fs::set_permissions(dir.join(name), PermissionsExt::from_mode(0o755))
+                .unwrap_or_else(|error| panic!("failed to make stub executable: {error}"));
+        }
+
+        let previous = std::env::var("PATH").ok();
+        std::env::set_var("PATH", &dir);
+        let result = f();
+        if let Some(previous) = previous {
+            std::env::set_var("PATH", previous);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        drop(_guard);
+        result
+    }
+
+    #[test]
+    fn run_environment_describes_the_step_and_the_run() {
+        let step = FakeStep::new("brew", "Homebrew");
+        let options = RunOptions::new();
+
+        let env: HashMap<String, String> = run_environment(&step, &options)
+            .into_iter()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.to_string_lossy().into_owned(),
+                )
+            })
+            .collect();
+
+        assert_eq!(env.get("FRESHEN_STEP_ID"), Some(&"brew".to_owned()));
+        assert_eq!(env.get("FRESHEN_STEP_NAME"), Some(&"Homebrew".to_owned()));
+        assert_eq!(env.get("FRESHEN_OPERATION"), Some(&"run".to_owned()));
+        assert_eq!(env.get("FRESHEN_DRY_RUN"), Some(&"0".to_owned()));
+    }
+
+    #[test]
+    fn run_environment_honours_dry_run() {
+        let step = FakeStep::new("uv", "uv");
+        let options = RunOptions::new().with_dry_run(true);
+
+        let env: HashMap<String, String> = run_environment(&step, &options)
+            .into_iter()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.to_string_lossy().into_owned(),
+                )
+            })
+            .collect();
+
+        assert_eq!(env.get("FRESHEN_DRY_RUN"), Some(&"1".to_owned()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pre_and_post_hooks_run_around_the_step_with_the_run_environment() {
+        let log = std::env::temp_dir().join(format!(
+            "freshen-hook-log-{pid}-{n}",
+            pid = std::process::id(),
+            n = STUB_COUNTER.fetch_add(1, Ordering::SeqCst),
+        ));
+        let log_path = log.to_string_lossy().into_owned();
+
+        let step = FakeStep::new("brew", "Homebrew");
+        let steps: Vec<&dyn Step> = vec![&step];
+        let hooks = HookSection(BTreeMap::from([(
+            "brew".to_owned(),
+            Hooks {
+                pre: Some(vec!["pre-hook".to_owned()]),
+                post: Some(vec!["post-hook".to_owned()]),
+            },
+        )]));
+        let options = RunOptions::new().with_hooks(hooks);
+
+        with_hook_stubs(&log_path, || {
+            let summary = Runner::with_options(steps, options).run();
+
+            assert_eq!(summary.ok_count(), 1);
+            assert_eq!(summary.failed_count(), 0);
+        });
+
+        let log = std::fs::read_to_string(&log)
+            .unwrap_or_else(|error| panic!("failed to read hook log {}: {error}", log.display()));
+        let mut lines = log.lines();
+        let Some(pre) = lines.next() else {
+            panic!("expected a pre hook log line, got none")
+        };
+        let Some(post) = lines.next() else {
+            panic!("expected a post hook log line, got none")
+        };
+        assert!(
+            pre.starts_with("pre brew Homebrew run 0"),
+            "unexpected pre line: {pre}"
+        );
+        assert!(
+            post.starts_with("post brew Homebrew run 0"),
+            "unexpected post line: {post}"
+        );
+        assert!(
+            lines.next().is_none(),
+            "expected exactly two hook log lines"
+        );
+        let _ = std::fs::remove_file(&log);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failing_pre_hook_fails_the_step_and_skips_its_run() {
+        let step = FakeStep::new("brew", "Homebrew");
+        let run_calls = step.calls();
+        let steps: Vec<&dyn Step> = vec![&step];
+        let hooks = HookSection(BTreeMap::from([(
+            "brew".to_owned(),
+            Hooks {
+                pre: Some(vec!["fail-pre".to_owned()]),
+                post: None,
+            },
+        )]));
+        let options = RunOptions::new().with_hooks(hooks);
+
+        let summary = with_hook_stubs_result(&steps, &options);
+
+        let result = &summary.steps()[0];
+        assert_eq!(result.status(), StepStatus::Failed);
+        assert!(result.error().is_some());
+        assert_eq!(run_calls.run.load(Ordering::SeqCst), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failing_post_hook_fails_an_otherwise_ok_step() {
+        let step = FakeStep::new("brew", "Homebrew");
+        let run_calls = step.calls();
+        let steps: Vec<&dyn Step> = vec![&step];
+        let hooks = HookSection(BTreeMap::from([(
+            "brew".to_owned(),
+            Hooks {
+                pre: None,
+                post: Some(vec!["fail-post".to_owned()]),
+            },
+        )]));
+        let options = RunOptions::new().with_hooks(hooks);
+
+        let summary = with_hook_stubs_result(&steps, &options);
+
+        let result = &summary.steps()[0];
+        assert_eq!(result.status(), StepStatus::Failed);
+        assert!(result.error().is_some());
+        assert_eq!(run_calls.run.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(unix)]
+    fn with_hook_stubs_result(steps: &[&dyn Step], options: &RunOptions) -> RunSummary {
+        let log = std::env::temp_dir().join(format!(
+            "freshen-hook-log-{pid}-{n}",
+            pid = std::process::id(),
+            n = STUB_COUNTER.fetch_add(1, Ordering::SeqCst),
+        ));
+        let log_path = log.to_string_lossy().into_owned();
+        let result = with_hook_stubs(&log_path, || {
+            Runner::with_options(steps.to_vec(), options.clone()).run()
+        });
+        let _ = std::fs::remove_file(&log);
+        result
     }
 
     fn assert_exit_code(actual: ExitCode, expected: ExitCode) {
