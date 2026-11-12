@@ -244,6 +244,8 @@ pub struct RunOptions {
     go_update: bool,
     install_aws_cli_updates: bool,
     hooks: HookSection,
+    pre_run: Option<Vec<String>>,
+    post_run: Option<Vec<String>>,
 }
 
 impl RunOptions {
@@ -541,6 +543,20 @@ impl RunOptions {
         self
     }
 
+    /// Sets the command that runs once before any step of the run.
+    #[must_use]
+    pub fn with_pre_run(mut self, pre_run: Option<Vec<String>>) -> Self {
+        self.pre_run = pre_run;
+        self
+    }
+
+    /// Sets the command that runs once after every step of the run.
+    #[must_use]
+    pub fn with_post_run(mut self, post_run: Option<Vec<String>>) -> Self {
+        self.post_run = post_run;
+        self
+    }
+
     /// Returns `true` when `--dry-run` is set.
     #[must_use]
     pub fn is_dry_run(&self) -> bool {
@@ -801,6 +817,18 @@ impl RunOptions {
     #[must_use]
     pub fn hooks(&self) -> &BTreeMap<String, Hooks> {
         &self.hooks.0
+    }
+
+    /// The command that runs once before any step, when one is configured.
+    #[must_use]
+    pub fn pre_run(&self) -> Option<&Vec<String>> {
+        self.pre_run.as_ref()
+    }
+
+    /// The command that runs once after every step, when one is configured.
+    #[must_use]
+    pub fn post_run(&self) -> Option<&Vec<String>> {
+        self.post_run.as_ref()
     }
 
     /// Builds the ordered list of steps this run should execute on `platform`.
