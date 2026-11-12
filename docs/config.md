@@ -268,6 +268,31 @@ A global hook inherits `FRESHEN_OPERATION` and `FRESHEN_DRY_RUN`, but not
 A failing `pre_run` hook aborts the run before any step runs; a failing
 `post_run` hook fails the run after the steps have run.
 
+### `[[custom_steps]]`
+
+User-defined steps that run a command of the user's choosing. Anything freshen
+does not have a built-in step for can be added here without changing the code:
+
+```toml
+[[custom_steps]]
+name = "my-linter"
+command = ["golangci-lint", "run"]
+platforms = ["linux", "macos"]
+order = 5
+```
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `name` | string | (required) | The step id and the name shown to the user. |
+| `command` | list of names | (required) | The program and its arguments. |
+| `platforms` | list of names | every platform | The operating systems the step runs on (`macos`, `linux`, `windows`). |
+| `order` | integer | after every built-in step | The position in the run sequence. Custom steps sort by `order`; steps that share an order keep their configuration order. |
+
+`name` is used as the step id, so it can be referenced by `--only`, `--skip` and
+the `[steps]` section like any other step. A custom step is detected when its
+program exists on `PATH`, and its `command` is run during the upgrade. It
+reports itself as up to date in `--check` mode.
+
 ## Precedence
 
 1. A flag given on the command line wins.

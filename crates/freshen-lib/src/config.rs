@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
 
+use crate::custom_step::CustomStepConfig;
 use crate::platform::Platform;
 use crate::policy::{AppLists, ItemFilters, NameFilter};
 
@@ -126,6 +127,13 @@ pub struct Config {
     /// The per-step pre and post hooks.
     #[serde(default)]
     pub hooks: HookSection,
+
+    /// The user-defined steps that run a command of the user's choosing.
+    ///
+    /// Each entry is a `[[custom_steps]]` table with a `name`, a `command`,
+    /// optional `platforms` and an optional `order`.
+    #[serde(default)]
+    pub custom_steps: Vec<CustomStepConfig>,
 }
 
 /// The `[preflight]` section: the checks that run before an update.

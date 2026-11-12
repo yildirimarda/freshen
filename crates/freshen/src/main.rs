@@ -10,9 +10,9 @@ use freshen_lib::HostElevationProbe;
 use freshen_lib::{
     detect_active_runtime, exit, install_interrupt_handler, list_steps, wait_for_package_managers,
     ActiveContainerRuntime, AppLists, Config, ConfigEnvironment, ContainerRuntimeKind,
-    HostContainerRuntimeProbe, HostPackageManagerProbe, HostPreflightProbe, NoElevationProbe,
-    PackageManagerConfig, PackageManagerProbe, Platform, PreflightReport, Registry, RunLock,
-    Runner, SystemInfo, WaitOutcome,
+    CustomStepConfig, CustomStepError, HostContainerRuntimeProbe, HostPackageManagerProbe,
+    HostPreflightProbe, NoElevationProbe, PackageManagerConfig, PackageManagerProbe, Platform,
+    PreflightReport, Registry, RunLock, Runner, SystemInfo, WaitOutcome,
 };
 
 mod cli;
@@ -63,11 +63,18 @@ fn main() -> ExitCode {
     let privilege = SystemInfo::detect().privilege();
     let sudo_available = SudoState::from_privilege_and_probe(privilege, &HostSudoProbe).available();
 
-    let registry = build_registry(
+    let registry = match build_registry(
+        &config.custom_steps,
         options
             .container_runtime()
             .map(ActiveContainerRuntime::kind),
-    );
+    ) {
+        Ok(registry) => registry,
+        Err(error) => {
+            eprintln!("freshen: {error}");
+            return exit::code(exit::STEP_FAILURE);
+        }
+    };
 
     let steps = match options.plan(&registry, platform) {
         Ok(steps) => steps,
@@ -163,10 +170,13 @@ fn active_container_runtime(
         .or_else(|| detect_active_runtime(&HostContainerRuntimeProbe))
 }
 
-fn build_registry(runtime: Option<ContainerRuntimeKind>) -> Registry {
+fn build_registry(
+    custom_steps: &[CustomStepConfig],
+    runtime: Option<ContainerRuntimeKind>,
+) -> Result<Registry, CustomStepError> {
     #[cfg(feature = "test-harness")]
     if test_steps::requested() {
-        return test_steps::with_probe_steps(Registry::new());
+        return Ok(test_steps::with_probe_steps(Registry::new()));
     }
 
     let mut registry = Registry::new();
@@ -237,7 +247,23 @@ fn build_registry(runtime: Option<ContainerRuntimeKind>) -> Registry {
     registry = freshen_lib::scoop::register(registry);
     registry = freshen_lib::wsl::register(registry);
     registry = freshen_lib::windows_update::register(registry);
-    registry
+
+    // Custom steps run after the built-in steps, ordered by their `order`
+    // field. Custom steps that share an order keep their configuration order,
+    // and a step that omits `order` runs after every ordered custom step.
+    let mut configured: Vec<(usize, freshen_lib::custom_step::CustomStep)> =
+        Vec::with_capacity(custom_steps.len());
+    for config in custom_steps {
+        let step = freshen_lib::custom_step::CustomStep::try_from_config(config)?;
+        configured.push((step.order(), step));
+    }
+    configured.sort_by_key(|(order, _)| *order);
+
+    for (_, step) in configured {
+        registry.register(step);
+    }
+
+    Ok(registry)
 }
 
 fn run_preflight(options: &freshen_lib::RunOptions) -> PreflightReport {
