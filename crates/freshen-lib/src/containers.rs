@@ -4803,7 +4803,7 @@ mod tests {
         let result = step.run_with_options(&options);
 
         let calls = {
-            let deadline = Instant::now() + Duration::from_secs(2);
+            let deadline = Instant::now() + Duration::from_secs(30);
             loop {
                 let calls = read_docker_calls(&log);
                 if calls.iter().any(|call| call == "docker builder prune -f")

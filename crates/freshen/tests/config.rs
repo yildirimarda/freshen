@@ -14,6 +14,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Output;
 
+use freshen_lib::Config;
 use support::StubTools;
 
 /// The free disk space the scripted preflight probe reports: 10 GiB.
@@ -201,6 +202,41 @@ fn no_configuration_file_is_not_an_error() {
         stderr(&output),
         stdout(&output)
     );
+}
+
+#[test]
+fn custom_steps_are_read_from_the_configuration_file() {
+    let tools = StubTools::new(&["uv"]);
+    write_config(
+        &tools.config_path(),
+        r#"
+[[custom_steps]]
+name = "custom-a"
+command = ["custom-a", "--flag"]
+platforms = ["linux", "macos"]
+order = 3
+
+[[custom_steps]]
+name = "custom-b"
+command = ["custom-b"]
+"#,
+    );
+
+    let config = Config::load(&tools.config_path())
+        .unwrap_or_else(|error| panic!("expected a valid configuration, got {error}"));
+
+    assert_eq!(config.custom_steps.len(), 2);
+    assert_eq!(config.custom_steps[0].name, "custom-a");
+    assert_eq!(config.custom_steps[0].command, ["custom-a", "--flag"]);
+    assert_eq!(
+        config.custom_steps[0].platforms,
+        Some(vec!["linux".to_owned(), "macos".to_owned()])
+    );
+    assert_eq!(config.custom_steps[0].order, Some(3));
+    assert_eq!(config.custom_steps[1].name, "custom-b");
+    assert_eq!(config.custom_steps[1].command, ["custom-b"]);
+    assert_eq!(config.custom_steps[1].platforms, None);
+    assert_eq!(config.custom_steps[1].order, None);
 }
 
 #[test]

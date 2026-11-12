@@ -26,6 +26,7 @@ pub mod conda;
 pub mod config;
 pub mod containers;
 pub mod cursor;
+pub mod custom_step;
 pub(crate) mod deadline;
 #[cfg(target_os = "linux")]
 pub mod desktop_apps;
@@ -145,6 +146,7 @@ pub use containers::{
 };
 #[cfg(windows)]
 pub use containers::{DockerDesktopWindowsRuntime, PodmanDesktopWindowsRuntime};
+pub use custom_step::{CustomStepConfig, CustomStepError};
 #[cfg(windows)]
 pub use elevation::windows::HostElevationProbe;
 pub use elevation::{
