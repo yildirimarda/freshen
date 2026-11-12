@@ -4766,7 +4766,21 @@ mod tests {
 
         #[cfg(windows)]
         {
-            let script = "@echo off\r\n>>\"%FRESHEN_DOCKER_LOG%\" echo docker %*\r\nexit /b 0\r\n";
+            // Other tests that do not hold PATH_GUARD can resolve this stub
+            // too (PATH is process-global) and append to the same log at the
+            // same moment. On Windows a concurrent `>>` fails with a sharing
+            // violation and the line is silently lost, which made the
+            // "builder prune" / "image prune" assertions flaky. Retry the
+            // append (bounded, so an unset log variable cannot hang the stub).
+            let script = "@echo off\r\n\
+                 setlocal\r\n\
+                 set /a tries=0\r\n\
+                 :retry\r\n\
+                 2>nul (>>\"%FRESHEN_DOCKER_LOG%\" echo docker %*) && exit /b 0\r\n\
+                 set /a tries+=1\r\n\
+                 if %tries% geq 10 exit /b 0\r\n\
+                 ping -n 2 127.0.0.1 >nul\r\n\
+                 goto retry\r\n";
             let stub = dir.join("docker.cmd");
             std::fs::write(&stub, script)
                 .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));

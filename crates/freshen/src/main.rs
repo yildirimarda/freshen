@@ -1,9 +1,11 @@
 //! Thin CLI wrapper around the `freshen-lib` crate: all logic lives in the
 //! library, this binary only parses arguments and prints output.
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::Parser;
+use freshen_lib::doctor;
 use freshen_lib::sudo::{HostSudoProbe, SudoState};
 #[cfg(windows)]
 use freshen_lib::HostElevationProbe;
@@ -38,11 +40,20 @@ fn main() -> ExitCode {
         return exit::code(exit::STEP_FAILURE);
     };
 
-    let config = match load_config(&cli, platform) {
-        Ok(config) => config,
+    let config_path = cli
+        .config
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| ConfigEnvironment::from_env().config_path(platform));
+    let (config, config_error) = match load_config(&cli, platform) {
+        Ok(config) => (config, None),
         Err(error) => {
-            eprintln!("freshen: {error}");
-            return exit::code(exit::STEP_FAILURE);
+            if cli.doctor {
+                (Config::default(), Some(error))
+            } else {
+                eprintln!("freshen: {error}");
+                return exit::code(exit::STEP_FAILURE);
+            }
         }
     };
     let options = match cli.run_options_with(&config) {
@@ -87,6 +98,20 @@ fn main() -> ExitCode {
     if cli.list_steps {
         print!("{}", list_steps(&registry, &options, platform));
         return exit::code(exit::OK);
+    }
+
+    if cli.doctor {
+        let report = doctor::doctor(
+            &registry,
+            &options,
+            platform,
+            &config_path,
+            config_error.as_ref(),
+            privilege,
+            &HostPreflightProbe,
+        );
+        print!("{report}");
+        return report.exit_code();
     }
 
     if cli.check {

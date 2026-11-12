@@ -249,6 +249,26 @@ fn list_steps_reports_detection_without_calling_any_stub() {
     assert!(text.contains("excluded by --skip"), "listing: {text}");
 }
 
+#[test]
+fn doctor_reports_tools_without_calling_any_stub() {
+    let tools = StubTools::new(&["brew", "uv"]);
+
+    let mut command = tools.command();
+    command.args(["--doctor"]);
+    let output =
+        output_with_retry(command).unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    assert!(tools.step_calls().is_empty());
+
+    let text = stdout(&output);
+    assert!(text.contains("freshen doctor"), "doctor output: {text}");
+    // The stubbed tools are detected as installed, so they are not reported as
+    // problems. Missing tools are informational and do not block the doctor.
+    assert!(!text.contains("[error] brew"), "doctor output: {text}");
+    assert!(!text.contains("[error] uv"), "doctor output: {text}");
+}
+
 #[cfg(unix)]
 #[test]
 fn a_step_that_exceeds_the_step_timeout_is_reported_as_timed_out() {

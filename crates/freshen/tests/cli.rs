@@ -52,6 +52,7 @@ fn help_lists_every_flag() {
     let text = stdout(&output);
     for flag in [
         "--dry-run",
+        "--doctor",
         "--check",
         "--list-steps",
         "--json",
@@ -220,6 +221,18 @@ fn check_with_every_builtin_step_excluded_reports_up_to_date() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(stdout(&output), "Everything is up to date.\n");
+}
+
+#[test]
+fn doctor_reports_the_environment_and_exits_zero_when_healthy() {
+    let output = run(&["--doctor"]);
+
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("freshen doctor"),
+        "doctor output: {}",
+        stdout(&output)
+    );
 }
 
 #[test]
