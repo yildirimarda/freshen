@@ -59,6 +59,11 @@ pub struct Cli {
     #[arg(long)]
     pub dry_run: bool,
 
+    /// Verify the environment (tools found, permissions, config validity) and
+    /// print actionable fixes without changing anything.
+    #[arg(long)]
+    pub doctor: bool,
+
     /// Report outdated items without changing anything; exit 2 when updates are pending.
     #[arg(long)]
     pub check: bool,
@@ -340,6 +345,7 @@ impl Cli {
 
         Ok(RunOptions::new()
             .with_dry_run(self.dry_run)
+            .with_doctor(self.doctor)
             .with_assume_yes(self.yes)
             .with_force_kill(self.force_kill)
             .with_cleanup(self.cleanup)
@@ -468,6 +474,7 @@ mod tests {
 
         assert!(!cli.list_steps);
         assert!(!cli.check);
+        assert!(!cli.doctor);
         assert!(!cli.json);
         assert!(!cli.markdown);
         assert_eq!(cli.config, None);
@@ -524,6 +531,7 @@ mod tests {
             "--dry-run",
             "--check",
             "--list-steps",
+            "--doctor",
             "--config",
             "/tmp/config.toml",
             "--only",
@@ -573,6 +581,7 @@ mod tests {
         let options = options(&cli, &Config::default());
 
         assert!(cli.list_steps);
+        assert!(cli.doctor);
         assert!(cli.check);
         assert_eq!(
             cli.config,
@@ -871,6 +880,7 @@ mod tests {
 
         for flag in [
             "--dry-run",
+            "--doctor",
             "--check",
             "--list-steps",
             "--json",

@@ -32,6 +32,7 @@ pub(crate) mod deadline;
 pub mod desktop_apps;
 pub mod dnf;
 pub mod docker_df;
+pub mod doctor;
 pub mod doctor_warnings;
 pub mod dotnet_tools;
 pub mod elevation;

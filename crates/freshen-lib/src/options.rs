@@ -211,6 +211,7 @@ impl StepSelection {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunOptions {
     dry_run: bool,
+    doctor: bool,
     assume_yes: bool,
     force_kill: bool,
     cleanup: bool,
@@ -260,6 +261,14 @@ impl RunOptions {
     #[must_use]
     pub fn with_dry_run(mut self, dry_run: bool) -> Self {
         self.dry_run = dry_run;
+        self
+    }
+
+    /// Sets `--doctor`: verify the environment and print actionable fixes
+    /// instead of running the steps.
+    #[must_use]
+    pub fn with_doctor(mut self, doctor: bool) -> Self {
+        self.doctor = doctor;
         self
     }
 
@@ -561,6 +570,12 @@ impl RunOptions {
     #[must_use]
     pub fn is_dry_run(&self) -> bool {
         self.dry_run
+    }
+
+    /// Returns `true` when `--doctor` is set.
+    #[must_use]
+    pub fn doctor(&self) -> bool {
+        self.doctor
     }
 
     /// Returns `true` when `--yes` is set.
