@@ -296,13 +296,42 @@ reports itself as up to date in `--check` mode.
 ## Precedence
 
 1. A flag given on the command line wins.
-2. The configuration file wins over the built-in default.
-3. The built-in default is used when neither says anything.
+2. An environment variable override wins over the configuration file.
+3. The configuration file wins over the built-in default.
+4. The built-in default is used when neither says anything.
 
 ```bash
-# The file asks for 1 GiB of free disk space, the command line for 20 GiB.
-freshen --min-free-disk-gib 20
+# The file asks for 1 GiB of free disk space, the environment for 20 GiB.
+FRESHEN_PREFLIGHT__MIN_FREE_DISK_GIB=20 freshen
 ```
+
+## Environment variable overrides
+
+Every configuration key can also be set through an environment variable,
+using the scheme `FRESHEN_<SECTION>__<KEY>`:
+
+* `SECTION` is the TOML section name in upper case
+  (`PREFLIGHT`, `PACKAGE_MANAGER`, `TIMEOUTS`, `RUN`, `STEPS`,
+  `PROFILES`, `INCLUDE`, `EXCLUDE`, `APPS`, `PRE_COMMIT`, `HOOKS`).
+* `KEY` is the configuration key in upper case (`NETWORK`,
+  `MIN_FREE_DISK_GIB`, `BREW_CASKS`, `SNAPSHOT_RETENTION`, `PRE_RUN`,
+  `POST_RUN`, ...). Step ids and profile names keep their dashes, so
+  `BREW_CASKS` names the `brew-casks` step.
+* List values are comma-separated, booleans are `true` or `false`
+  (case-insensitive) and integers are decimal numbers.
+
+An environment variable wins over the configuration file and loses to a flag
+given on the command line. A variable that does not parse, that is out of
+range, or that names an unknown section or key is ignored.
+
+```bash
+# Disable the brew-casks step and raise the free-disk-space requirement.
+FRESHEN_STEPS__BREW_CASKS=false FRESHEN_PREFLIGHT__MIN_FREE_DISK_GIB=20 freshen
+```
+
+The flags that ask for confirmation (`--yes`), that kill applications
+(`--force-kill`) and that prune caches and images (`--cleanup`) are not
+configurable: they are decided on the command line, every time.
 
 The flags that ask for confirmation (`--yes`), that kill applications
 (`--force-kill`) and that prune caches and images (`--cleanup`) are not

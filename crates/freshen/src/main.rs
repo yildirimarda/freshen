@@ -152,12 +152,19 @@ fn main() -> ExitCode {
 /// A file named with `--config` has to exist; the file in the default
 /// location is optional.
 fn load_config(cli: &Cli, platform: Platform) -> Result<Config, freshen_lib::ConfigError> {
-    if let Some(path) = &cli.config {
-        return Config::load(path);
-    }
-
-    let path = ConfigEnvironment::from_env().config_path(platform);
-    Ok(Config::load_optional(&path)?.unwrap_or_default())
+    let mut config = if let Some(path) = &cli.config {
+        Config::load(path)?
+    } else {
+        let path = ConfigEnvironment::from_env().config_path(platform);
+        Config::load_optional(&path)?.unwrap_or_default()
+    };
+    config.apply_env_overrides(std::env::vars_os().map(|(key, value)| {
+        (
+            key.to_string_lossy().into_owned(),
+            value.to_string_lossy().into_owned(),
+        )
+    }));
+    Ok(config)
 }
 
 /// Resolves the runtime from `--container-runtime`, falling back to the
