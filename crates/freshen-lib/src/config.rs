@@ -35,6 +35,11 @@ pub const CONFIG_DIR_NAME: &str = "freshen";
 /// Name of the configuration file inside that directory.
 pub const CONFIG_FILE_NAME: &str = "config.toml";
 
+/// Prefix for every environment variable that overrides a configuration key.
+///
+/// The full scheme is `FRESHEN_<SECTION>__<KEY>` (see [`Config::apply_env_overrides`]).
+pub const ENV_PREFIX: &str = "FRESHEN_";
+
 /// A problem that prevented the configuration from being used.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -375,6 +380,194 @@ impl Config {
     }
 }
 
+impl Config {
+    /// Applies environment variable overrides to every configuration key.
+    ///
+    /// The naming scheme is `FRESHEN_<SECTION>__<KEY>`:
+    ///
+    /// * `SECTION` is the TOML section name in upper case
+    ///   (`PREFLIGHT`, `PACKAGE_MANAGER`, `TIMEOUTS`, `RUN`, `STEPS`,
+    ///   `PROFILES`, `INCLUDE`, `EXCLUDE`, `APPS`, `PRE_COMMIT`, `HOOKS`).
+    /// * `KEY` is the configuration key in upper case (`NETWORK`,
+    ///   `MIN_FREE_DISK_GIB`, `BREW_CASKS`, `SNAPSHOT_RETENTION`,
+    ///   `PRE_RUN`, `POST_RUN`, ...). Step ids and profile names keep their
+    ///   dashes, so `BREW_CASKS` names the `brew-casks` step and `WORK` names
+    ///   the `work` profile.
+    /// * List values are comma-separated, booleans are `true` or `false`
+    ///   (case-insensitive) and integers are decimal numbers.
+    ///
+    /// An environment variable wins over the configuration file and loses to a
+    /// flag given on the command line. A variable that does not parse, that is
+    /// out of range, or that names an unknown section or key is ignored.
+    pub fn apply_env_overrides(&mut self, env: impl IntoIterator<Item = (String, String)>) {
+        for (key, value) in env.into_iter() {
+            let Some(rest) = key.strip_prefix(ENV_PREFIX) else {
+                continue;
+            };
+            let mut parts = rest.splitn(2, "__");
+            let Some(section) = parts.next() else {
+                continue;
+            };
+            let Some(rest) = parts.next().filter(|rest| !rest.is_empty()) else {
+                continue;
+            };
+            match section {
+                "PREFLIGHT" => self.apply_preflight(rest, &value),
+                "PACKAGE_MANAGER" => self.apply_package_manager(rest, &value),
+                "TIMEOUTS" => self.apply_timeouts(rest, &value),
+                "RUN" => self.apply_run(rest, &value),
+                "STEPS" => self.apply_steps(rest, &value),
+                "PROFILES" => self.apply_profiles(rest, &value),
+                "INCLUDE" => apply_filter(&mut self.include, rest, &value),
+                "EXCLUDE" => apply_filter(&mut self.exclude, rest, &value),
+                "APPS" => self.apply_apps(rest, &value),
+                "PRE_COMMIT" => self.apply_pre_commit(rest, &value),
+                "HOOKS" => self.apply_hooks(rest, &value),
+                _ => continue,
+            }
+        }
+    }
+
+    fn apply_preflight(&mut self, key: &str, value: &str) {
+        match key {
+            "NETWORK" => {
+                if let Some(v) = parse_bool(value) {
+                    self.preflight.network = Some(v);
+                }
+            }
+            "DISK_SPACE" => {
+                if let Some(v) = parse_bool(value) {
+                    self.preflight.disk_space = Some(v);
+                }
+            }
+            "BATTERY" => {
+                if let Some(v) = parse_bool(value) {
+                    self.preflight.battery = Some(v);
+                }
+            }
+            "METERED_CONNECTION" => {
+                if let Some(v) = parse_bool(value) {
+                    self.preflight.metered_connection = Some(v);
+                }
+            }
+            "MIN_FREE_DISK_GIB" => {
+                if let Some(v) = parse_u64(value) {
+                    self.preflight.min_free_disk_gib = Some(v);
+                }
+            }
+            "BATTERY_THRESHOLD" => {
+                if let Some(v) = parse_u8(value).filter(|v| *v <= 100) {
+                    self.preflight.battery_threshold = Some(v);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_package_manager(&mut self, key: &str, value: &str) {
+        match key {
+            "ENABLED" => {
+                if let Some(v) = parse_bool(value) {
+                    self.package_manager.enabled = Some(v);
+                }
+            }
+            "WAIT_SECONDS" => {
+                if let Some(v) = parse_u64(value) {
+                    self.package_manager.wait_seconds = Some(v);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_timeouts(&mut self, key: &str, value: &str) {
+        match key {
+            "STEP_SECONDS" => {
+                if let Some(v) = parse_u64(value) {
+                    self.timeouts.step_seconds = Some(v);
+                }
+            }
+            "TOTAL_SECONDS" => {
+                if let Some(v) = parse_u64(value) {
+                    self.timeouts.total_seconds = Some(v);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_run(&mut self, key: &str, value: &str) {
+        match key {
+            "JOBS" => {
+                if let Some(v) = parse_usize(value).filter(|v| *v > 0) {
+                    self.run.jobs = Some(v);
+                }
+            }
+            "SNAPSHOT_RETENTION" => {
+                if let Some(v) = parse_usize(value) {
+                    self.run.snapshot_retention = Some(v);
+                }
+            }
+            "PRE_RUN" => self.run.pre_run = Some(parse_list(value)),
+            "POST_RUN" => self.run.post_run = Some(parse_list(value)),
+            _ => {}
+        }
+    }
+
+    fn apply_steps(&mut self, key: &str, value: &str) {
+        if let Some(v) = parse_bool(value) {
+            self.steps.insert(step_id_from_env(key), v);
+        }
+    }
+
+    fn apply_profiles(&mut self, key: &str, value: &str) {
+        let mut parts = key.splitn(2, "__");
+        let Some(profile) = parts.next().filter(|profile| !profile.is_empty()) else {
+            return;
+        };
+        let Some(key) = parts.next().filter(|key| !key.is_empty()) else {
+            return;
+        };
+        if let Some(v) = parse_bool(value) {
+            self.profiles
+                .entry(profile.to_ascii_lowercase())
+                .or_default()
+                .insert(step_id_from_env(key), v);
+        }
+    }
+
+    fn apply_apps(&mut self, key: &str, value: &str) {
+        match key {
+            "NEVER_QUIT" => self.apps.never_quit = Some(parse_list(value)),
+            "ALWAYS_QUIT" => self.apps.always_quit = Some(parse_list(value)),
+            _ => {}
+        }
+    }
+
+    fn apply_pre_commit(&mut self, key: &str, value: &str) {
+        if key == "REPOSITORIES" {
+            self.pre_commit.repositories = Some(parse_list(value));
+        }
+    }
+
+    fn apply_hooks(&mut self, key: &str, value: &str) {
+        let mut parts = key.splitn(2, "__");
+        let Some(step) = parts.next().filter(|step| !step.is_empty()) else {
+            return;
+        };
+        let Some(key) = parts.next().filter(|key| !key.is_empty()) else {
+            return;
+        };
+        let step = step_id_from_env(step);
+        let hooks = self.hooks.0.entry(step.clone()).or_default();
+        match key {
+            "PRE" => hooks.pre = Some(parse_list(value)),
+            "POST" => hooks.post = Some(parse_list(value)),
+            _ => {}
+        }
+    }
+}
+
 /// Builds the filter of one kind of item from its include and exclude lists.
 fn filter(include: &Option<Vec<String>>, exclude: &Option<Vec<String>>) -> NameFilter {
     NameFilter::new()
@@ -520,6 +713,57 @@ where
     Ok(value)
 }
 
+fn step_id_from_env(key: &str) -> String {
+    key.to_ascii_lowercase().replace('_', "-")
+}
+
+/// Parses a boolean environment value (`true` or `false`, case-insensitive).
+fn parse_bool(value: &str) -> Option<bool> {
+    match value.to_ascii_lowercase().as_str() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+/// Parses a decimal integer environment value.
+fn parse_u64(value: &str) -> Option<u64> {
+    value.parse().ok()
+}
+
+/// Parses a decimal integer environment value.
+fn parse_u8(value: &str) -> Option<u8> {
+    value.parse().ok()
+}
+
+/// Parses a decimal integer environment value.
+fn parse_usize(value: &str) -> Option<usize> {
+    value.parse().ok()
+}
+
+/// Parses a comma-separated list of names, dropping empty parts.
+fn parse_list(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Applies one environment override to a filter section (`[include]` or
+/// `[exclude]`).
+fn apply_filter(section: &mut FilterSection, key: &str, value: &str) {
+    match key {
+        "CASKS" => section.casks = Some(parse_list(value)),
+        "PACKAGES" => section.packages = Some(parse_list(value)),
+        "CONTAINERS" => section.containers = Some(parse_list(value)),
+        "PROJECTS" => section.projects = Some(parse_list(value)),
+        "APPSTORE" => section.appstore = Some(parse_list(value)),
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Config, ConfigEnvironment, ConfigError, Hooks, CONFIG_DIR_NAME, CONFIG_FILE_NAME};
@@ -556,6 +800,232 @@ mod tests {
         let config = parsed("");
 
         assert_eq!(config, Config::default());
+    }
+
+    fn apply_env(config: &mut Config, env: &[(&str, &str)]) {
+        config.apply_env_overrides(
+            env.iter()
+                .map(|(key, value)| (key.to_string(), value.to_string())),
+        );
+    }
+
+    #[test]
+    fn an_environment_variable_overrides_a_boolean_config_key() {
+        let mut config = parsed("[preflight]\nnetwork = true\n");
+
+        apply_env(&mut config, &[("FRESHEN_PREFLIGHT__NETWORK", "false")]);
+
+        assert_eq!(config.preflight.network, Some(false));
+    }
+
+    #[test]
+    fn an_environment_variable_overrides_an_integer_config_key() {
+        let mut config = parsed("[run]\njobs = 4\n");
+
+        apply_env(&mut config, &[("FRESHEN_RUN__JOBS", "8")]);
+
+        assert_eq!(config.run.jobs, Some(8));
+    }
+
+    #[test]
+    fn an_environment_variable_overrides_a_list_config_key() {
+        let mut config = parsed("[include]\ncasks = [\"firefox\"]\n");
+
+        apply_env(
+            &mut config,
+            &[("FRESHEN_INCLUDE__CASKS", "dropbox,  slack")],
+        );
+
+        assert_eq!(
+            config.include.casks,
+            Some(vec!["dropbox".to_owned(), "slack".to_owned()])
+        );
+    }
+
+    #[test]
+    fn an_environment_variable_overrides_a_step() {
+        let mut config = parsed("[steps]\nbrew-casks = true\n");
+
+        apply_env(&mut config, &[("FRESHEN_STEPS__BREW_CASKS", "false")]);
+
+        assert_eq!(config.steps.get("brew-casks"), Some(&false));
+    }
+
+    #[test]
+    fn an_environment_variable_overrides_a_hook() {
+        let mut config = parsed("[hooks.brew]\npre = [\"echo\", \"a\"]\n");
+
+        apply_env(&mut config, &[("FRESHEN_HOOKS__BREW__POST", "echo,done")]);
+
+        assert_eq!(
+            config.hooks().get("brew").cloned(),
+            Some(Hooks {
+                pre: Some(vec!["echo".to_owned(), "a".to_owned()]),
+                post: Some(vec!["echo".to_owned(), "done".to_owned()]),
+            })
+        );
+    }
+
+    #[test]
+    fn an_environment_variable_overrides_a_profile_step() {
+        let mut config = parsed("[profiles.work]\nbrew = true\n");
+
+        apply_env(&mut config, &[("FRESHEN_PROFILES__WORK__BREW", "false")]);
+
+        assert_eq!(
+            config.profile_steps("work").and_then(|map| map.get("brew")),
+            Some(&false)
+        );
+    }
+
+    #[test]
+    fn an_environment_variable_wins_over_the_configuration_file() {
+        let mut config = parsed("[run]\njobs = 4\n");
+
+        apply_env(&mut config, &[("FRESHEN_RUN__JOBS", "8")]);
+
+        assert_eq!(config.run.jobs, Some(8));
+    }
+
+    #[test]
+    fn an_unparseable_environment_value_is_ignored() {
+        let mut config = parsed("[run]\njobs = 4\n");
+
+        apply_env(&mut config, &[("FRESHEN_RUN__JOBS", "not-a-number")]);
+
+        assert_eq!(config.run.jobs, Some(4));
+    }
+
+    #[test]
+    fn an_out_of_range_environment_value_is_ignored() {
+        let mut config = parsed("[preflight]\nbattery_threshold = 20\n");
+
+        apply_env(
+            &mut config,
+            &[("FRESHEN_PREFLIGHT__BATTERY_THRESHOLD", "200")],
+        );
+
+        assert_eq!(config.preflight.battery_threshold, Some(20));
+    }
+
+    #[test]
+    fn zero_jobs_from_an_environment_variable_is_ignored() {
+        let mut config = parsed("[run]\njobs = 4\n");
+
+        apply_env(&mut config, &[("FRESHEN_RUN__JOBS", "0")]);
+
+        assert_eq!(config.run.jobs, Some(4));
+    }
+
+    #[test]
+    fn an_unknown_section_or_key_is_ignored() {
+        let mut config = Config::default();
+
+        apply_env(
+            &mut config,
+            &[
+                ("FRESHEN_NOPE__FOO", "bar"),
+                ("FRESHEN_PREFLIGHT__NOPE", "true"),
+            ],
+        );
+
+        assert_eq!(config, Config::default());
+    }
+
+    #[test]
+    fn every_config_key_can_be_overridden_by_an_environment_variable() {
+        let mut config = Config::default();
+
+        apply_env(
+            &mut config,
+            &[
+                ("FRESHEN_PREFLIGHT__NETWORK", "false"),
+                ("FRESHEN_PREFLIGHT__DISK_SPACE", "false"),
+                ("FRESHEN_PREFLIGHT__BATTERY", "false"),
+                ("FRESHEN_PREFLIGHT__METERED_CONNECTION", "false"),
+                ("FRESHEN_PREFLIGHT__MIN_FREE_DISK_GIB", "5"),
+                ("FRESHEN_PREFLIGHT__BATTERY_THRESHOLD", "35"),
+                ("FRESHEN_PACKAGE_MANAGER__ENABLED", "false"),
+                ("FRESHEN_PACKAGE_MANAGER__WAIT_SECONDS", "10"),
+                ("FRESHEN_TIMEOUTS__STEP_SECONDS", "120"),
+                ("FRESHEN_TIMEOUTS__TOTAL_SECONDS", "3600"),
+                ("FRESHEN_RUN__JOBS", "8"),
+                ("FRESHEN_RUN__SNAPSHOT_RETENTION", "3"),
+                ("FRESHEN_RUN__PRE_RUN", "echo,start"),
+                ("FRESHEN_RUN__POST_RUN", "echo,done"),
+                ("FRESHEN_STEPS__BREW_CASKS", "false"),
+                ("FRESHEN_INCLUDE__CASKS", "firefox"),
+                ("FRESHEN_INCLUDE__PACKAGES", "node"),
+                ("FRESHEN_INCLUDE__CONTAINERS", "web"),
+                ("FRESHEN_INCLUDE__PROJECTS", "stack"),
+                ("FRESHEN_INCLUDE__APPSTORE", "409203825"),
+                ("FRESHEN_EXCLUDE__CASKS", "dropbox"),
+                ("FRESHEN_EXCLUDE__PACKAGES", "python"),
+                ("FRESHEN_EXCLUDE__CONTAINERS", "old"),
+                ("FRESHEN_EXCLUDE__PROJECTS", "legacy"),
+                ("FRESHEN_EXCLUDE__APPSTORE", "123456789"),
+                ("FRESHEN_APPS__NEVER_QUIT", "com.docker"),
+                ("FRESHEN_APPS__ALWAYS_QUIT", "com.spotify"),
+                ("FRESHEN_PRE_COMMIT__REPOSITORIES", "/src/a,/src/b"),
+                ("FRESHEN_HOOKS__BREW__PRE", "echo,pre"),
+                ("FRESHEN_HOOKS__BREW__POST", "echo,post"),
+                ("FRESHEN_PROFILES__WORK__BREW_CASKS", "false"),
+            ],
+        );
+
+        assert_eq!(config.preflight.network, Some(false));
+        assert_eq!(config.preflight.disk_space, Some(false));
+        assert_eq!(config.preflight.battery, Some(false));
+        assert_eq!(config.preflight.metered_connection, Some(false));
+        assert_eq!(config.preflight.min_free_disk_gib, Some(5));
+        assert_eq!(config.preflight.battery_threshold, Some(35));
+        assert_eq!(config.package_manager.enabled, Some(false));
+        assert_eq!(config.package_manager.wait_seconds, Some(10));
+        assert_eq!(config.timeouts.step_seconds, Some(120));
+        assert_eq!(config.timeouts.total_seconds, Some(3600));
+        assert_eq!(config.run.jobs, Some(8));
+        assert_eq!(config.run.snapshot_retention, Some(3));
+        assert_eq!(
+            config.run.pre_run,
+            Some(vec!["echo".to_owned(), "start".to_owned()])
+        );
+        assert_eq!(
+            config.run.post_run,
+            Some(vec!["echo".to_owned(), "done".to_owned()])
+        );
+        assert_eq!(config.steps.get("brew-casks"), Some(&false));
+        assert_eq!(config.include.casks, Some(vec!["firefox".to_owned()]));
+        assert_eq!(config.include.packages, Some(vec!["node".to_owned()]));
+        assert_eq!(config.include.containers, Some(vec!["web".to_owned()]));
+        assert_eq!(config.include.projects, Some(vec!["stack".to_owned()]));
+        assert_eq!(config.include.appstore, Some(vec!["409203825".to_owned()]));
+        assert_eq!(config.exclude.casks, Some(vec!["dropbox".to_owned()]));
+        assert_eq!(config.exclude.packages, Some(vec!["python".to_owned()]));
+        assert_eq!(config.exclude.containers, Some(vec!["old".to_owned()]));
+        assert_eq!(config.exclude.projects, Some(vec!["legacy".to_owned()]));
+        assert_eq!(config.exclude.appstore, Some(vec!["123456789".to_owned()]));
+        assert_eq!(config.apps.never_quit, Some(vec!["com.docker".to_owned()]));
+        assert_eq!(
+            config.apps.always_quit,
+            Some(vec!["com.spotify".to_owned()])
+        );
+        assert_eq!(
+            config.pre_commit.repositories,
+            Some(vec!["/src/a".to_owned(), "/src/b".to_owned()])
+        );
+        assert_eq!(
+            config.hooks().get("brew").cloned(),
+            Some(Hooks {
+                pre: Some(vec!["echo".to_owned(), "pre".to_owned()]),
+                post: Some(vec!["echo".to_owned(), "post".to_owned()]),
+            })
+        );
+        assert_eq!(
+            config
+                .profile_steps("work")
+                .and_then(|map| map.get("brew-casks")),
+            Some(&false)
+        );
     }
 
     #[test]
