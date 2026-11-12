@@ -223,6 +223,35 @@ here are touched, so the step does nothing until at least one repository is
 configured. Each repository is updated with `pre-commit autoupdate`, run
 inside the repository checkout.
 
+### `[hooks.<step>]`
+
+Per-step commands that run before (`pre`) and after (`post`) a step's
+upgrade, keyed by step id. Each entry's first value is the program and the
+remaining values are its arguments. A step that is not named has no hooks.
+
+Every hook inherits the environment of the freshen process and gets these
+variables set on top, so it can decide what to do based on the step and the
+run:
+
+| Variable | Meaning |
+|---|---|
+| `FRESHEN_STEP_ID` | The step id, e.g. `brew` |
+| `FRESHEN_STEP_NAME` | The step's display name, e.g. `Homebrew` |
+| `FRESHEN_OPERATION` | The operation, `run` |
+| `FRESHEN_DRY_RUN` | `1` in `--dry-run`, otherwise `0` |
+
+A hook that cannot be started or exits unsuccessfully fails its step and
+prevents it from running.
+
+```toml
+[hooks.brew]
+pre = ["echo", "starting brew"]
+post = ["echo", "done brew"]
+
+[hooks.uv]
+pre = ["uv", "hook"]
+```
+
 ## Precedence
 
 1. A flag given on the command line wins.
