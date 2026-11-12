@@ -197,8 +197,7 @@ fn config_check(report: &mut DoctorReport, config_path: &Path, config_error: Opt
             report.push(DoctorFinding::error(
                 "config",
                 format!("configuration file does not exist: {}", path.display()),
-                "Create the file or drop --config if you did not mean to point at it."
-                    .to_string(),
+                "Create the file or drop --config if you did not mean to point at it.".to_string(),
             ));
         }
         Some(ConfigError::Read { path, source }) => {
