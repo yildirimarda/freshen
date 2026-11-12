@@ -274,22 +274,24 @@ mod tests {
             env::temp_dir().join(format!("freshen-custom-step-{}-{next}", std::process::id()));
         fs::create_dir_all(&dir)
             .unwrap_or_else(|error| panic!("failed to create {}: {error}", dir.display()));
-        let path = dir.join("custom-tool");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            let path = dir.join("custom-tool");
             fs::write(&path, "#!/bin/sh\nexit 0\n")
                 .unwrap_or_else(|error| panic!("failed to write {}: {error}", path.display()));
             fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap_or_else(|error| {
                 panic!("failed to make {} executable: {error}", path.display())
             });
+            path
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
         {
-            fs::write(&path, "")
+            let path = dir.join("custom-tool.bat");
+            fs::write(&path, "@echo off\r\nexit /b 0\r\n")
                 .unwrap_or_else(|error| panic!("failed to write {}: {error}", path.display()));
+            path
         }
-        path
     }
 
     #[test]
