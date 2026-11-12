@@ -379,7 +379,9 @@ impl Cli {
             .with_app_lists(config.app_lists())
             .with_pre_commit_repositories(config.pre_commit_repositories())
             .with_chocolatey_except(self.except.clone())
-            .with_hooks(config.hooks.clone()))
+            .with_hooks(config.hooks.clone())
+            .with_pre_run(config.run.pre_run.clone())
+            .with_post_run(config.run.post_run.clone()))
     }
 
     /// The per-step enable and disable flags, with the selected profile's
@@ -686,6 +688,8 @@ mod tests {
             run: RunSection {
                 jobs: Some(8),
                 snapshot_retention: Some(2),
+                pre_run: None,
+                post_run: None,
             },
             ..Config::default()
         };
@@ -757,6 +761,8 @@ mod tests {
             run: RunSection {
                 jobs: Some(8),
                 snapshot_retention: Some(2),
+                pre_run: None,
+                post_run: None,
             },
             ..Config::default()
         };

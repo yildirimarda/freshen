@@ -189,6 +189,12 @@ pub struct RunSection {
     /// How many pre-upgrade snapshot files to keep; `0` keeps every snapshot
     /// (default: `10`).
     pub snapshot_retention: Option<usize>,
+
+    /// The command that runs once before any step (default: none).
+    pub pre_run: Option<Vec<String>>,
+
+    /// The command that runs once after every step (default: none).
+    pub post_run: Option<Vec<String>>,
 }
 
 /// The `[include]` and `[exclude]` sections: the items a run may touch.

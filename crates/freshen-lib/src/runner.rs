@@ -431,6 +431,7 @@ pub struct RunSummary {
     rollback: Vec<RollbackCommand>,
     interrupted: bool,
     restore_failures: Vec<String>,
+    failure: Option<String>,
     container_runtime: Option<ActiveContainerRuntime>,
     restarted_services: Vec<String>,
     restarted_apps: Vec<String>,
@@ -444,6 +445,7 @@ impl RunSummary {
             rollback: Vec::new(),
             interrupted: false,
             restore_failures: Vec::new(),
+            failure: None,
             container_runtime: None,
             restarted_services: Vec::new(),
             restarted_apps: Vec::new(),
@@ -467,6 +469,15 @@ impl RunSummary {
 
     fn with_restore_failures(mut self, failures: Vec<String>) -> Self {
         self.restore_failures = failures;
+        self
+    }
+
+    /// Records a failure that is not tied to any single step, for example a
+    /// global pre or post hook that could not be started or exited
+    /// unsuccessfully.
+    #[must_use]
+    fn with_failure(mut self, failure: impl Into<String>) -> Self {
+        self.failure = Some(failure.into());
         self
     }
 
@@ -542,6 +553,13 @@ impl RunSummary {
         self.interrupted
     }
 
+    /// The failure that stopped the whole run, when it was not caused by a
+    /// single step, for example a global hook that failed.
+    #[must_use]
+    pub fn failure(&self) -> Option<&str> {
+        self.failure.as_deref()
+    }
+
     /// Restore commands that failed after an interrupt.
     #[must_use]
     pub fn restore_failures(&self) -> &[String] {
@@ -567,10 +585,11 @@ impl RunSummary {
         &self.restarted_apps
     }
 
-    /// Returns `true` when at least one step failed or timed out.
+    /// Returns `true` when at least one step failed or timed out, or the run
+    /// itself failed (for example because a global hook did).
     #[must_use]
     pub fn has_failures(&self) -> bool {
-        self.failed_count() > 0 || self.timed_out_count() > 0
+        self.failed_count() > 0 || self.timed_out_count() > 0 || self.failure.is_some()
     }
 
     /// Results of the steps that failed or timed out.
@@ -945,15 +964,34 @@ impl<'a> Runner<'a> {
         let mut results = Vec::with_capacity(self.steps.len());
         let mut interrupted = false;
         let mut timed_out = false;
+        let mut pre_run_failed = false;
+        let mut pre_run_failure: Option<String> = None;
         let run_started = Instant::now();
         let global_deadline = self
             .options
             .global_timeout()
             .map(|limit| Deadline::after(run_started, limit));
 
+        // --- pre_run hook: runs once before any step ---
+        if !interrupted && !(self.interrupt)() {
+            if let Some(command) = &self.options.pre_run() {
+                match run_hook(None, &self.options, command) {
+                    Ok(()) => {}
+                    Err(ProcessError::Interrupted { .. }) => {
+                        interrupted = true;
+                    }
+                    Err(error) => {
+                        pre_run_failed = true;
+                        pre_run_failure = Some(error.to_string());
+                    }
+                }
+            }
+        }
+
         for planned in self.steps.iter().copied() {
-            if interrupted || (self.interrupt)() {
-                interrupted = true;
+            let signaled = interrupted || (self.interrupt)();
+            if pre_run_failed || signaled {
+                interrupted = signaled;
                 let step = match planned {
                     PlannedStep::Run(step) | PlannedStep::Skip { step, .. } => step,
                 };
@@ -1058,14 +1096,28 @@ impl<'a> Runner<'a> {
             }
         }
 
-        RunSummary::from_results(results)
+        // --- post_run hook: runs once after every step ---
+        let mut post_run_failure: Option<String> = None;
+        if !pre_run_failed && !interrupted && !timed_out {
+            if let Some(command) = &self.options.post_run() {
+                if let Err(error) = run_hook(None, &self.options, command) {
+                    post_run_failure = Some(error.to_string());
+                }
+            }
+        }
+
+        let mut summary = RunSummary::from_results(results)
             .with_snapshot(snapshots.path().map(Path::to_path_buf))
             .with_rollback(snapshots.rollback_commands())
             .with_interrupted(interrupted)
             .with_restore_failures(restore_failures)
             .with_container_runtime(self.options.container_runtime().cloned())
             .with_restarted_services(restarted_services)
-            .with_restarted_apps(restarted_apps)
+            .with_restarted_apps(restarted_apps);
+        if let Some(failure) = pre_run_failure.or(post_run_failure) {
+            summary = summary.with_failure(failure);
+        }
+        summary
     }
 
     /// Detects every step and asks each installed one what is outdated,
@@ -1227,7 +1279,7 @@ fn run_step(
             // --- pre hook: runs before the step's upgrade ---
             if let Some(hook) = options.hooks().get(step.id()) {
                 if let Some(command) = &hook.pre {
-                    match run_hook(step, options, command) {
+                    match run_hook(Some(step), options, command) {
                         Ok(()) => {}
                         Err(ProcessError::Interrupted { .. }) => {
                             return StepResult::interrupted(step, started.elapsed());
@@ -1298,7 +1350,7 @@ fn run_step(
             // --- post hook: runs after the step's upgrade (and cleanup) ---
             if let Some(hook) = options.hooks().get(step.id()) {
                 if let Some(command) = &hook.post {
-                    if let Err(error) = run_hook(step, options, command) {
+                    if let Err(error) = run_hook(Some(step), options, command) {
                         if result.status() == StepStatus::Ok {
                             match error {
                                 ProcessError::Interrupted { .. } => {
@@ -1344,31 +1396,38 @@ fn run_step(
 ///
 /// Every hook inherits the environment of the freshen process and gets these
 /// variables set on top, so they win over anything the user exported. A hook
-/// can use them to decide what to do based on the step it surrounds and the
-/// kind of run it is part of.
+/// can use them to decide what to do based on the step it surrounds (when there
+/// is one) and the kind of run it is part of.
 #[must_use]
-fn run_environment(step: &dyn Step, options: &RunOptions) -> Vec<(OsString, OsString)> {
-    vec![
-        (OsString::from("FRESHEN_STEP_ID"), OsString::from(step.id())),
-        (
+fn run_environment(step: Option<&dyn Step>, options: &RunOptions) -> Vec<(OsString, OsString)> {
+    let mut env = Vec::with_capacity(4);
+    if let Some(step) = step {
+        env.push((OsString::from("FRESHEN_STEP_ID"), OsString::from(step.id())));
+        env.push((
             OsString::from("FRESHEN_STEP_NAME"),
             OsString::from(step.display_name()),
-        ),
-        (OsString::from("FRESHEN_OPERATION"), OsString::from("run")),
-        (
-            OsString::from("FRESHEN_DRY_RUN"),
-            OsString::from(if options.is_dry_run() { "1" } else { "0" }),
-        ),
-    ]
+        ));
+    }
+    env.push((OsString::from("FRESHEN_OPERATION"), OsString::from("run")));
+    env.push((
+        OsString::from("FRESHEN_DRY_RUN"),
+        OsString::from(if options.is_dry_run() { "1" } else { "0" }),
+    ));
+    env
 }
 
-/// Runs one hook command (`pre` or `post`) for a step.
+/// Runs one hook command (`pre` or `post`).
 ///
-/// The command inherits the environment of the freshen process and gets the
-/// run environment variables set on top. A hook that cannot be started or
-/// that exits unsuccessfully is an error the caller turns into a step
-/// failure.
-fn run_hook(step: &dyn Step, options: &RunOptions, command: &[String]) -> Result<(), ProcessError> {
+/// `step` is the step the hook surrounds, or `None` for a global hook that runs
+/// once around the whole run. The command inherits the environment of the
+/// freshen process and gets the run environment variables set on top. A hook
+/// that cannot be started or that exits unsuccessfully is an error the caller
+/// turns into a failure.
+fn run_hook(
+    step: Option<&dyn Step>,
+    options: &RunOptions,
+    command: &[String],
+) -> Result<(), ProcessError> {
     let mut spec = CommandSpec::new(command[0].as_str());
     for argument in &command[1..] {
         spec = spec.arg(argument.as_str());
@@ -1812,7 +1871,7 @@ mod tests {
         let step = FakeStep::new("brew", "Homebrew");
         let options = RunOptions::new();
 
-        let env: HashMap<String, String> = run_environment(&step, &options)
+        let env: HashMap<String, String> = run_environment(Some(&step), &options)
             .into_iter()
             .map(|(key, value)| {
                 (
@@ -1833,7 +1892,7 @@ mod tests {
         let step = FakeStep::new("uv", "uv");
         let options = RunOptions::new().with_dry_run(true);
 
-        let env: HashMap<String, String> = run_environment(&step, &options)
+        let env: HashMap<String, String> = run_environment(Some(&step), &options)
             .into_iter()
             .map(|(key, value)| {
                 (
@@ -1942,6 +2001,158 @@ mod tests {
         assert_eq!(result.status(), StepStatus::Failed);
         assert!(result.error().is_some());
         assert_eq!(run_calls.run.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn global_pre_and_post_hooks_run_around_the_run() {
+        let log = std::env::temp_dir().join(format!(
+            "freshen-hook-log-{pid}-{n}",
+            pid = std::process::id(),
+            n = STUB_COUNTER.fetch_add(1, Ordering::SeqCst),
+        ));
+        let log_path = log.to_string_lossy().into_owned();
+
+        let step = FakeStep::new("brew", "Homebrew");
+        let steps: Vec<&dyn Step> = vec![&step];
+        let hooks = HookSection(BTreeMap::from([(
+            "brew".to_owned(),
+            Hooks {
+                pre: Some(vec!["pre-hook".to_owned()]),
+                post: Some(vec!["post-hook".to_owned()]),
+            },
+        )]));
+        let options = RunOptions::new()
+            .with_hooks(hooks)
+            .with_pre_run(Some(vec!["pre-hook".to_owned()]))
+            .with_post_run(Some(vec!["post-hook".to_owned()]));
+
+        with_hook_stubs(&log_path, || {
+            let summary = Runner::with_options(steps.to_vec(), options.clone()).run();
+
+            assert_eq!(summary.ok_count(), 1);
+            assert_eq!(summary.failed_count(), 0);
+            assert!(!summary.has_failures());
+        });
+
+        let log = std::fs::read_to_string(&log)
+            .unwrap_or_else(|error| panic!("failed to read hook log {}: {error}", log.display()));
+        let mut lines = log.lines();
+        let Some(global_pre) = lines.next() else {
+            panic!("expected a global pre_run hook log line, got none")
+        };
+        let Some(step_pre) = lines.next() else {
+            panic!("expected a step pre hook log line, got none")
+        };
+        let Some(step_post) = lines.next() else {
+            panic!("expected a step post hook log line, got none")
+        };
+        let Some(global_post) = lines.next() else {
+            panic!("expected a global post_run hook log line, got none")
+        };
+        assert!(
+            lines.next().is_none(),
+            "expected exactly four hook log lines"
+        );
+        assert!(
+            global_pre.starts_with("pre ") && !global_pre.contains("brew"),
+            "unexpected global pre_run line: {global_pre}"
+        );
+        assert!(
+            step_pre.starts_with("pre brew"),
+            "unexpected step pre line: {step_pre}"
+        );
+        assert!(
+            step_post.starts_with("post brew"),
+            "unexpected step post line: {step_post}"
+        );
+        assert!(
+            global_post.starts_with("post ") && !global_post.contains("brew"),
+            "unexpected global post_run line: {global_post}"
+        );
+        let _ = std::fs::remove_file(&log);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failing_pre_run_hook_fails_the_run_and_skips_its_steps() {
+        let log = std::env::temp_dir().join(format!(
+            "freshen-hook-log-{pid}-{n}",
+            pid = std::process::id(),
+            n = STUB_COUNTER.fetch_add(1, Ordering::SeqCst),
+        ));
+        let log_path = log.to_string_lossy().into_owned();
+
+        let step = FakeStep::new("brew", "Homebrew");
+        let run_calls = step.calls();
+        let steps: Vec<&dyn Step> = vec![&step];
+        let options = RunOptions::new()
+            .with_pre_run(Some(vec!["fail-pre".to_owned()]))
+            .with_post_run(Some(vec!["post-hook".to_owned()]));
+
+        let summary = with_hook_stubs(&log_path, || {
+            Runner::with_options(steps.to_vec(), options.clone()).run()
+        });
+
+        assert!(
+            summary.failure().is_some(),
+            "expected a run-level failure, got {summary:?}"
+        );
+        assert_eq!(summary.ok_count(), 0);
+        assert_eq!(summary.failed_count(), 0);
+        assert!(summary.has_failures());
+        assert_eq!(run_calls.run.load(Ordering::SeqCst), 0);
+
+        // The failing pre_run hook aborts the run: no step ran.
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failing_post_run_hook_fails_the_run() {
+        let log = std::env::temp_dir().join(format!(
+            "freshen-hook-log-{pid}-{n}",
+            pid = std::process::id(),
+            n = STUB_COUNTER.fetch_add(1, Ordering::SeqCst),
+        ));
+        let log_path = log.to_string_lossy().into_owned();
+
+        let step = FakeStep::new("brew", "Homebrew");
+        let run_calls = step.calls();
+        let steps: Vec<&dyn Step> = vec![&step];
+        let options = RunOptions::new()
+            .with_pre_run(Some(vec!["pre-hook".to_owned()]))
+            .with_post_run(Some(vec!["fail-post".to_owned()]));
+
+        let summary = with_hook_stubs(&log_path, || {
+            Runner::with_options(steps.to_vec(), options.clone()).run()
+        });
+
+        assert!(
+            summary.failure().is_some(),
+            "expected a run-level failure, got {summary:?}"
+        );
+        assert_eq!(summary.ok_count(), 1);
+        assert_eq!(summary.failed_count(), 0);
+        assert!(summary.has_failures());
+        assert_eq!(run_calls.run.load(Ordering::SeqCst), 1);
+
+        // The step ran, the global pre hook ran, but the failing post hook
+        // wrote nothing and aborted the run.
+        let log = std::fs::read_to_string(&log)
+            .unwrap_or_else(|error| panic!("failed to read hook log {}: {error}", log.display()));
+        let mut lines = log.lines();
+        let Some(global_pre) = lines.next() else {
+            panic!("expected a global pre_run hook log line, got none")
+        };
+        assert!(
+            global_pre.starts_with("pre ") && !global_pre.contains("brew"),
+            "unexpected global pre_run line: {global_pre}"
+        );
+        assert!(
+            lines.next().is_none(),
+            "expected only the global pre_run hook log line"
+        );
+        let _ = std::fs::remove_file(&log);
     }
 
     #[cfg(unix)]

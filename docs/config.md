@@ -76,6 +76,8 @@ How the run itself behaves.
 |---|---|---|---|
 | `jobs` | integer | `4` | How many read-only `--check` queries run at the same time. At least `1`. |
 | `snapshot_retention` | integer | `10` | How many pre-upgrade snapshot files to keep. `0` keeps every snapshot. |
+| `pre_run` | list of names | none | A command that runs once before any step of the run. |
+| `post_run` | list of names | none | A command that runs once after every step of the run. |
 
 ### `[steps]`
 
@@ -251,6 +253,20 @@ post = ["echo", "done brew"]
 [hooks.uv]
 pre = ["uv", "hook"]
 ```
+
+A command can also run once around the whole run, independent of any step, with
+`pre_run` and `post_run` in the `[run]` section:
+
+```toml
+[run]
+pre_run = ["echo", "starting the run"]
+post_run = ["echo", "the run is done"]
+```
+
+A global hook inherits `FRESHEN_OPERATION` and `FRESHEN_DRY_RUN`, but not
+`FRESHEN_STEP_ID` or `FRESHEN_STEP_NAME`, since there is no step it surrounds.
+A failing `pre_run` hook aborts the run before any step runs; a failing
+`post_run` hook fails the run after the steps have run.
 
 ## Precedence
 
