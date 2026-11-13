@@ -438,6 +438,10 @@ pub struct RunSummary {
     container_runtime: Option<ActiveContainerRuntime>,
     restarted_services: Vec<String>,
     restarted_apps: Vec<String>,
+    /// The configuration file freshen read, when one was read.
+    config_path: Option<PathBuf>,
+    /// The configuration values that differ from the built-in defaults.
+    config_values: Vec<(String, String)>,
 }
 
 impl RunSummary {
@@ -452,6 +456,8 @@ impl RunSummary {
             container_runtime: None,
             restarted_services: Vec::new(),
             restarted_apps: Vec::new(),
+            config_path: None,
+            config_values: Vec::new(),
         }
     }
 
@@ -496,6 +502,19 @@ impl RunSummary {
 
     fn with_restarted_apps(mut self, apps: Vec<String>) -> Self {
         self.restarted_apps = apps;
+        self
+    }
+
+    /// Records the configuration file that was read and the values it set,
+    /// so the summary can print them.
+    #[must_use]
+    pub fn with_config(
+        mut self,
+        config_path: Option<PathBuf>,
+        config_values: &[(String, String)],
+    ) -> Self {
+        self.config_path = config_path;
+        self.config_values = config_values.to_vec();
         self
     }
 
@@ -651,6 +670,12 @@ impl fmt::Display for RunSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(runtime) = &self.container_runtime {
             writeln!(f, "Container runtime: {runtime}")?;
+        }
+        if let Some(path) = &self.config_path {
+            writeln!(f, "Configuration: {}", path.display())?;
+            for (key, value) in &self.config_values {
+                writeln!(f, "  {key} = {value}")?;
+            }
         }
         writeln!(
             f,
@@ -1582,10 +1607,43 @@ mod tests {
     use crate::system::Privilege;
     use crate::NoElevationProbe;
     use std::collections::{BTreeMap, HashMap};
+    use std::path::PathBuf;
     use std::process::ExitCode;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
+
+    #[test]
+    fn summary_displays_the_configuration_file_and_its_values() {
+        let summary = RunSummary::default().with_config(
+            Some(PathBuf::from("/home/user/.config/freshen/config.toml")),
+            &[
+                ("steps.brew-casks".to_owned(), "false".to_owned()),
+                ("include.casks".to_owned(), "firefox".to_owned()),
+            ],
+        );
+
+        let text = format!("{summary}");
+        assert!(
+            text.contains("Configuration: /home/user/.config/freshen/config.toml"),
+            "summary: {text}"
+        );
+        assert!(
+            text.contains("  steps.brew-casks = false"),
+            "summary: {text}"
+        );
+        assert!(
+            text.contains("  include.casks = firefox"),
+            "summary: {text}"
+        );
+    }
+
+    #[test]
+    fn summary_without_a_configuration_file_does_not_display_configuration() {
+        let summary = RunSummary::default();
+        let text = format!("{summary}");
+        assert!(!text.contains("Configuration:"), "summary: {text}");
+    }
 
     static INTERRUPT: AtomicBool = AtomicBool::new(false);
 

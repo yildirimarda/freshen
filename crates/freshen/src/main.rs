@@ -126,6 +126,8 @@ fn main() -> ExitCode {
             }
         }
     };
+    let config_loaded = config_error.is_none() && config_path.exists();
+    let config_values = config.non_default_values();
     let options = match cli.run_options_with(&config) {
         Ok(options) => options,
         Err(error) => {
@@ -196,6 +198,7 @@ fn main() -> ExitCode {
             platform,
             &config_path,
             config_error.as_ref(),
+            config_loaded.then_some(&config),
             privilege,
             &HostPreflightProbe,
         );
@@ -274,7 +277,8 @@ fn main() -> ExitCode {
 
     let summary =
         Runner::with_options_and_sudo(steps, options, sudo_available, privilege, elevation_probe())
-            .run();
+            .run()
+            .with_config(config_loaded.then_some(config_path.clone()), &config_values);
     log_event(
         &mut logger,
         &format!("run completed with exit code {:?}", summary.exit_code()),

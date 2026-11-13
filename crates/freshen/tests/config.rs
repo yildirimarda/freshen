@@ -278,3 +278,92 @@ fn a_world_writable_configuration_file_is_refused() {
         "stderr: {stderr}"
     );
 }
+
+#[test]
+fn the_run_summary_shows_the_configuration_file_and_its_values() {
+    let tools = StubTools::new(&["uv"]);
+    write_config(
+        &tools.config_path(),
+        r#"
+[preflight]
+network = false
+battery = false
+metered_connection = false
+min_free_disk_gib = 1
+
+[package_manager]
+enabled = false
+
+[steps]
+probe-0 = false
+
+[include]
+casks = ["firefox"]
+
+[run]
+jobs = 8
+"#,
+    );
+
+    let output = run(&tools, &[]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    let config_path = tools.config_path();
+    assert!(
+        text.contains(&format!("Configuration: {}", config_path.display())),
+        "summary: {text}"
+    );
+    assert!(text.contains("  steps.probe-0 = false"), "summary: {text}");
+    assert!(
+        text.contains("  include.casks = firefox"),
+        "summary: {text}"
+    );
+    assert!(text.contains("  run.jobs = 8"), "summary: {text}");
+}
+
+#[test]
+fn doctor_shows_the_configuration_file_and_its_values() {
+    let tools = StubTools::new(&["uv"]);
+    write_config(
+        &tools.config_path(),
+        r#"
+[preflight]
+network = false
+battery = false
+metered_connection = false
+min_free_disk_gib = 1
+
+[package_manager]
+enabled = false
+
+[steps]
+probe-0 = false
+
+[include]
+casks = ["firefox"]
+
+[run]
+jobs = 8
+"#,
+    );
+
+    let output = run(&tools, &["--doctor"]);
+
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("configuration file is valid"),
+        "doctor output: {text}"
+    );
+    assert!(text.contains("freshen is using"), "doctor output: {text}");
+    assert!(
+        text.contains("steps.probe-0 = false"),
+        "doctor output: {text}"
+    );
+    assert!(
+        text.contains("include.casks = firefox"),
+        "doctor output: {text}"
+    );
+    assert!(text.contains("run.jobs = 8"), "doctor output: {text}");
+}
