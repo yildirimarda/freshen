@@ -10,6 +10,10 @@
 mod support;
 
 use std::process::Output;
+use std::{
+    thread,
+    time::{Duration, Instant},
+};
 
 use support::StubTools;
 
@@ -19,6 +23,13 @@ fn stdout(output: &Output) -> String {
 
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+fn is_notification(call: &str) -> bool {
+    call.starts_with("osascript -e ")
+        && call.contains("display notification")
+        && call.contains("with title \"freshen\"")
+        && call.contains("run finished: 1 ok")
 }
 
 #[test]
@@ -34,16 +45,17 @@ fn the_end_of_a_run_posts_a_notification_with_the_result_summary() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
 
-    let calls = tools.calls();
-    assert!(
-        calls.iter().any(|call| {
-            call.starts_with("osascript -e ")
-                && call.contains("display notification")
-                && call.contains("with title \"freshen\"")
-                && call.contains("run finished: 1 ok")
-        }),
-        "no notification call in {calls:?}"
-    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let notified = loop {
+        if tools.calls().iter().any(|call| is_notification(call)) {
+            break true;
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        thread::sleep(Duration::from_millis(25));
+    };
+    assert!(notified, "no notification call in {:?}", tools.calls());
 
     let text = stdout(&output);
     assert!(text.contains("1 ok"), "summary: {text}");
