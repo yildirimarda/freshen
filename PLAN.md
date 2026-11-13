@@ -371,7 +371,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add a `history` subcommand listing previous runs and what each one changed (from the snapshots), covered by tests
 - [x] Add shell completions for zsh, bash, fish and PowerShell, covered by tests
 - [x] Add a man page, covered by tests
-- [ ] Add a `self-update` subcommand, covered by tests
+- [x] Add a `self-update` subcommand, covered by tests
 - [ ] Add an update-available hint that never blocks the run, covered by tests
 - [ ] Cap captured subprocess output (for example the last N bytes per stream) so a runaway command cannot exhaust memory, while still streaming every line live, covered by tests
 - [ ] Refuse to load the config file, hooks and custom steps from world-writable files or directories and print the offending path, covered by tests on Unix and with injected ACL facts on Windows

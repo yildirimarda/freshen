@@ -319,6 +319,8 @@ pub enum Command {
     },
     /// Print a man page for freshen.
     Man,
+    /// Upgrade freshen itself through the package manager that installed it.
+    SelfUpdate,
 }
 
 impl Cli {

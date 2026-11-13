@@ -97,6 +97,7 @@ pub mod runner;
 pub mod rustup;
 pub mod scoop;
 pub mod sdkman;
+pub mod self_update;
 pub mod service_restart;
 pub mod services_needing_restart;
 pub mod shell;

@@ -647,7 +647,7 @@ fn man_page_documents_the_flags() {
             "man page does not mention {flag}: {text}"
         );
     }
-    for subcommand in ["logs", "history", "completions", "man"] {
+    for subcommand in ["logs", "history", "completions", "man", "self-update"] {
         assert!(
             text.contains(subcommand),
             "man page does not mention {subcommand}: {text}"
