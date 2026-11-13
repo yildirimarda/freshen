@@ -270,6 +270,122 @@ fn logs_subcommand_is_listed_in_help() {
 }
 
 #[test]
+fn history_lists_previous_runs() {
+    let home = empty_home();
+    let snapshot_dir = home.join("snapshots");
+    std::fs::create_dir_all(&snapshot_dir)
+        .unwrap_or_else(|error| panic!("failed to create {}: {error}", snapshot_dir.display()));
+
+    // Newest run first, by filename timestamp.
+    std::fs::write(
+        snapshot_dir.join("snapshot-2026-07-20T22-13-20Z-1.txt"),
+        "# freshen pre-upgrade snapshot\n\
+         # created: 2026-07-20T22:13:20Z\n\
+         # freshen: 0.1.0\n\
+         \n\
+         ## brew\n\
+         \n\
+         $ brew list --versions\n\
+         jq 1.7.1\n\
+         python@3.11 3.11.6\n\
+         \n\
+         ## uv\n\
+         \n\
+         $ uv tool list\n\
+         ruff v0.6.0\n",
+    )
+    .unwrap_or_else(|error| panic!("failed to write snapshot: {error}"));
+    std::fs::write(
+        snapshot_dir.join("snapshot-2026-07-19T10-00-00Z-1.txt"),
+        "# freshen pre-upgrade snapshot\n\
+         # created: 2026-07-19T10:00:00Z\n\
+         # freshen: 0.1.0\n\
+         \n\
+         ## brew\n\
+         \n\
+         $ brew list --versions\n\
+         jq 1.7.0\n",
+    )
+    .unwrap_or_else(|error| panic!("failed to write snapshot: {error}"));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_freshen"))
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("XDG_CONFIG_HOME", home.join("config"))
+        .env("APPDATA", home.join("appdata"))
+        .env("FRESHEN_SNAPSHOT_DIR", &snapshot_dir)
+        .args(["history"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("Previous runs"), "history output: {text}");
+    assert!(
+        text.contains("2026-07-20T22:13:20Z"),
+        "history output: {text}"
+    );
+    assert!(
+        text.contains("2026-07-19T10:00:00Z"),
+        "history output: {text}"
+    );
+    assert!(text.contains("## brew"), "history output: {text}");
+    assert!(text.contains("## uv"), "history output: {text}");
+    assert!(
+        text.contains("$ brew list --versions"),
+        "history output: {text}"
+    );
+    assert!(text.contains("$ uv tool list"), "history output: {text}");
+    assert!(text.contains("jq 1.7.1"), "history output: {text}");
+    assert!(
+        text.contains("python@3.11 3.11.6"),
+        "history output: {text}"
+    );
+    assert!(text.contains("ruff v0.6.0"), "history output: {text}");
+    // Newest run is listed first.
+    let newest = text
+        .find("2026-07-20T22:13:20Z")
+        .unwrap_or_else(|| panic!("newest run not in history output: {text}"));
+    let older = text
+        .find("2026-07-19T10:00:00Z")
+        .unwrap_or_else(|| panic!("older run not in history output: {text}"));
+    assert!(newest < older, "newest run should be listed first: {text}");
+}
+
+#[test]
+fn history_with_no_previous_run_prints_nothing() {
+    let home = empty_home();
+    let snapshot_dir = home.join("snapshots");
+    std::fs::create_dir_all(&snapshot_dir)
+        .unwrap_or_else(|error| panic!("failed to create {}: {error}", snapshot_dir.display()));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_freshen"))
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("XDG_CONFIG_HOME", home.join("config"))
+        .env("APPDATA", home.join("appdata"))
+        .env("FRESHEN_SNAPSHOT_DIR", &snapshot_dir)
+        .args(["history"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).is_empty(), "stdout: {:?}", stdout(&output));
+}
+
+#[test]
+fn history_subcommand_is_listed_in_help() {
+    let output = run(&["--help"]);
+
+    assert!(output.status.success());
+    let text = stdout(&output);
+    assert!(
+        text.contains("history"),
+        "help does not mention the history subcommand: {text}"
+    );
+}
+
+#[test]
 fn dry_run_with_every_builtin_step_excluded_plans_nothing() {
     let output = run(&[
         "--dry-run",

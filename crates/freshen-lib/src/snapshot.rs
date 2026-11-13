@@ -351,6 +351,103 @@ impl SnapshotRecorder {
     }
 }
 
+/// A previously recorded snapshot file, listed by `freshen history`.
+#[derive(Debug, Clone)]
+pub struct SnapshotRecord {
+    /// Path of the snapshot file.
+    pub path: PathBuf,
+    /// Creation timestamp from the file header (`# created:`), if present.
+    pub created: Option<String>,
+    /// Sections captured by the run, in file order.
+    pub sections: Vec<SnapshotSectionInfo>,
+}
+
+/// One section captured in a snapshot file.
+#[derive(Debug, Clone)]
+pub struct SnapshotSectionInfo {
+    /// Step id / group the section belongs to.
+    pub group: String,
+    /// Commands run to capture the section, with their output.
+    pub entries: Vec<SnapshotEntryInfo>,
+}
+
+/// One captured command and its output within a snapshot section.
+#[derive(Debug, Clone)]
+pub struct SnapshotEntryInfo {
+    /// The command that was run.
+    pub command: String,
+    /// Its captured output.
+    pub output: String,
+}
+
+/// Lists every snapshot file in `directory`, newest first.
+///
+/// Returns an empty vector when the directory does not exist.
+pub fn list_snapshots(directory: &Path) -> io::Result<Vec<SnapshotRecord>> {
+    let mut records = Vec::new();
+    match fs::read_dir(directory) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry?;
+                let path = entry.path();
+                if !entry.file_type()?.is_file() || !is_snapshot_file(&path) {
+                    continue;
+                }
+                records.push(parse_snapshot_file(&path)?);
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    }
+    records.sort_by(|a, b| b.path.cmp(&a.path));
+    Ok(records)
+}
+
+fn parse_snapshot_file(path: &Path) -> io::Result<SnapshotRecord> {
+    let text = fs::read_to_string(path)?;
+    let mut created = None;
+    let mut sections = Vec::new();
+    let mut current_group: Option<String> = None;
+    let mut current_entries: Vec<SnapshotEntryInfo> = Vec::new();
+
+    for line in text.lines() {
+        if let Some(timestamp) = line.strip_prefix("# created: ") {
+            created = Some(timestamp.to_owned());
+        } else if let Some(group) = line.strip_prefix("## ") {
+            if let Some(group) = current_group.take() {
+                sections.push(SnapshotSectionInfo {
+                    group,
+                    entries: current_entries,
+                });
+                current_entries = Vec::new();
+            }
+            current_group = Some(group.to_owned());
+        } else if let Some(command) = line.strip_prefix("$ ") {
+            current_entries.push(SnapshotEntryInfo {
+                command: command.to_owned(),
+                output: String::new(),
+            });
+        } else if let Some(entry) = current_entries.last_mut() {
+            if !entry.output.is_empty() {
+                entry.output.push('\n');
+            }
+            entry.output.push_str(line);
+        }
+    }
+    if let Some(group) = current_group.take() {
+        sections.push(SnapshotSectionInfo {
+            group,
+            entries: current_entries,
+        });
+    }
+
+    Ok(SnapshotRecord {
+        path: path.to_path_buf(),
+        created,
+        sections,
+    })
+}
+
 impl CapturedSection {
     fn rollback_commands(&self) -> Vec<RollbackCommand> {
         let mut commands = Vec::new();
@@ -599,7 +696,10 @@ fn create_snapshot_file(directory: &Path) -> io::Result<(PathBuf, File)> {
     ))
 }
 
-fn snapshot_directory() -> PathBuf {
+/// The directory snapshot files are written to, honouring
+/// [`SNAPSHOT_DIR_ENV`] and falling back to the OS-appropriate location.
+#[must_use]
+pub fn snapshot_directory() -> PathBuf {
     if let Some(directory) = env::var_os(SNAPSHOT_DIR_ENV).filter(|directory| !directory.is_empty())
     {
         return PathBuf::from(directory);

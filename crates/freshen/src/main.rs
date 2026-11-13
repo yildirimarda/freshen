@@ -7,6 +7,7 @@ use std::process::ExitCode;
 use clap::Parser;
 use freshen_lib::doctor;
 use freshen_lib::logging::{LogFile, LoggingEnvironment};
+use freshen_lib::snapshot::{list_snapshots, snapshot_directory, SnapshotRecord};
 use freshen_lib::sudo::{HostSudoProbe, SudoState};
 #[cfg(windows)]
 use freshen_lib::HostElevationProbe;
@@ -48,6 +49,22 @@ fn main() -> ExitCode {
             print!("{last_run}");
         }
         return exit::code(exit::OK);
+    }
+
+    // The `history` subcommand only reads snapshot files; it never changes
+    // anything, so it is handled before this run's own log line is recorded.
+    if let Some(cli::Command::History) = cli.command {
+        let directory = snapshot_directory();
+        match list_snapshots(&directory) {
+            Ok(records) => {
+                print_history(&records);
+                return exit::code(exit::OK);
+            }
+            Err(error) => {
+                eprintln!("freshen: {error}");
+                return exit::code(exit::STEP_FAILURE);
+            }
+        }
     }
 
     // Log to a rotating file in the OS-appropriate location. Logging never
@@ -425,5 +442,31 @@ fn elevation_probe() -> &'static dyn freshen_lib::ElevationProbe {
 fn log_event(logger: &mut Option<LogFile>, message: &str) {
     if let Some(logger) = logger {
         let _ = logger.write(message);
+    }
+}
+
+/// Prints the recorded snapshot files, newest first.
+///
+/// Each run shows when it was created and every section it captured, so the
+/// user can see what each previous run changed.
+fn print_history(records: &[SnapshotRecord]) {
+    if records.is_empty() {
+        return;
+    }
+
+    println!("Previous runs:");
+    for record in records {
+        let created = record.created.as_deref().unwrap_or("unknown time");
+        println!();
+        println!("{created}");
+        for section in &record.sections {
+            println!("  ## {}", section.group);
+            for entry in &section.entries {
+                println!("    $ {}", entry.command);
+                for line in entry.output.lines() {
+                    println!("    {line}");
+                }
+            }
+        }
     }
 }

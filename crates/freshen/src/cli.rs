@@ -308,6 +308,8 @@ pub struct Cli {
 pub enum Command {
     /// Show the log of the last freshen run.
     Logs,
+    /// List previous runs and what each one changed, from the snapshots.
+    History,
 }
 
 impl Cli {
