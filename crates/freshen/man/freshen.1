@@ -143,6 +143,12 @@ Reinstall outdated \fBgo install\fR binaries instead of only reporting them
 Update AWS CLI v2 through the official installer instead of only reporting that
 a newer version is available (opt-in, off by default).
 .TP
+.B --trust-config
+Trust every hook and custom step from the configuration file without
+prompting, recording their hashes in the trust store next to the configuration
+file. Without this flag a new or changed hook or custom step requires an
+interactive confirmation before it runs, and a non-interactive run refuses it.
+.TP
 .B --snapshot-retention COUNT
 Keep this many pre-upgrade snapshot files (0 keeps every snapshot, default 10).
 .TP

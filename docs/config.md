@@ -293,6 +293,28 @@ the `[steps]` section like any other step. A custom step is detected when its
 program exists on `PATH`, and its `command` is run during the upgrade. It
 reports itself as up to date in `--check` mode.
 
+### Trusting commands from the configuration file
+
+Hooks and custom steps run arbitrary commands, so freshen does not run a
+command from the configuration file the first time it sees it, or the first
+time its command changes, without an explicit opt-in. The command is identified
+by a hash of its program and arguments, recorded in `trusted.toml` next to the
+configuration file:
+
+```toml
+# ~/.config/freshen/trusted.toml
+[trusted]
+"hook:brew:pre" = "sha256:v1:..."
+"custom_step:my-linter" = "sha256:v1:..."
+```
+
+Run `freshen --trust-config` to trust every hook and custom step from the
+configuration file without prompting and record their hashes. Without the flag,
+freshen prints a confirmation prompt and, when the user answers yes, records
+the hash so the command is trusted on later runs. A non-interactive run that
+cannot confirm refuses to run the command (the step fails) unless
+`--trust-config` was given; `--yes` alone does not substitute for it.
+
 ## Precedence
 
 1. A flag given on the command line wins.

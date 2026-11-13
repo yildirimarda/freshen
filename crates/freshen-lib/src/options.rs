@@ -20,6 +20,7 @@ use crate::preflight::PreflightConfig;
 use crate::registry::{Registry, RegistryError};
 use crate::snapshot::DEFAULT_SNAPSHOT_RETENTION;
 use crate::step::{Step, StepId};
+use crate::trust::TrustStore;
 
 /// Default number of steps `--check` queries at the same time.
 pub const DEFAULT_JOBS: usize = 4;
@@ -246,6 +247,8 @@ pub struct RunOptions {
     prune_report: bool,
     go_update: bool,
     install_aws_cli_updates: bool,
+    trust_config: bool,
+    trust_store: Option<TrustStore>,
     hooks: HookSection,
     pre_run: Option<Vec<String>>,
     post_run: Option<Vec<String>>,
@@ -554,6 +557,22 @@ impl RunOptions {
         self
     }
 
+    /// Sets `--trust-config`: trust every hook and custom step from the
+    /// configuration file without prompting, recording their hashes.
+    #[must_use]
+    pub fn with_trust_config(mut self, trust_config: bool) -> Self {
+        self.trust_config = trust_config;
+        self
+    }
+
+    /// Sets the trust store that records which hooks and custom steps are
+    /// trusted to run. `None` disables trust checks.
+    #[must_use]
+    pub fn with_trust_store(mut self, trust_store: Option<TrustStore>) -> Self {
+        self.trust_store = trust_store;
+        self
+    }
+
     /// Replaces the per-step pre and post hooks.
     #[must_use]
     pub fn with_hooks(mut self, hooks: HookSection) -> Self {
@@ -841,6 +860,20 @@ impl RunOptions {
     #[must_use]
     pub fn install_aws_cli_updates(&self) -> bool {
         self.install_aws_cli_updates
+    }
+
+    /// Returns `true` when `--trust-config` trusts every hook and custom step
+    /// from the configuration file without prompting.
+    #[must_use]
+    pub fn trust_config(&self) -> bool {
+        self.trust_config
+    }
+
+    /// The trust store that records which hooks and custom steps are trusted
+    /// to run, or `None` when trust checks are disabled.
+    #[must_use]
+    pub fn trust_store(&self) -> Option<&TrustStore> {
+        self.trust_store.as_ref()
     }
 
     /// The per-step pre and post hooks, keyed by step id.

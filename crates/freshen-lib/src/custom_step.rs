@@ -22,10 +22,12 @@
 use serde::Deserialize;
 
 use crate::executable;
+use crate::options::RunOptions;
 use crate::output::human;
 use crate::platform::Platform;
 use crate::process::CommandSpec;
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
+use crate::trust::ensure_trusted;
 
 /// One custom step as written in the configuration file.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -171,16 +173,59 @@ impl Step for CustomStep {
             .map_err(|error| StepError::run_from_process(self.id, &error))
     }
 
+    /// Performs the upgrade with the options of the current run.
+    ///
+    /// A new or changed command is not trusted until `--trust-config` is
+    /// given or the user confirms it interactively; an unconfirmed command is
+    /// refused and the step fails.
+    fn run_with_options(&self, options: &RunOptions) -> Result<(), StepError> {
+        if let Some(store) = options.trust_store() {
+            let key = format!("custom_step:{}", self.id());
+            let command: Vec<String> =
+                std::iter::once(self.command.program().to_string_lossy().into_owned())
+                    .chain(
+                        self.command
+                            .arguments()
+                            .iter()
+                            .map(|argument| argument.to_string_lossy().into_owned()),
+                    )
+                    .collect();
+            match ensure_trusted(
+                store,
+                &key,
+                &command,
+                options.assume_yes(),
+                options.trust_config(),
+            ) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(StepError::run(
+                        self.id,
+                        format!(
+                        "custom step `{}` is not trusted; run with --trust-config or confirm it",
+                        self.id
+                    ),
+                    ))
+                }
+                Err(error) => return Err(StepError::run(self.id, error.to_string())),
+            }
+        }
+        self.run()
+    }
+
     fn platforms(&self) -> &'static [Platform] {
         self.platforms
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{CustomStep, CustomStepConfig, CustomStepError};
+    use crate::options::RunOptions;
     use crate::platform::Platform;
     use crate::step::{Detection, Step};
+    use crate::trust::TrustStore;
     use std::env;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -342,5 +387,83 @@ mod tests {
         assert_eq!(step.id(), "any");
         assert_eq!(step.display_name(), "any");
         assert_eq!(step.platforms(), Platform::ALL);
+    }
+
+    fn trust_store_path() -> PathBuf {
+        let dir = env::temp_dir().join(format!(
+            "freshen-custom-step-trust-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir.join("trusted.toml")
+    }
+
+    #[test]
+    fn run_with_options_runs_a_step_when_no_trust_store_is_configured() {
+        let path = temp_executable();
+        let step = parse(&config("tool", &[path.to_string_lossy().as_ref()]));
+
+        assert!(step.run_with_options(&RunOptions::new()).is_ok());
+
+        let _ = fs::remove_dir_all(path.parent().unwrap_or(Path::new(".")));
+    }
+
+    #[test]
+    fn run_with_options_refuses_an_untrusted_custom_step_without_trust_config() {
+        let path = trust_store_path();
+        let store = TrustStore::load(&path).unwrap();
+        let step = parse(&config("tool", &["freshen-does-not-exist-xyz"]));
+        let options = RunOptions::new().with_trust_store(Some(store));
+
+        let error = step.run_with_options(&options).unwrap_err();
+        assert!(
+            error.message().contains("is not trusted"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn run_with_options_trusts_a_custom_step_with_trust_config_and_records_its_hash() {
+        let path = trust_store_path();
+        let executable = temp_executable();
+        let step = parse(&config("tool", &[executable.to_string_lossy().as_ref()]));
+        let options = RunOptions::new()
+            .with_trust_config(true)
+            .with_trust_store(Some(TrustStore::load(&path).unwrap()));
+
+        assert!(step.run_with_options(&options).is_ok());
+
+        let reloaded = TrustStore::load(&path).unwrap();
+        assert!(reloaded.is_trusted(
+            "custom_step:tool",
+            &crate::trust::hash_command(&[executable.to_string_lossy().into_owned()])
+        ));
+
+        let _ = fs::remove_dir_all(executable.parent().unwrap_or(Path::new(".")));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn run_with_options_refuses_a_changed_custom_step_command() {
+        let path = trust_store_path();
+        let store = TrustStore::load(&path).unwrap();
+        store
+            .record(
+                "custom_step:tool",
+                &crate::trust::hash_command(&["old".to_owned()]),
+            )
+            .unwrap();
+        let step = parse(&config("tool", &["new"]));
+        let options = RunOptions::new().with_trust_store(Some(store));
+
+        let error = step.run_with_options(&options).unwrap_err();
+        assert!(
+            error.message().contains("is not trusted"),
+            "unexpected error: {error}"
+        );
     }
 }
