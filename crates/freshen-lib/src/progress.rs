@@ -173,7 +173,9 @@ mod tests {
     static NO_COLOR_LOCK: Mutex<()> = Mutex::new(());
 
     fn no_color_lock() -> std::sync::MutexGuard<'static, ()> {
-        NO_COLOR_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        NO_COLOR_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn restore_no_color(previous: Option<String>) {
