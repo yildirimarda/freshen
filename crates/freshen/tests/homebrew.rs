@@ -894,7 +894,12 @@ fn quits_running_cask_apps_before_the_upgrade_and_reopens_after_cleanup() {
     let output = run_apps(&tools, &state, &[], &[]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert_eq!(tools.step_calls(), full_app_transcript(&app));
+    let calls: Vec<String> = tools
+        .step_calls()
+        .into_iter()
+        .filter(|call| !is_desktop_notification_call(call))
+        .collect();
+    assert_eq!(calls, full_app_transcript(&app));
 
     let text = stdout(&output);
     assert!(
@@ -1211,7 +1216,12 @@ fn skip_quitting_at_the_prompt_upgrades_casks_without_quitting_apps() {
     expected.push("brew upgrade --cask".to_string());
     expected.extend(brew_autoremove_steps().iter().map(|&s| s.to_string()));
     expected.extend(brew_cleanup_steps().iter().map(|&s| s.to_string()));
-    assert_eq!(tools.step_calls(), expected);
+    let calls: Vec<String> = tools
+        .step_calls()
+        .into_iter()
+        .filter(|call| !is_desktop_notification_call(call))
+        .collect();
+    assert_eq!(calls, expected);
 
     let text = stdout(&output);
     assert!(
@@ -1260,6 +1270,16 @@ fn skip_casks_at_the_prompt_skips_the_cask_upgrade() {
     );
 }
 
+/// The end-of-run desktop notification (`osascript` on macOS, `notify-send`
+/// on Linux) is not a Homebrew step and is not part of the expected command
+/// transcript: on Linux `notify-send` is not stubbed here so nothing is
+/// recorded, and on macOS the `osascript` call carries a non-deterministic
+/// duration.
+fn is_desktop_notification_call(call: &str) -> bool {
+    call.starts_with("osascript -e display notification ")
+        && call.contains("with title \"freshen\"")
+}
+
 #[cfg(unix)]
 #[test]
 fn never_quits_the_terminal_running_the_script() {
@@ -1286,7 +1306,12 @@ fn never_quits_the_terminal_running_the_script() {
     expected.push("brew upgrade --cask".to_string());
     expected.extend(brew_autoremove_steps().iter().map(|&s| s.to_string()));
     expected.extend(brew_cleanup_steps().iter().map(|&s| s.to_string()));
-    assert_eq!(tools.step_calls(), expected);
+    let calls: Vec<String> = tools
+        .step_calls()
+        .into_iter()
+        .filter(|call| !is_desktop_notification_call(call))
+        .collect();
+    assert_eq!(calls, expected);
 
     let text = stdout(&output);
     assert!(
