@@ -9,7 +9,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use crate::config::ConfigError;
+use crate::config::{Config, ConfigError};
 use crate::options::RunOptions;
 use crate::platform::Platform;
 use crate::preflight::{PreflightConfig, PreflightProbe, PreflightReport};
@@ -152,20 +152,24 @@ impl fmt::Display for DoctorReport {
 /// Runs every doctor check and returns the collected report.
 ///
 /// `config_error` is the error from loading the configuration file, when any.
+/// `config` is the loaded configuration, or `None` when no configuration file
+/// was read; its non-default values are reported as informational findings.
 /// `preflight` probes the host for network, disk, battery and metered-connection
 /// facts; tests inject a fake probe instead of reading the real machine.
+#[allow(clippy::too_many_arguments)]
 pub fn doctor(
     registry: &Registry,
     options: &RunOptions,
     platform: Platform,
     config_path: &Path,
     config_error: Option<&ConfigError>,
+    config: Option<&Config>,
     privilege: Privilege,
     preflight: &dyn PreflightProbe,
 ) -> DoctorReport {
     let mut report = DoctorReport::default();
 
-    config_check(&mut report, config_path, config_error);
+    config_check(&mut report, config_path, config_error, config);
     permissions_check(&mut report, config_path);
     privilege_check(&mut report, privilege);
     tools_check(&mut report, registry, platform);
@@ -176,7 +180,12 @@ pub fn doctor(
 }
 
 /// Reports whether the configuration file is valid and readable.
-fn config_check(report: &mut DoctorReport, config_path: &Path, config_error: Option<&ConfigError>) {
+fn config_check(
+    report: &mut DoctorReport,
+    config_path: &Path,
+    config_error: Option<&ConfigError>,
+    config: Option<&Config>,
+) {
     match config_error {
         Some(ConfigError::Invalid {
             path,
@@ -215,7 +224,7 @@ fn config_check(report: &mut DoctorReport, config_path: &Path, config_error: Opt
             ));
         }
         None => {
-            if config_path.exists() {
+            if let Some(config) = config {
                 report.push(DoctorFinding::info(
                     "config",
                     "configuration file is valid",
@@ -224,6 +233,13 @@ fn config_check(report: &mut DoctorReport, config_path: &Path, config_error: Opt
                         config_path = config_path.display()
                     ),
                 ));
+                for (key, value) in config.non_default_values() {
+                    report.push(DoctorFinding::info(
+                        "config",
+                        format!("{key} = {value}"),
+                        String::new(),
+                    ));
+                }
             } else {
                 report.push(DoctorFinding::info(
                     "config",
@@ -364,14 +380,14 @@ fn preflight_fix(check: crate::preflight::PreflightCheck) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{doctor, DoctorFinding, DoctorReport};
-    use crate::config::ConfigError;
+    use crate::config::{Config, ConfigError};
     use crate::options::RunOptions;
     use crate::platform::Platform;
     use crate::preflight::{BatteryStatus, PreflightProbe};
     use crate::registry::Registry;
     use crate::step::{CheckReport, Detection, Step, StepError, StepId};
     use crate::system::Privilege;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     /// A fake probe that returns fixed preflight facts.
     struct FakeProbe {
@@ -491,6 +507,7 @@ mod tests {
     fn run_doctor(
         steps: impl IntoIterator<Item = TestStep>,
         config_error: Option<ConfigError>,
+        config: Option<&Config>,
         privilege: Privilege,
         preflight: FakeProbe,
     ) -> DoctorReport {
@@ -503,6 +520,7 @@ mod tests {
             Platform::Linux,
             &config_path,
             config_error.as_ref(),
+            config,
             privilege,
             &preflight,
         )
@@ -521,6 +539,7 @@ mod tests {
         let report = run_doctor(
             [TestStep::new("brew", &Platform::ALL)],
             None,
+            None,
             Privilege::StandardUser,
             FakeProbe::default(),
         );
@@ -536,6 +555,7 @@ mod tests {
                 TestStep::new("brew", &Platform::ALL),
                 TestStep::new("uv", &Platform::ALL).detection(Ok(Detection::NotInstalled)),
             ],
+            None,
             None,
             Privilege::StandardUser,
             FakeProbe::default(),
@@ -554,6 +574,7 @@ mod tests {
         let report = run_doctor(
             [TestStep::new("mas", &[Platform::Macos]).detection(Ok(Detection::NotInstalled))],
             None,
+            None,
             Privilege::StandardUser,
             FakeProbe::default(),
         );
@@ -567,6 +588,7 @@ mod tests {
         let report = run_doctor(
             [TestStep::new("brew", &Platform::ALL)
                 .detection(Err(StepError::detect("brew", "command not found")))],
+            None,
             None,
             Privilege::StandardUser,
             FakeProbe::default(),
@@ -590,6 +612,7 @@ mod tests {
         let report = run_doctor(
             [TestStep::new("brew", &Platform::ALL)],
             Some(error),
+            None,
             Privilege::StandardUser,
             FakeProbe::default(),
         );
@@ -614,6 +637,7 @@ mod tests {
         let report = run_doctor(
             [TestStep::new("brew", &Platform::ALL)],
             Some(error),
+            None,
             Privilege::StandardUser,
             FakeProbe::default(),
         );
@@ -631,6 +655,7 @@ mod tests {
         // passed, so the doctor reports the optional default as informational.
         let report = run_doctor(
             [TestStep::new("brew", &Platform::ALL)],
+            None,
             None,
             Privilege::StandardUser,
             FakeProbe::default(),
@@ -655,6 +680,7 @@ mod tests {
         let report = run_doctor(
             [TestStep::new("brew", &Platform::ALL)],
             None,
+            None,
             Privilege::StandardUser,
             probe,
         );
@@ -678,6 +704,7 @@ mod tests {
         let report = run_doctor(
             [TestStep::new("brew", &Platform::ALL)],
             None,
+            None,
             Privilege::StandardUser,
             FakeProbe::default(),
         );
@@ -699,6 +726,7 @@ mod tests {
         let report = run_doctor(
             [],
             Some(error),
+            None,
             Privilege::StandardUser,
             FakeProbe::default(),
         );
@@ -715,11 +743,63 @@ mod tests {
         let report = run_doctor(
             [TestStep::new("uv", &Platform::ALL).detection(Ok(Detection::NotInstalled))],
             None,
+            None,
             Privilege::StandardUser,
             FakeProbe::default(),
         );
 
         assert!(report.is_healthy());
         assert_eq!(report.exit_code(), crate::exit::code(crate::exit::OK));
+    }
+
+    #[test]
+    fn config_values_are_reported_as_informational_findings() {
+        let config = Config::parse(
+            Path::new("/tmp/freshen-doctor-test/config.toml"),
+            r#"
+[steps]
+brew-casks = false
+
+[run]
+jobs = 8
+
+[include]
+casks = ["firefox"]
+"#,
+        )
+        .unwrap_or_else(|error| panic!("expected a valid configuration, got {error}"));
+
+        let report = run_doctor(
+            [TestStep::new("brew", &Platform::ALL)],
+            None,
+            Some(&config),
+            Privilege::StandardUser,
+            FakeProbe::default(),
+        );
+
+        assert!(report.is_healthy());
+        let config_findings = findings_by_area(&report, "config");
+        assert!(
+            config_findings
+                .iter()
+                .any(|f| f.problem == "configuration file is valid"),
+            "config findings: {config_findings:?}"
+        );
+        assert!(
+            config_findings
+                .iter()
+                .any(|f| f.problem == "steps.brew-casks = false"),
+            "config findings: {config_findings:?}"
+        );
+        assert!(
+            config_findings.iter().any(|f| f.problem == "run.jobs = 8"),
+            "config findings: {config_findings:?}"
+        );
+        assert!(
+            config_findings
+                .iter()
+                .any(|f| f.problem == "include.casks = firefox"),
+            "config findings: {config_findings:?}"
+        );
     }
 }

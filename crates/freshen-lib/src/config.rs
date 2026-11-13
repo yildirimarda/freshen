@@ -432,6 +432,236 @@ impl Config {
     pub fn profile_steps(&self, name: &str) -> Option<&BTreeMap<String, bool>> {
         self.profiles.get(name)
     }
+
+    /// The configuration values that differ from the built-in defaults, as
+    /// `(key, value)` pairs in a stable order.
+    ///
+    /// A value counts as set when it differs from what freshen uses with no
+    /// configuration file: a present option, a non-empty list, or a named
+    /// step, profile or hook. Built-in defaults are not listed, so a
+    /// configuration that only uses defaults reports nothing.
+    #[must_use]
+    pub fn non_default_values(&self) -> Vec<(String, String)> {
+        let default = Config::default();
+        let mut values: Vec<(String, String)> = Vec::new();
+
+        let mut emit = |key: &str, value: &str| {
+            values.push((key.to_owned(), value.to_owned()));
+        };
+
+        macro_rules! option {
+            ($actual:expr, $default:expr, $key:expr) => {
+                if $actual != $default {
+                    emit(
+                        $key,
+                        &$actual.map(|value| value.to_string()).unwrap_or_default(),
+                    );
+                }
+            };
+        }
+
+        // [preflight]
+        option!(
+            self.preflight.network,
+            default.preflight.network,
+            "preflight.network"
+        );
+        option!(
+            self.preflight.disk_space,
+            default.preflight.disk_space,
+            "preflight.disk_space"
+        );
+        option!(
+            self.preflight.battery,
+            default.preflight.battery,
+            "preflight.battery"
+        );
+        option!(
+            self.preflight.metered_connection,
+            default.preflight.metered_connection,
+            "preflight.metered_connection"
+        );
+        option!(
+            self.preflight.min_free_disk_gib,
+            default.preflight.min_free_disk_gib,
+            "preflight.min_free_disk_gib"
+        );
+        option!(
+            self.preflight.battery_threshold,
+            default.preflight.battery_threshold,
+            "preflight.battery_threshold"
+        );
+
+        // [package_manager]
+        option!(
+            self.package_manager.enabled,
+            default.package_manager.enabled,
+            "package_manager.enabled"
+        );
+        option!(
+            self.package_manager.wait_seconds,
+            default.package_manager.wait_seconds,
+            "package_manager.wait_seconds"
+        );
+
+        // [timeouts]
+        option!(
+            self.timeouts.step_seconds,
+            default.timeouts.step_seconds,
+            "timeouts.step_seconds"
+        );
+        option!(
+            self.timeouts.total_seconds,
+            default.timeouts.total_seconds,
+            "timeouts.total_seconds"
+        );
+
+        // [run]
+        option!(self.run.jobs, default.run.jobs, "run.jobs");
+        option!(
+            self.run.snapshot_retention,
+            default.run.snapshot_retention,
+            "run.snapshot_retention"
+        );
+        if self.run.pre_run != default.run.pre_run {
+            emit("run.pre_run", &Self::join_list(self.run.pre_run.as_ref()));
+        }
+        if self.run.post_run != default.run.post_run {
+            emit("run.post_run", &Self::join_list(self.run.post_run.as_ref()));
+        }
+
+        // [steps]
+        for (step, enabled) in &self.steps {
+            if default.steps.get(step).copied().unwrap_or(true) != *enabled {
+                emit(&format!("steps.{step}"), &enabled.to_string());
+            }
+        }
+
+        // [profiles]
+        for (profile, steps) in &self.profiles {
+            let Some(default_steps) = default.profiles.get(profile) else {
+                for (step, enabled) in steps {
+                    emit(&format!("profiles.{profile}.{step}"), &enabled.to_string());
+                }
+                continue;
+            };
+            for (step, enabled) in steps {
+                if default_steps.get(step).copied().unwrap_or(true) != *enabled {
+                    emit(&format!("profiles.{profile}.{step}"), &enabled.to_string());
+                }
+            }
+        }
+
+        macro_rules! list {
+            ($actual:expr, $default:expr, $key:expr) => {
+                if $actual != $default {
+                    emit($key, &Self::join_list($actual.as_ref()));
+                }
+            };
+        }
+
+        // [include]
+        list!(self.include.casks, default.include.casks, "include.casks");
+        list!(
+            self.include.packages,
+            default.include.packages,
+            "include.packages"
+        );
+        list!(
+            self.include.containers,
+            default.include.containers,
+            "include.containers"
+        );
+        list!(
+            self.include.projects,
+            default.include.projects,
+            "include.projects"
+        );
+        list!(
+            self.include.appstore,
+            default.include.appstore,
+            "include.appstore"
+        );
+
+        // [exclude]
+        list!(self.exclude.casks, default.exclude.casks, "exclude.casks");
+        list!(
+            self.exclude.packages,
+            default.exclude.packages,
+            "exclude.packages"
+        );
+        list!(
+            self.exclude.containers,
+            default.exclude.containers,
+            "exclude.containers"
+        );
+        list!(
+            self.exclude.projects,
+            default.exclude.projects,
+            "exclude.projects"
+        );
+        list!(
+            self.exclude.appstore,
+            default.exclude.appstore,
+            "exclude.appstore"
+        );
+
+        // [apps]
+        list!(
+            self.apps.never_quit,
+            default.apps.never_quit,
+            "apps.never_quit"
+        );
+        list!(
+            self.apps.always_quit,
+            default.apps.always_quit,
+            "apps.always_quit"
+        );
+
+        // [pre-commit]
+        list!(
+            self.pre_commit.repositories,
+            default.pre_commit.repositories,
+            "pre_commit.repositories"
+        );
+
+        // [hooks]
+        let default_hooks = default.hooks();
+        for (step, hooks) in self.hooks().iter() {
+            if default_hooks.get(step) != Some(hooks) {
+                if let Some(pre) = &hooks.pre {
+                    emit(&format!("hooks.{step}.pre"), &Self::join_list(Some(pre)));
+                }
+                if let Some(post) = &hooks.post {
+                    emit(&format!("hooks.{step}.post"), &Self::join_list(Some(post)));
+                }
+            }
+        }
+
+        // [[custom_steps]]
+        for (index, custom_step) in self.custom_steps.iter().enumerate() {
+            emit(&format!("custom_steps.{index}.name"), &custom_step.name);
+            emit(
+                &format!("custom_steps.{index}.command"),
+                &Self::join_list(Some(&custom_step.command)),
+            );
+            if let Some(platforms) = &custom_step.platforms {
+                emit(
+                    &format!("custom_steps.{index}.platforms"),
+                    &Self::join_list(Some(platforms)),
+                );
+            }
+            if let Some(order) = custom_step.order {
+                emit(&format!("custom_steps.{index}.order"), &order.to_string());
+            }
+        }
+
+        values
+    }
+
+    fn join_list(list: Option<&Vec<String>>) -> String {
+        list.map_or_else(String::new, |list| list.join(", "))
+    }
 }
 
 /// Decides whether a path is world-writable: writable by every user on the
@@ -1403,6 +1633,46 @@ snapshot_retention = 3
         assert_eq!(config.timeouts.total_seconds, Some(3600));
         assert_eq!(config.run.jobs, Some(8));
         assert_eq!(config.run.snapshot_retention, Some(3));
+    }
+
+    #[test]
+    fn non_default_values_reports_only_values_that_differ_from_defaults() {
+        let config = parsed(
+            r#"
+[preflight]
+network = false
+min_free_disk_gib = 5
+
+[run]
+jobs = 8
+
+[steps]
+brew-casks = false
+docker = false
+
+[include]
+casks = ["firefox"]
+
+[hooks.brew]
+pre = ["echo", "pre"]
+"#,
+        );
+
+        let values: BTreeMap<String, String> = config.non_default_values().into_iter().collect();
+
+        assert_eq!(values.get("preflight.network"), Some(&"false".to_owned()));
+        assert_eq!(
+            values.get("preflight.min_free_disk_gib"),
+            Some(&"5".to_owned())
+        );
+        assert_eq!(values.get("run.jobs"), Some(&"8".to_owned()));
+        assert_eq!(values.get("steps.brew-casks"), Some(&"false".to_owned()));
+        assert_eq!(values.get("steps.docker"), Some(&"false".to_owned()));
+        assert_eq!(values.get("include.casks"), Some(&"firefox".to_owned()));
+        assert_eq!(values.get("hooks.brew.pre"), Some(&"echo, pre".to_owned()));
+        // Built-in defaults are not reported.
+        assert!(!values.contains_key("preflight.disk_space"));
+        assert!(!values.contains_key("run.snapshot_retention"));
     }
 
     #[test]
