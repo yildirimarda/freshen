@@ -1252,7 +1252,12 @@ fn skip_casks_at_the_prompt_skips_the_cask_upgrade() {
     expected.extend(app_pre_upgrade_steps(&app));
     expected.extend(brew_autoremove_steps().iter().map(|&s| s.to_string()));
     expected.extend(brew_cleanup_steps().iter().map(|&s| s.to_string()));
-    assert_eq!(tools.step_calls(), expected);
+    let calls: Vec<String> = tools
+        .step_calls()
+        .into_iter()
+        .filter(|call| !is_desktop_notification_call(call))
+        .collect();
+    assert_eq!(calls, expected);
 
     let text = stdout(&output);
     assert!(
