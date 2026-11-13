@@ -67,11 +67,23 @@ fn pwsh_calls(tools: &StubTools) -> Vec<String> {
         .collect()
 }
 
+/// `send()` posts a Windows toast notification at the end of every run, so the
+/// recorded calls include one unrelated `pwsh` toast invocation. Exclude it so
+/// these assertions only count the Windows Update step's own invocations.
+fn non_toast_calls(calls: &[String]) -> Vec<String> {
+    calls
+        .iter()
+        .filter(|call| !call.contains("ToastNotificationManager"))
+        .cloned()
+        .collect()
+}
+
 /// Detection comes first, then exactly one `Get-WindowsUpdate` query: the
 /// runner checks before the step and the step reports through a check of its
 /// own, but both reuse the cached listing, so a run costs one slow
 /// PSWindowsUpdate scan. Nothing is ever installed.
 fn assert_windows_update_calls(calls: &[String]) {
+    let calls = non_toast_calls(calls);
     assert_eq!(
         calls.first().map(String::as_str),
         Some(WINDOWS_UPDATE_DETECT),
@@ -150,7 +162,7 @@ fn windows_update_falls_back_to_usocliter_when_pswindowsupdate_missing() {
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    let calls = tools.step_calls();
+    let calls = non_toast_calls(&tools.step_calls());
     assert_eq!(
         calls.len(),
         2,
@@ -187,7 +199,7 @@ fn windows_update_reports_updates_via_usocliter_when_pswindowsupdate_missing() {
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    let calls = tools.step_calls();
+    let calls = non_toast_calls(&tools.step_calls());
     assert_eq!(
         calls.len(),
         2,

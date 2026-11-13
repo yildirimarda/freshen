@@ -9,21 +9,23 @@
 
 use crate::runner::RunSummary;
 
-#[cfg(any(test, target_os = "macos", target_os = "linux"))]
+#[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
 use crate::runner::format_duration;
 
 /// Title shown in the notification.
-#[cfg(any(test, target_os = "macos", target_os = "linux"))]
+#[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(crate) const TITLE: &str = "freshen";
 
 /// Sends a desktop notification with the result of `summary`.
 ///
 /// On macOS this posts to Notification Center through `osascript`; on Linux it
-/// uses `notify-send`; on every other platform it does nothing. A failure to
-/// send is ignored so a run is never aborted because of a notification.
+/// uses `notify-send`; on Windows it shows a toast through PowerShell; on every
+/// other platform it does nothing. A failure to send is ignored so a run is
+/// never aborted because of a notification.
 pub(crate) fn send(summary: &RunSummary) {
     send_macos(summary);
     send_linux(summary);
+    send_windows(summary);
 }
 
 #[cfg(target_os = "macos")]
@@ -72,10 +74,72 @@ fn send_linux(_summary: &RunSummary) {
     // silent here (see `send_macos` for macOS).
 }
 
+/// Shows a Windows toast notification with the result of `summary`.
+///
+/// The toast is posted through PowerShell using the Windows notification API.
+/// Fire and forget: a notification must never block the run or delay its exit,
+/// and a failure to send is ignored.
+#[cfg(windows)]
+fn send_windows(summary: &RunSummary) {
+    let body = body(summary);
+    let script = windows::toast_script(TITLE, &body);
+    let Some(powershell) = crate::shell::windows::powershell() else {
+        return;
+    };
+    let Some(path) = crate::executable::resolve(powershell.command()) else {
+        return;
+    };
+    let _ = std::process::Command::new(path)
+        .args(crate::shell::windows::invocation_args(&script, true))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
+#[cfg(not(windows))]
+fn send_windows(_summary: &RunSummary) {
+    // Windows toast notifications are a Windows feature; every other platform
+    // is silent here.
+}
+
+/// Builds the PowerShell command that shows a Windows toast notification.
+///
+/// `title` and `body` are embedded in single-quoted PowerShell strings with a
+/// literal `'` escaped as `''`, so no external quoting crate is needed.
+#[cfg(windows)]
+mod windows {
+    #[must_use]
+    pub(crate) fn toast_script(title: &str, body: &str) -> String {
+        let title = title.replace('\'', "''");
+        let body = body.replace('\'', "''");
+        format!(
+            r#"$t=[Windows.UI.Notifications.ToastTemplateType]::ToastText02;$x=[Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent($t);$e=$x.GetElementsByTagName("text");$e.Item(0).AppendChild($x.CreateTextNode('{title}'));$e.Item(1).AppendChild($x.CreateTextNode('{body}'));$n=[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{title}');$n.Show([Windows.UI.Notifications.ToastNotification]::new($x))"#,
+        )
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::super::TITLE;
+        use super::toast_script;
+
+        #[test]
+        fn toast_script_carries_the_title_and_summary_body() {
+            let summary_body =
+                "run finished: 1 ok, 0 planned, 0 skipped, 0 failed, 0 timed out, 0 interrupted (0s)";
+            let script = toast_script(TITLE, summary_body);
+            assert!(script.contains(TITLE));
+            assert!(script.contains(summary_body));
+            assert!(script.contains("ToastNotificationManager"));
+            assert!(script.contains("CreateToastNotifier"));
+        }
+    }
+}
+
 /// The body of the notification: the run result as a single line.
 ///
 /// Kept platform-neutral so it can be tested on every operating system.
-#[cfg(any(test, target_os = "macos", target_os = "linux"))]
+#[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
 #[must_use]
 pub(crate) fn body(summary: &RunSummary) -> String {
     let mut text = format!(
