@@ -183,7 +183,9 @@ pub use registry::{Registry, RegistryError};
 pub use runner::{RunSummary, Runner, StepResult, StepStatus, VersionChange};
 pub use signals::{install as install_interrupt_handler, requested as interrupted, SignalError};
 pub use snapshot::{
-    RollbackCommand, SnapshotCommand, SnapshotRecorder, SnapshotSection, DEFAULT_SNAPSHOT_RETENTION,
+    list_snapshots, snapshot_directory, RollbackCommand, SnapshotCommand, SnapshotEntryInfo,
+    SnapshotRecord, SnapshotRecorder, SnapshotSection, SnapshotSectionInfo,
+    DEFAULT_SNAPSHOT_RETENTION,
 };
 pub use step::{
     CheckReport, Detection, Operation, OutdatedItem, SkipReason, Step, StepError, StepId,
