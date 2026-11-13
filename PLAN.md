@@ -368,7 +368,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add log files with rotation in the OS-appropriate location, covered by tests
 - [x] Add `--verbose` / `--quiet` output levels, covered by tests
 - [x] Add a `logs` subcommand that shows the last run, covered by tests
-- [ ] Add a `history` subcommand listing previous runs and what each one changed (from the snapshots), covered by tests
+- [x] Add a `history` subcommand listing previous runs and what each one changed (from the snapshots), covered by tests
 - [ ] Add shell completions for zsh, bash, fish and PowerShell, covered by tests
 - [ ] Add a man page, covered by tests
 - [ ] Add a `self-update` subcommand, covered by tests
