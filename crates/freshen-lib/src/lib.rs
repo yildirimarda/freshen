@@ -63,6 +63,7 @@ pub mod mason;
 pub mod microsoft_store;
 mod network;
 pub mod nix;
+pub mod notifications;
 pub mod nvim;
 pub mod nvm;
 pub mod omz;
