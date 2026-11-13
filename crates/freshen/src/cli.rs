@@ -16,8 +16,8 @@ use std::time::Duration;
 
 use clap::{ArgAction, Parser};
 use freshen_lib::{
-    Config, ContainerRuntimeKind, PackageManagerConfig, PreflightCheck, PreflightConfig,
-    RunOptions, StepSelection, DEFAULT_JOBS, DEFAULT_MIN_BATTERY_PERCENT,
+    Config, ContainerRuntimeKind, OutputLevel, PackageManagerConfig, PreflightCheck,
+    PreflightConfig, RunOptions, StepSelection, DEFAULT_JOBS, DEFAULT_MIN_BATTERY_PERCENT,
     DEFAULT_MIN_FREE_DISK_GIB, DEFAULT_SNAPSHOT_RETENTION, DEFAULT_WAIT,
 };
 
@@ -63,6 +63,15 @@ pub struct Cli {
     /// print actionable fixes without changing anything.
     #[arg(long)]
     pub doctor: bool,
+
+    /// Print more detail about what freshen is doing, including diagnostic
+    /// lines that are hidden by default.
+    #[arg(long, conflicts_with = "quiet")]
+    pub verbose: bool,
+
+    /// Print less: suppress informational progress lines, keeping only errors.
+    #[arg(long, conflicts_with = "verbose")]
+    pub quiet: bool,
 
     /// Report outdated items without changing anything; exit 2 when updates are pending.
     #[arg(long)]
@@ -346,6 +355,11 @@ impl Cli {
         Ok(RunOptions::new()
             .with_dry_run(self.dry_run)
             .with_doctor(self.doctor)
+            .with_output_level(match (self.verbose, self.quiet) {
+                (true, _) => OutputLevel::Verbose,
+                (_, true) => OutputLevel::Quiet,
+                _ => OutputLevel::Normal,
+            })
             .with_assume_yes(self.yes)
             .with_force_kill(self.force_kill)
             .with_cleanup(self.cleanup)
@@ -449,7 +463,8 @@ mod tests {
     use super::{Cli, CliError};
     use clap::Parser;
     use freshen_lib::{
-        AppSection, Config, FilterSection, PreflightCheck, PreflightSection, RunSection,
+        AppSection, Config, FilterSection, OutputLevel, PreflightCheck, PreflightSection,
+        RunSection,
     };
     use std::collections::BTreeMap;
 
@@ -487,6 +502,7 @@ mod tests {
         assert!(!options.assume_yes());
         assert!(!options.force_kill());
         assert!(!options.cleanup_enabled());
+        assert_eq!(options.output_level(), OutputLevel::Normal);
         assert!(!options.install_macos_updates());
         assert!(!options.install_firmware_updates());
         assert!(!options.install_wsl_updates());
@@ -539,6 +555,7 @@ mod tests {
             "--skip",
             "casks",
             "--yes",
+            "--verbose",
             "--force-kill",
             "--cleanup",
             "--install-macos-updates",
@@ -590,6 +607,7 @@ mod tests {
         assert!(options.is_dry_run());
         assert!(options.assume_yes());
         assert!(options.force_kill());
+        assert_eq!(options.output_level(), OutputLevel::Verbose);
         assert!(options.cleanup_enabled());
         assert!(options.install_macos_updates());
         assert!(options.install_firmware_updates());
@@ -639,6 +657,37 @@ mod tests {
     #[test]
     fn json_and_markdown_are_mutually_exclusive() {
         let error = Cli::try_parse_from(["freshen", "--json", "--markdown"]).err();
+
+        assert!(error.is_some());
+    }
+
+    #[test]
+    fn verbose_sets_output_level_to_verbose() {
+        let cli = parse(&["freshen", "--verbose"]);
+
+        assert!(cli.verbose);
+        assert!(!cli.quiet);
+        assert_eq!(
+            options(&cli, &Config::default()).output_level(),
+            OutputLevel::Verbose
+        );
+    }
+
+    #[test]
+    fn quiet_sets_output_level_to_quiet() {
+        let cli = parse(&["freshen", "--quiet"]);
+
+        assert!(!cli.verbose);
+        assert!(cli.quiet);
+        assert_eq!(
+            options(&cli, &Config::default()).output_level(),
+            OutputLevel::Quiet
+        );
+    }
+
+    #[test]
+    fn verbose_and_quiet_are_mutually_exclusive() {
+        let error = Cli::try_parse_from(["freshen", "--verbose", "--quiet"]).err();
 
         assert!(error.is_some());
     }
@@ -886,6 +935,8 @@ mod tests {
             "--json",
             "--markdown",
             "--config",
+            "--verbose",
+            "--quiet",
             "--only",
             "--skip",
             "--profile",

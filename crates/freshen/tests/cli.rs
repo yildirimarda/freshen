@@ -58,6 +58,8 @@ fn help_lists_every_flag() {
         "--json",
         "--markdown",
         "--config",
+        "--verbose",
+        "--quiet",
         "--container-runtime",
         "--only",
         "--skip",

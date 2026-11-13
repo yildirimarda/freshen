@@ -163,7 +163,7 @@ pub use macos_updates::{
     MACOS_UPDATES,
 };
 pub use options::{PlanError, RunOptions, SelectionFlag, StepSelection, DEFAULT_JOBS};
-pub use output::{route_to_stderr, route_to_stdout};
+pub use output::{route_to_stderr, route_to_stdout, set_output_level, OutputLevel};
 pub use package_manager::{
     wait_for_package_managers, HostPackageManagerProbe, PackageManagerConfig, PackageManagerProbe,
     PackageManagerProcess, WaitOutcome, DEFAULT_WAIT,

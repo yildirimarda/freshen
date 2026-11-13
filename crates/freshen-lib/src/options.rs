@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use crate::config::{HookSection, Hooks};
 use crate::containers::ActiveContainerRuntime;
+use crate::output::OutputLevel;
 use crate::package_manager::PackageManagerConfig;
 use crate::platform::Platform;
 use crate::policy::{AppLists, ItemFilters};
@@ -212,6 +213,7 @@ impl StepSelection {
 pub struct RunOptions {
     dry_run: bool,
     doctor: bool,
+    output_level: OutputLevel,
     assume_yes: bool,
     force_kill: bool,
     cleanup: bool,
@@ -269,6 +271,13 @@ impl RunOptions {
     #[must_use]
     pub fn with_doctor(mut self, doctor: bool) -> Self {
         self.doctor = doctor;
+        self
+    }
+
+    /// Sets the output level: `--quiet`, the default `Normal`, or `--verbose`.
+    #[must_use]
+    pub fn with_output_level(mut self, output_level: OutputLevel) -> Self {
+        self.output_level = output_level;
         self
     }
 
@@ -576,6 +585,12 @@ impl RunOptions {
     #[must_use]
     pub fn doctor(&self) -> bool {
         self.doctor
+    }
+
+    /// The output level: `Quiet`, `Normal` (the default) or `Verbose`.
+    #[must_use]
+    pub fn output_level(&self) -> OutputLevel {
+        self.output_level
     }
 
     /// Returns `true` when `--yes` is set.
@@ -888,7 +903,7 @@ impl RunOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::{PlanError, RunOptions, SelectionFlag, StepSelection};
+    use super::{OutputLevel, PlanError, RunOptions, SelectionFlag, StepSelection};
     use crate::platform::Platform;
     use crate::preflight::{PreflightCheck, PreflightConfig};
     use crate::registry::Registry;
@@ -977,6 +992,34 @@ mod tests {
             crate::snapshot::DEFAULT_SNAPSHOT_RETENTION
         );
         assert_eq!(options.jobs(), super::DEFAULT_JOBS);
+        assert_eq!(options.output_level(), OutputLevel::Normal);
+    }
+
+    #[test]
+    fn output_level_defaults_to_normal() {
+        assert_eq!(RunOptions::new().output_level(), OutputLevel::Normal);
+    }
+
+    #[test]
+    fn output_level_is_round_tripped_through_the_builder() {
+        assert_eq!(
+            RunOptions::new()
+                .with_output_level(OutputLevel::Quiet)
+                .output_level(),
+            OutputLevel::Quiet
+        );
+        assert_eq!(
+            RunOptions::new()
+                .with_output_level(OutputLevel::Verbose)
+                .output_level(),
+            OutputLevel::Verbose
+        );
+        assert_eq!(
+            RunOptions::new()
+                .with_output_level(OutputLevel::Normal)
+                .output_level(),
+            OutputLevel::Normal
+        );
     }
 
     #[test]
