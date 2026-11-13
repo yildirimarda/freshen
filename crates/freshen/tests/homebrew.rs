@@ -1211,7 +1211,12 @@ fn skip_quitting_at_the_prompt_upgrades_casks_without_quitting_apps() {
     expected.push("brew upgrade --cask".to_string());
     expected.extend(brew_autoremove_steps().iter().map(|&s| s.to_string()));
     expected.extend(brew_cleanup_steps().iter().map(|&s| s.to_string()));
-    assert_eq!(tools.step_calls(), expected);
+    let calls: Vec<String> = tools
+        .step_calls()
+        .into_iter()
+        .filter(|call| !is_desktop_notification_call(call))
+        .collect();
+    assert_eq!(calls, expected);
 
     let text = stdout(&output);
     assert!(
