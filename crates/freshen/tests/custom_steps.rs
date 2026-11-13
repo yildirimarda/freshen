@@ -57,6 +57,11 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+/// The human-readable output of a run, on either stream.
+fn output_text(output: &Output) -> String {
+    format!("{}{}", stdout(output), stderr(output))
+}
+
 fn write_config(path: &Path, contents: &str) {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
@@ -70,6 +75,13 @@ fn run(tools: &StubTools, args: &[&str]) -> Output {
     let mut command = tools.command();
     command.args(args);
     output_with_retry(command).unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
+}
+
+/// Runs the binary with scripted `stdin`, driving interactive prompts.
+fn run_with_stdin(tools: &StubTools, args: &[&str], stdin: &str) -> Output {
+    let mut command = tools.command();
+    command.args(args);
+    tools.run_with_stdin(command, stdin)
 }
 
 #[test]
@@ -94,7 +106,14 @@ fn custom_steps_run_in_order() {
     let path = tools.home().join("custom.toml");
     write_config(&path, ORDERED_CONFIG);
 
-    let output = run(&tools, &["--config", path.to_string_lossy().as_ref()]);
+    let output = run(
+        &tools,
+        &[
+            "--config",
+            path.to_string_lossy().as_ref(),
+            "--trust-config",
+        ],
+    );
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
@@ -123,7 +142,14 @@ command = ["custom-b"]
     let path = tools.home().join("custom.toml");
     write_config(&path, config);
 
-    let output = run(&tools, &["--config", path.to_string_lossy().as_ref()]);
+    let output = run(
+        &tools,
+        &[
+            "--config",
+            path.to_string_lossy().as_ref(),
+            "--trust-config",
+        ],
+    );
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
@@ -156,7 +182,14 @@ fn a_detected_custom_step_runs_its_command() {
     let path = tools.home().join("custom.toml");
     write_config(&path, PRESENT_CONFIG);
 
-    let output = run(&tools, &["--config", path.to_string_lossy().as_ref()]);
+    let output = run(
+        &tools,
+        &[
+            "--config",
+            path.to_string_lossy().as_ref(),
+            "--trust-config",
+        ],
+    );
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(tools.calls(), ["custom-a"]);
@@ -213,7 +246,14 @@ command = ["custom-a", "--flag"]
 "#,
     );
 
-    let output = run(&tools, &["--config", path.to_string_lossy().as_ref()]);
+    let output = run(
+        &tools,
+        &[
+            "--config",
+            path.to_string_lossy().as_ref(),
+            "--trust-config",
+        ],
+    );
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(
@@ -238,7 +278,12 @@ command = ["custom-a", "--flag"]
 
     let output = run(
         &tools,
-        &["--config", path.to_string_lossy().as_ref(), "--quiet"],
+        &[
+            "--config",
+            path.to_string_lossy().as_ref(),
+            "--trust-config",
+            "--quiet",
+        ],
     );
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
@@ -265,7 +310,14 @@ pre = ["pre-hook", "--verify"]
 "#,
     );
 
-    let output = run(&tools, &["--config", path.to_string_lossy().as_ref()]);
+    let output = run(
+        &tools,
+        &[
+            "--config",
+            path.to_string_lossy().as_ref(),
+            "--trust-config",
+        ],
+    );
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(
@@ -273,4 +325,266 @@ pre = ["pre-hook", "--verify"]
         "expected the hook command to be printed before it ran:\n{}",
         stdout(&output)
     );
+}
+
+#[test]
+fn an_untrusted_custom_step_is_refused_without_trust_config() {
+    let tools = StubTools::new(&["custom-a"]);
+    let path = tools.home().join("custom.toml");
+    write_config(&path, PRESENT_CONFIG);
+
+    let output = run_with_stdin(
+        &tools,
+        &["--config", path.to_string_lossy().as_ref()],
+        "", // no confirmation: stdin ends immediately
+    );
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "output: {}",
+        output_text(&output)
+    );
+    assert!(
+        tools.calls().is_empty(),
+        "custom step ran although untrusted: {:?}",
+        tools.calls()
+    );
+    assert!(
+        output_text(&output).contains("is not trusted"),
+        "expected a trust refusal: {}",
+        output_text(&output)
+    );
+}
+
+#[test]
+fn assume_yes_alone_does_not_trust_a_custom_step() {
+    let tools = StubTools::new(&["custom-a"]);
+    let path = tools.home().join("custom.toml");
+    write_config(&path, PRESENT_CONFIG);
+
+    let output = run(
+        &tools,
+        &["--config", path.to_string_lossy().as_ref(), "--yes"],
+    );
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "output: {}",
+        output_text(&output)
+    );
+    assert!(
+        tools.calls().is_empty(),
+        "custom step ran although untrusted: {:?}",
+        tools.calls()
+    );
+    assert!(
+        output_text(&output).contains("is not trusted"),
+        "expected a trust refusal: {}",
+        output_text(&output)
+    );
+}
+
+#[test]
+fn trust_config_runs_an_untrusted_custom_step_without_prompting() {
+    let tools = StubTools::new(&["custom-a"]);
+    let path = tools.home().join("custom.toml");
+    write_config(&path, PRESENT_CONFIG);
+
+    let output = run(
+        &tools,
+        &[
+            "--config",
+            path.to_string_lossy().as_ref(),
+            "--trust-config",
+        ],
+    );
+
+    assert!(output.status.success(), "output: {}", output_text(&output));
+    assert_eq!(tools.calls(), ["custom-a"]);
+}
+
+#[test]
+fn an_interactive_confirmation_trusts_and_runs_a_custom_step() {
+    let tools = StubTools::new(&["custom-a"]);
+    let path = tools.home().join("custom.toml");
+    write_config(&path, PRESENT_CONFIG);
+
+    let output = run_with_stdin(
+        &tools,
+        &["--config", path.to_string_lossy().as_ref()],
+        "y\n",
+    );
+
+    assert!(output.status.success(), "output: {}", output_text(&output));
+    assert_eq!(tools.calls(), ["custom-a"]);
+
+    // The recorded hash means a second run does not prompt again and still runs.
+    let output = run(&tools, &["--config", path.to_string_lossy().as_ref()]);
+
+    assert!(output.status.success(), "output: {}", output_text(&output));
+    assert_eq!(tools.calls(), ["custom-a", "custom-a"]);
+}
+
+#[test]
+fn a_refused_confirmation_does_not_run_a_custom_step() {
+    let tools = StubTools::new(&["custom-a"]);
+    let path = tools.home().join("custom.toml");
+    write_config(&path, PRESENT_CONFIG);
+
+    let output = run_with_stdin(
+        &tools,
+        &["--config", path.to_string_lossy().as_ref()],
+        "n\n",
+    );
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "output: {}",
+        output_text(&output)
+    );
+    assert!(
+        tools.calls().is_empty(),
+        "custom step ran although refused: {:?}",
+        tools.calls()
+    );
+}
+
+#[test]
+fn a_changed_custom_step_command_is_refused_until_confirmed() {
+    let tools = StubTools::new(&["custom-a"]);
+    let path = tools.home().join("custom.toml");
+    write_config(
+        &path,
+        r#"
+[[custom_steps]]
+name = "custom-a"
+command = ["custom-a"]
+"#,
+    );
+
+    let output = run(
+        &tools,
+        &[
+            "--config",
+            path.to_string_lossy().as_ref(),
+            "--trust-config",
+        ],
+    );
+    assert!(output.status.success(), "output: {}", output_text(&output));
+    assert_eq!(tools.calls(), ["custom-a"]);
+
+    // Change the command while keeping the name: the hash changes, so it must be trusted again.
+    write_config(
+        &path,
+        r#"
+[[custom_steps]]
+name = "custom-a"
+command = ["custom-a", "--flag"]
+"#,
+    );
+
+    // Without trust config and without confirmation the changed command is refused.
+    let output = run_with_stdin(
+        &tools,
+        &["--config", path.to_string_lossy().as_ref()],
+        "n\n",
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "output: {}",
+        output_text(&output)
+    );
+    assert_eq!(
+        tools.calls(),
+        ["custom-a"],
+        "changed command ran although refused: {:?}",
+        tools.calls()
+    );
+
+    // With confirmation it runs and the new hash is recorded.
+    let output = run_with_stdin(
+        &tools,
+        &["--config", path.to_string_lossy().as_ref()],
+        "y\n",
+    );
+    assert!(output.status.success(), "output: {}", output_text(&output));
+    assert_eq!(
+        tools.calls(),
+        ["custom-a", "custom-a --flag"],
+        "expected only the original call and the confirmed changed command, got {:?}",
+        tools.calls()
+    );
+}
+
+#[test]
+fn an_untrusted_hook_is_refused() {
+    let tools = StubTools::new(&["custom-a", "pre-hook"]);
+    let path = tools.home().join("custom.toml");
+    write_config(
+        &path,
+        r#"
+[[custom_steps]]
+name = "custom-a"
+command = ["custom-a"]
+
+[hooks.custom-a]
+pre = ["pre-hook", "--verify"]
+"#,
+    );
+
+    let output = run_with_stdin(
+        &tools,
+        &["--config", path.to_string_lossy().as_ref()],
+        "", // no confirmation: stdin ends immediately
+    );
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "output: {}",
+        output_text(&output)
+    );
+    assert!(
+        tools.calls().is_empty(),
+        "a step ran although its hook was untrusted: {:?}",
+        tools.calls()
+    );
+    assert!(
+        output_text(&output).contains("is not trusted"),
+        "expected a trust refusal: {}",
+        output_text(&output)
+    );
+}
+
+#[test]
+fn trust_config_runs_an_untrusted_hook() {
+    let tools = StubTools::new(&["custom-a", "pre-hook"]);
+    let path = tools.home().join("custom.toml");
+    write_config(
+        &path,
+        r#"
+[[custom_steps]]
+name = "custom-a"
+command = ["custom-a"]
+
+[hooks.custom-a]
+pre = ["pre-hook", "--verify"]
+"#,
+    );
+
+    let output = run(
+        &tools,
+        &[
+            "--config",
+            path.to_string_lossy().as_ref(),
+            "--trust-config",
+        ],
+    );
+
+    assert!(output.status.success(), "output: {}", output_text(&output));
+    assert_eq!(tools.calls(), ["pre-hook --verify", "custom-a"]);
 }

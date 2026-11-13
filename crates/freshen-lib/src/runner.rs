@@ -35,6 +35,7 @@ use crate::progress::Progress;
 use crate::snapshot::{RollbackCommand, SnapshotRecorder};
 use crate::step::{CheckReport, Detection, Operation, OutdatedItem, Step, StepError, StepId};
 use crate::system::Privilege;
+use crate::trust::ensure_trusted;
 
 pub use crate::step::SkipReason;
 
@@ -1298,6 +1299,11 @@ fn run_step(
             // --- pre hook: runs before the step's upgrade ---
             if let Some(hook) = options.hooks().get(step.id()) {
                 if let Some(command) = &hook.pre {
+                    if let Some(refusal) =
+                        require_hook_trust(options, step, "pre", command, started)
+                    {
+                        return refusal;
+                    }
                     match run_hook(Some(step), options, command) {
                         Ok(()) => {}
                         Err(ProcessError::Interrupted { .. }) => {
@@ -1369,7 +1375,13 @@ fn run_step(
             // --- post hook: runs after the step's upgrade (and cleanup) ---
             if let Some(hook) = options.hooks().get(step.id()) {
                 if let Some(command) = &hook.post {
-                    if let Err(error) = run_hook(Some(step), options, command) {
+                    if let Some(refusal) =
+                        require_hook_trust(options, step, "post", command, started)
+                    {
+                        if result.status() == StepStatus::Ok {
+                            result = refusal;
+                        }
+                    } else if let Err(error) = run_hook(Some(step), options, command) {
                         if result.status() == StepStatus::Ok {
                             match error {
                                 ProcessError::Interrupted { .. } => {
@@ -1456,6 +1468,40 @@ fn run_hook(
         spec = spec.env(key, value);
     }
     spec.run().map(|_| ())
+}
+
+/// Returns a [`StepResult`] that fails `step` when its `kind` hook command is
+/// not trusted and cannot be confirmed, or `None` when the hook may run.
+fn require_hook_trust(
+    options: &RunOptions,
+    step: &dyn Step,
+    kind: &str,
+    command: &[String],
+    started: Instant,
+) -> Option<StepResult> {
+    let store = options.trust_store()?;
+    let key = format!("hook:{}:{kind}", step.id());
+    match ensure_trusted(store, &key, command, options.assume_yes(), options.trust_config()) {
+        Ok(true) => None,
+        Ok(false) => Some(StepResult::failed(
+            step,
+            started.elapsed(),
+            StepError::run(
+                step.id(),
+                format!(
+                    "the `{}` hook for step `{}` runs `{}`, which is not trusted; run with --trust-config or confirm it",
+                    kind,
+                    step.id(),
+                    command.join(" "),
+                ),
+            ),
+        )),
+        Err(error) => Some(StepResult::failed(
+            step,
+            started.elapsed(),
+            StepError::run(step.id(), error.to_string()),
+        )),
+    }
 }
 
 fn capture_snapshot(step: &dyn Step, snapshots: &mut SnapshotRecorder) {

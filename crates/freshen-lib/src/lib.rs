@@ -113,6 +113,7 @@ pub mod tfenv;
 pub mod tooling;
 pub mod tpm;
 pub mod treesitter;
+pub mod trust;
 pub mod volta;
 pub mod vscode;
 pub mod vscodium;
@@ -195,6 +196,7 @@ pub use system::{
     supported_terminals, terminal_is_interactive, Arch, Distro, Environment, HostProbe, OsInfo,
     Privilege, ProcessInfo, SystemInfo, SystemProbe, Terminal, TerminalApp,
 };
+pub use trust::{TrustStore, TRUSTED_FILE_NAME};
 pub use warnings::supported_session_managers;
 
 /// Major and minor feature release this binary implements, e.g. `"0.1"`.

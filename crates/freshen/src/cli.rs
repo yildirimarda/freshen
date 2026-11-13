@@ -220,6 +220,13 @@ pub struct Cli {
     #[arg(long)]
     pub install_aws_cli_updates: bool,
 
+    /// Trust every hook and custom step from the configuration file without
+    /// prompting, recording their hashes in the trust store. Without this
+    /// flag, a new or changed hook or custom step requires an interactive
+    /// confirmation before it runs, and a non-interactive run refuses it.
+    #[arg(long)]
+    pub trust_config: bool,
+
     /// Keep this many pre-upgrade snapshot files (0 keeps every snapshot,
     /// default 10).
     #[arg(long, value_name = "COUNT")]
@@ -403,6 +410,7 @@ impl Cli {
             .with_prune_unused_older_than(self.prune_unused_older_than)
             .with_go_update(self.reinstall_go)
             .with_install_aws_cli_updates(self.install_aws_cli_updates)
+            .with_trust_config(self.trust_config)
             .with_step_timeout(timeout(self.step_timeout.or(config.timeouts.step_seconds)))
             .with_global_timeout(timeout(self.timeout.or(config.timeouts.total_seconds)))
             .with_snapshot_retention(
@@ -562,6 +570,7 @@ mod tests {
             std::time::Duration::from_secs(30)
         );
         assert!(options.chocolatey_except().is_empty());
+        assert!(!options.trust_config());
     }
 
     #[test]
@@ -595,6 +604,7 @@ mod tests {
             "30",
             "--reinstall-go",
             "--install-aws-cli-updates",
+            "--trust-config",
             "--snapshot-retention",
             "3",
             "--step-timeout",
@@ -670,6 +680,7 @@ mod tests {
             std::time::Duration::from_secs(5)
         );
         assert_eq!(options.chocolatey_except(), ["git", "python"]);
+        assert!(options.trust_config());
     }
 
     #[test]
@@ -988,6 +999,7 @@ mod tests {
             "--package-manager-wait",
             "--min-free-disk-gib",
             "--battery-threshold",
+            "--trust-config",
         ] {
             assert!(help.contains(flag), "help does not mention {flag}: {help}");
         }

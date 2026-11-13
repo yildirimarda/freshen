@@ -16,7 +16,7 @@ use freshen_lib::{
     ActiveContainerRuntime, AppLists, Config, ConfigEnvironment, ContainerRuntimeKind,
     CustomStepConfig, CustomStepError, HostContainerRuntimeProbe, HostPackageManagerProbe,
     HostPreflightProbe, NoElevationProbe, PackageManagerConfig, PackageManagerProbe, Platform,
-    PreflightReport, Registry, RunLock, Runner, SystemInfo, WaitOutcome,
+    PreflightReport, Registry, RunLock, Runner, SystemInfo, TrustStore, WaitOutcome,
 };
 
 mod cli;
@@ -95,6 +95,23 @@ fn main() -> ExitCode {
         .as_deref()
         .map(PathBuf::from)
         .unwrap_or_else(|| ConfigEnvironment::from_env().config_path(platform));
+
+    // The trust store records which hooks and custom steps are trusted to run.
+    // It lives next to the configuration file. A corrupt trust store is fatal:
+    // freshen cannot verify which commands are safe to run without it.
+    let trust_store_path = config_path.parent().map_or_else(
+        || PathBuf::from(freshen_lib::trust::TRUSTED_FILE_NAME),
+        |parent| parent.join(freshen_lib::trust::TRUSTED_FILE_NAME),
+    );
+    let trust_store = match TrustStore::load(&trust_store_path) {
+        Ok(store) => Some(store),
+        Err(error) => {
+            log_event(&mut logger, &format!("freshen: {error}"));
+            eprintln!("freshen: {error}");
+            return exit::code(exit::STEP_FAILURE);
+        }
+    };
+
     let (config, config_error) = match load_config(&cli, platform) {
         Ok(config) => (config, None),
         Err(error) => {
@@ -119,7 +136,8 @@ fn main() -> ExitCode {
     let options = options
         .with_app_lists(app_lists)
         .with_container_runtime(active_container_runtime(cli.container_runtime))
-        .with_pre_commit_repositories(config.pre_commit_repositories());
+        .with_pre_commit_repositories(config.pre_commit_repositories())
+        .with_trust_store(trust_store);
 
     freshen_lib::output::set_output_level(options.output_level());
 
