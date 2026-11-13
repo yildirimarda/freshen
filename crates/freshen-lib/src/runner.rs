@@ -30,6 +30,7 @@ use crate::elevation::{
 use crate::homebrew::{BundlePackage, DoctorFinding};
 use crate::options::RunOptions;
 use crate::process::{CommandSpec, ProcessError};
+use crate::progress::Progress;
 use crate::snapshot::{RollbackCommand, SnapshotRecorder};
 use crate::step::{CheckReport, Detection, Operation, OutdatedItem, Step, StepError, StepId};
 use crate::system::Privilege;
@@ -962,6 +963,7 @@ impl<'a> Runner<'a> {
         let mut snapshots =
             SnapshotRecorder::new().with_retention(self.options.snapshot_retention());
         let mut results = Vec::with_capacity(self.steps.len());
+        let progress = Progress::new();
         let mut interrupted = false;
         let mut timed_out = false;
         let mut pre_run_failed = false;
@@ -995,6 +997,7 @@ impl<'a> Runner<'a> {
                 let step = match planned {
                     PlannedStep::Run(step) | PlannedStep::Skip { step, .. } => step,
                 };
+                progress.step_skipped(step, SkipReason::Interrupted);
                 results.push(StepResult::skipped_because(
                     step,
                     SkipReason::Interrupted,
@@ -1019,6 +1022,9 @@ impl<'a> Runner<'a> {
 
             let result = match planned {
                 PlannedStep::Run(step) => {
+                    if !self.options.is_dry_run() {
+                        progress.step_started(step);
+                    }
                     let deadline =
                         effective_deadline(now, self.options.step_timeout(), global_deadline);
                     let guard = deadline::enter(deadline);
@@ -1031,9 +1037,20 @@ impl<'a> Runner<'a> {
                         timed_out = true;
                         result = result.into_timed_out();
                     }
+                    match result.status() {
+                        StepStatus::Ok => progress.step_finished_ok(step),
+                        StepStatus::Planned => {} // --dry-run: nothing ran, no progress line
+                        StepStatus::Skipped => {
+                            if let Some(reason) = result.skip_reason() {
+                                progress.step_skipped(step, reason);
+                            }
+                        }
+                        _ => progress.step_finished_failed(step),
+                    }
                     result
                 }
                 PlannedStep::Skip { step, reason } => {
+                    progress.step_skipped(step, reason);
                     StepResult::skipped_because(step, reason, Duration::ZERO)
                 }
             };

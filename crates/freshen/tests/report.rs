@@ -241,6 +241,27 @@ fn plain_runs_keep_the_cleanup_log_on_stdout() {
 }
 
 #[test]
+fn plain_run_shows_step_progress_on_stdout() {
+    let tools = StubTools::new(&["brew"]);
+    install_brew(&tools);
+
+    let output = run(&tools, &["--only", "brew-formulae", "--yes"]);
+
+    assert!(
+        output.status.success(),
+        "stdout: {} stderr: {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    let text = stdout(&output);
+    assert!(
+        text.contains("Running: Homebrew formulae"),
+        "stdout: {text}"
+    );
+    assert!(text.contains("Done: Homebrew formulae"), "stdout: {text}");
+}
+
+#[test]
 fn reports_without_cleanup_keep_an_empty_cleanup_list() {
     let tools = StubTools::new(&["brew"]);
     install_brew(&tools);
