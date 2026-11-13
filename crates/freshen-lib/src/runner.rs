@@ -29,6 +29,7 @@ use crate::elevation::{
 };
 use crate::homebrew::{BundlePackage, DoctorFinding};
 use crate::options::RunOptions;
+use crate::output::human;
 use crate::process::{CommandSpec, ProcessError};
 use crate::progress::Progress;
 use crate::snapshot::{RollbackCommand, SnapshotRecorder};
@@ -1450,6 +1451,7 @@ fn run_hook(
     for argument in &command[1..] {
         spec = spec.arg(argument.as_str());
     }
+    human!("{spec}");
     for (key, value) in run_environment(step, options) {
         spec = spec.env(key, value);
     }
