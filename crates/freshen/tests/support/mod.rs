@@ -170,6 +170,7 @@ impl StubTools {
             appdata: Some(self.app_data()),
             xdg_config_home: Some(self.config_home()),
             home: Some(self.dir.clone()),
+            config: None,
         };
 
         environment.config_path(Platform::current().unwrap_or(Platform::Linux))

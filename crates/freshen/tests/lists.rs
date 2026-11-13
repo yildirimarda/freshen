@@ -190,6 +190,50 @@ fn an_unknown_step_in_the_configuration_file_is_an_error() {
     );
 }
 
+#[test]
+fn freshen_config_points_at_an_alternative_configuration_file() {
+    let tools = StubTools::new(&["uv"]);
+    let alt_config = tools.config_home().join("alt-config.toml");
+    write_config(&alt_config, "[steps]\nprobe-0 = false\n");
+
+    let output = tools
+        .command()
+        .env("FRESHEN_TEST_STEPS", "uv")
+        .env("FRESHEN_CONFIG", &alt_config)
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(tools.calls().is_empty(), "the disabled step must not run");
+
+    let text = stdout(&output);
+    assert!(
+        text.contains("disabled in the configuration file"),
+        "output: {text}"
+    );
+    assert!(text.contains("1 skipped"), "output: {text}");
+}
+
+#[test]
+fn a_missing_freshen_config_file_is_an_error() {
+    let tools = StubTools::new(&["uv"]);
+    let alt_config = tools.config_home().join("does-not-exist.toml");
+
+    let output = tools
+        .command()
+        .env("FRESHEN_TEST_STEPS", "uv")
+        .env("FRESHEN_CONFIG", &alt_config)
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
+    assert!(
+        stderr(&output).contains("does not exist"),
+        "stderr: {}",
+        stderr(&output)
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn the_cask_exclude_list_limits_the_cask_upgrade() {
