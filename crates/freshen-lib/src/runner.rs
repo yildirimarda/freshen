@@ -1134,6 +1134,7 @@ impl<'a> Runner<'a> {
         if let Some(failure) = pre_run_failure.or(post_run_failure) {
             summary = summary.with_failure(failure);
         }
+        crate::notifications::send(&summary);
         summary
     }
 
