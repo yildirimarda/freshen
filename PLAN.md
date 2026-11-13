@@ -365,7 +365,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add macOS desktop notifications at the end of a run (Notification Center) with the result summary, covered by tests
 - [x] Add Linux desktop notifications at the end of a run (`notify-send`) with the result summary, covered by tests
 - [x] Add Windows toast notifications at the end of a run with the result summary, covered by tests Platform guard: this code is Windows-only. Put it behind `#[cfg(windows)]` with its tests and imports inside the gated module, and keep parsers and decision logic platform-neutral so they are tested on every OS; otherwise Linux and macOS CI fail with `unused_imports`/`dead_code` under `-D warnings`
-- [ ] Add log files with rotation in the OS-appropriate location, covered by tests
+- [x] Add log files with rotation in the OS-appropriate location, covered by tests
 - [ ] Add `--verbose` / `--quiet` output levels, covered by tests
 - [ ] Add a `logs` subcommand that shows the last run, covered by tests
 - [ ] Add a `history` subcommand listing previous runs and what each one changed (from the snapshots), covered by tests

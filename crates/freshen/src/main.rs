@@ -6,6 +6,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use freshen_lib::doctor;
+use freshen_lib::logging::{LogFile, LoggingEnvironment};
 use freshen_lib::sudo::{HostSudoProbe, SudoState};
 #[cfg(windows)]
 use freshen_lib::HostElevationProbe;
@@ -40,6 +41,14 @@ fn main() -> ExitCode {
         return exit::code(exit::STEP_FAILURE);
     };
 
+    // Log to a rotating file in the OS-appropriate location. Logging never
+    // fails a run: when the log cannot be opened it is simply skipped.
+    let mut logger = LogFile::open(LoggingEnvironment::from_env().log_path(platform)).ok();
+    log_event(
+        &mut logger,
+        &format!("freshen {} started", freshen_lib::version()),
+    );
+
     let config_path = cli
         .config
         .as_deref()
@@ -51,6 +60,7 @@ fn main() -> ExitCode {
             if cli.doctor {
                 (Config::default(), Some(error))
             } else {
+                log_event(&mut logger, &format!("freshen: {error}"));
                 eprintln!("freshen: {error}");
                 return exit::code(exit::STEP_FAILURE);
             }
@@ -59,6 +69,7 @@ fn main() -> ExitCode {
     let options = match cli.run_options_with(&config) {
         Ok(options) => options,
         Err(error) => {
+            log_event(&mut logger, &format!("freshen: {error}"));
             eprintln!("freshen: {error}");
             return exit::code(exit::STEP_FAILURE);
         }
@@ -82,6 +93,7 @@ fn main() -> ExitCode {
     ) {
         Ok(registry) => registry,
         Err(error) => {
+            log_event(&mut logger, &format!("freshen: {error}"));
             eprintln!("freshen: {error}");
             return exit::code(exit::STEP_FAILURE);
         }
@@ -90,12 +102,14 @@ fn main() -> ExitCode {
     let steps = match options.plan(&registry, platform) {
         Ok(steps) => steps,
         Err(error) => {
+            log_event(&mut logger, &format!("freshen: {error}"));
             eprintln!("freshen: {error}");
             return exit::code(exit::STEP_FAILURE);
         }
     };
 
     if cli.list_steps {
+        log_event(&mut logger, "listed steps");
         print!("{}", list_steps(&registry, &options, platform));
         return exit::code(exit::OK);
     }
@@ -110,6 +124,10 @@ fn main() -> ExitCode {
             privilege,
             &HostPreflightProbe,
         );
+        log_event(
+            &mut logger,
+            &format!("doctor completed with exit code {:?}", report.exit_code()),
+        );
         print!("{report}");
         return report.exit_code();
     }
@@ -123,6 +141,10 @@ fn main() -> ExitCode {
             &NoElevationProbe,
         )
         .check();
+        log_event(
+            &mut logger,
+            &format!("check completed with exit code {:?}", summary.exit_code()),
+        );
         if cli.json {
             println!("{}", summary.to_json());
         } else if cli.markdown {
@@ -139,6 +161,7 @@ fn main() -> ExitCode {
         match RunLock::acquire() {
             Ok(lock) => Some(lock),
             Err(error) => {
+                log_event(&mut logger, &format!("freshen: {error}"));
                 eprintln!("freshen: {error}");
                 return exit::code(exit::STEP_FAILURE);
             }
@@ -148,12 +171,20 @@ fn main() -> ExitCode {
     if !options.is_dry_run() && !preflight_skipped() {
         let report = run_preflight(&options);
         if !report.is_ok() {
+            log_event(&mut logger, "freshen: preflight check failed");
             eprint!("{report}");
             return exit::code(exit::PREFLIGHT_FAILED);
         }
 
         if options.package_manager().is_enabled() {
             if let Some(code) = wait_for_package_managers_or_abort(options.package_manager()) {
+                log_event(
+                    &mut logger,
+                    &format!(
+                        "freshen: package manager check failed with exit code {:?}",
+                        code
+                    ),
+                );
                 return code;
             }
         }
@@ -162,6 +193,10 @@ fn main() -> ExitCode {
     let summary =
         Runner::with_options_and_sudo(steps, options, sudo_available, privilege, elevation_probe())
             .run();
+    log_event(
+        &mut logger,
+        &format!("run completed with exit code {:?}", summary.exit_code()),
+    );
     if cli.json {
         println!("{}", summary.to_json());
     } else if cli.markdown {
@@ -369,5 +404,15 @@ fn elevation_probe() -> &'static dyn freshen_lib::ElevationProbe {
     #[cfg(not(windows))]
     {
         &NoElevationProbe
+    }
+}
+
+/// Writes one line to the rotating log file, when one is open.
+///
+/// Logging is best effort: a run must never fail because its log could not be
+/// written.
+fn log_event(logger: &mut Option<LogFile>, message: &str) {
+    if let Some(logger) = logger {
+        let _ = logger.write(message);
     }
 }

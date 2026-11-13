@@ -57,6 +57,7 @@ pub mod left_running_apps;
 pub mod listing;
 pub mod locale;
 pub mod lock;
+pub mod logging;
 pub mod macos_updates;
 pub mod mamba;
 pub mod mason;
