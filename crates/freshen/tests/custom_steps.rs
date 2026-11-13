@@ -199,3 +199,78 @@ fn list_steps_names_custom_steps() {
         stdout(&output)
     );
 }
+
+#[test]
+fn a_custom_step_prints_its_command_before_running() {
+    let tools = StubTools::new(&["custom-a"]);
+    let path = tools.home().join("custom.toml");
+    write_config(
+        &path,
+        r#"
+[[custom_steps]]
+name = "custom-a"
+command = ["custom-a", "--flag"]
+"#,
+    );
+
+    let output = run(&tools, &["--config", path.to_string_lossy().as_ref()]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("custom-a --flag"),
+        "expected the exact command to be printed before it ran:\n{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn quiet_hides_the_custom_step_command() {
+    let tools = StubTools::new(&["custom-a"]);
+    let path = tools.home().join("custom.toml");
+    write_config(
+        &path,
+        r#"
+[[custom_steps]]
+name = "custom-a"
+command = ["custom-a", "--flag"]
+"#,
+    );
+
+    let output = run(
+        &tools,
+        &["--config", path.to_string_lossy().as_ref(), "--quiet"],
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        !stdout(&output).contains("custom-a --flag"),
+        "expected the exact command to be hidden in quiet mode:\n{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_hook_prints_its_command_before_running() {
+    let tools = StubTools::new(&["custom-a", "pre-hook"]);
+    let path = tools.home().join("custom.toml");
+    write_config(
+        &path,
+        r#"
+[[custom_steps]]
+name = "custom-a"
+command = ["custom-a"]
+
+[hooks.custom-a]
+pre = ["pre-hook", "--verify"]
+"#,
+    );
+
+    let output = run(&tools, &["--config", path.to_string_lossy().as_ref()]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("pre-hook --verify"),
+        "expected the hook command to be printed before it ran:\n{}",
+        stdout(&output)
+    );
+}

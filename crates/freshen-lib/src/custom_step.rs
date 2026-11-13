@@ -22,6 +22,7 @@
 use serde::Deserialize;
 
 use crate::executable;
+use crate::output::human;
 use crate::platform::Platform;
 use crate::process::CommandSpec;
 use crate::step::{CheckReport, Detection, Step, StepError, StepId};
@@ -163,6 +164,7 @@ impl Step for CustomStep {
     }
 
     fn run(&self) -> Result<(), StepError> {
+        human!("{}", self.command);
         self.command
             .run()
             .map(|_| ())

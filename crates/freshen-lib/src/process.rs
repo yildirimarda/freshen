@@ -24,6 +24,7 @@
 //! for input from the terminal that freshen itself was started from.
 
 use std::ffi::{OsStr, OsString};
+use std::fmt;
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -571,6 +572,17 @@ impl CommandSpec {
         &self.args
     }
 
+    /// The exact command line: the program followed by its arguments.
+    #[must_use]
+    pub fn command_line(&self) -> String {
+        let mut line = self.program.to_string_lossy().into_owned();
+        for arg in &self.args {
+            line.push(' ');
+            line.push_str(&arg.to_string_lossy());
+        }
+        line
+    }
+
     /// Timeout per attempt, if one is set.
     #[must_use]
     pub fn timeout_limit(&self) -> Option<Duration> {
@@ -896,6 +908,12 @@ impl CommandSpec {
         }
 
         Ok(AttemptResult { outcome, captured })
+    }
+}
+
+impl fmt::Display for CommandSpec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.command_line())
     }
 }
 
@@ -1599,6 +1617,17 @@ mod tests {
         );
         assert_eq!(spec.timeout_limit(), Some(Duration::from_secs(60)));
         assert_eq!(spec.retry_count(), 3);
+    }
+
+    #[test]
+    fn command_line_renders_the_program_and_its_arguments() {
+        let spec = CommandSpec::new("golangci-lint").args(["run", "./..."]);
+        assert_eq!(spec.command_line(), "golangci-lint run ./...");
+        assert_eq!(spec.to_string(), "golangci-lint run ./...");
+
+        let bare = CommandSpec::new("echo");
+        assert_eq!(bare.command_line(), "echo");
+        assert_eq!(bare.to_string(), "echo");
     }
 
     #[test]
