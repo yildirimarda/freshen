@@ -39,7 +39,7 @@ fn send_macos(summary: &RunSummary) {
         .arg(&script)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stderr::null())
+        .stderr(std::io::Stderr::null())
         .spawn();
 }
 
@@ -87,7 +87,7 @@ mod tests {
     use super::{body, TITLE};
     use crate::options::RunOptions;
     use crate::platform::Platform;
-    use crate::runner::{Runner, RunSummary};
+    use crate::runner::{RunSummary, Runner};
     use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
 
     /// A step that reports itself as installed and then runs (or fails) on cue.
