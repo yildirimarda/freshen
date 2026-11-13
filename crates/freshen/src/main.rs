@@ -90,11 +90,13 @@ fn main() -> ExitCode {
         &format!("freshen {} started", freshen_lib::version()),
     );
 
+    let environment = ConfigEnvironment::from_env();
     let config_path = cli
         .config
         .as_deref()
         .map(PathBuf::from)
-        .unwrap_or_else(|| ConfigEnvironment::from_env().config_path(platform));
+        .or_else(|| environment.config.clone())
+        .unwrap_or_else(|| environment.config_path(platform));
 
     // The trust store records which hooks and custom steps are trusted to run.
     // It lives next to the configuration file. A corrupt trust store is fatal:
@@ -289,13 +291,20 @@ fn main() -> ExitCode {
 
 /// Loads the configuration file.
 ///
-/// A file named with `--config` has to exist; the file in the default
-/// location is optional.
+/// A file named with `--config` or `FRESHEN_CONFIG` has to exist; the file in
+/// the default location is optional.
 fn load_config(cli: &Cli, platform: Platform) -> Result<Config, freshen_lib::ConfigError> {
-    let mut config = if let Some(path) = &cli.config {
-        Config::load(path)?
+    let environment = ConfigEnvironment::from_env();
+    let (path, explicit) = match &cli.config {
+        Some(path) => (path.clone(), true),
+        None => match &environment.config {
+            Some(path) => (path.clone(), true),
+            None => (environment.config_path(platform), false),
+        },
+    };
+    let mut config = if explicit {
+        Config::load(&path)?
     } else {
-        let path = ConfigEnvironment::from_env().config_path(platform);
         Config::load_optional(&path)?.unwrap_or_default()
     };
     config.apply_env_overrides(std::env::vars_os().map(|(key, value)| {

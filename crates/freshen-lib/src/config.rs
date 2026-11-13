@@ -40,6 +40,12 @@ pub const CONFIG_FILE_NAME: &str = "config.toml";
 /// The full scheme is `FRESHEN_<SECTION>__<KEY>` (see [`Config::apply_env_overrides`]).
 pub const ENV_PREFIX: &str = "FRESHEN_";
 
+/// The environment variable that points at an alternative configuration file.
+///
+/// When set, freshen reads this file instead of the platform-default one. The
+/// `--config` command-line flag wins over it.
+pub const CONFIG_ENV: &str = "FRESHEN_CONFIG";
+
 /// A problem that prevented the configuration from being used.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -707,6 +713,9 @@ pub struct ConfigEnvironment {
 
     /// The home directory of the user.
     pub home: Option<PathBuf>,
+
+    /// `FRESHEN_CONFIG`: an alternative configuration file.
+    pub config: Option<PathBuf>,
 }
 
 impl ConfigEnvironment {
@@ -717,6 +726,7 @@ impl ConfigEnvironment {
             appdata: env_path("APPDATA"),
             xdg_config_home: env_path("XDG_CONFIG_HOME"),
             home: env_path("HOME").or_else(|| env_path("USERPROFILE")),
+            config: env_path(CONFIG_ENV),
         }
     }
 
@@ -744,8 +754,15 @@ impl ConfigEnvironment {
     }
 
     /// The configuration file on `platform`.
+    ///
+    /// When [`ConfigEnvironment::config`] is set (`FRESHEN_CONFIG`), that file
+    /// is returned instead of the platform-default location.
     #[must_use]
     pub fn config_path(&self, platform: Platform) -> PathBuf {
+        if let Some(config) = &self.config {
+            return config.clone();
+        }
+
         self.config_dir(platform).join(CONFIG_FILE_NAME)
     }
 }
@@ -1571,6 +1588,37 @@ snapshot_retention = 3
             Platform::current().map(|platform| ConfigEnvironment::from_env().config_path(platform));
 
         assert_eq!(super::config_path(), expected);
+    }
+
+    #[test]
+    fn freshen_config_points_at_an_alternative_configuration_file() {
+        let environment = ConfigEnvironment {
+            config: Some(PathBuf::from("/tmp/alt/config.toml")),
+            ..ConfigEnvironment::default()
+        };
+
+        for platform in [Platform::Macos, Platform::Linux, Platform::Windows] {
+            assert_eq!(
+                environment.config_path(platform),
+                PathBuf::from("/tmp/alt/config.toml"),
+                "{platform}"
+            );
+        }
+    }
+
+    #[test]
+    fn freshen_config_wins_over_the_default_location() {
+        let environment = ConfigEnvironment {
+            config: Some(PathBuf::from("/tmp/alt/config.toml")),
+            xdg_config_home: Some(PathBuf::from("/home/user/cfg")),
+            home: Some(PathBuf::from("/home/user")),
+            ..ConfigEnvironment::default()
+        };
+
+        assert_eq!(
+            environment.config_path(Platform::Linux),
+            PathBuf::from("/tmp/alt/config.toml")
+        );
     }
 
     #[test]
