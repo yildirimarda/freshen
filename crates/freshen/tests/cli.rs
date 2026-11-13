@@ -9,7 +9,14 @@ use std::process::{Command, Output};
 /// A directory without a configuration file, so the binary never reads the
 /// configuration of the machine the test runs on.
 fn empty_home() -> PathBuf {
-    let home = std::env::temp_dir().join(format!("freshen-cli-{}", std::process::id()));
+    let home = std::env::temp_dir().join(format!(
+        "freshen-cli-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
     std::fs::create_dir_all(&home)
         .unwrap_or_else(|error| panic!("failed to create {}: {error}", home.display()));
     home
@@ -192,6 +199,74 @@ fn version_prints_the_binary_name_and_version() {
 
     assert!(output.status.success());
     assert!(stdout(&output).starts_with("freshen "));
+}
+
+#[test]
+fn logs_shows_the_last_run() {
+    let home = empty_home();
+
+    let env = |command: &mut Command| {
+        command
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .env("XDG_CONFIG_HOME", home.join("config"))
+            .env("APPDATA", home.join("appdata"));
+    };
+
+    let run = |args: &[&str]| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_freshen"));
+        env(&mut command);
+        command
+            .args(args)
+            .output()
+            .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
+    };
+
+    // Produce a run whose events are recorded in the log file.
+    let first = run(&[
+        "--dry-run",
+        "--skip",
+        &format!("{COMMON_STEPS},{MACOS_STEPS}"),
+    ]);
+    assert_eq!(first.status.code(), Some(0), "stderr: {}", stderr(&first));
+
+    // The `logs` subcommand prints the last run from the log file.
+    let logged = run(&["logs"]);
+    assert_eq!(logged.status.code(), Some(0), "stderr: {}", stderr(&logged));
+    let text = stdout(&logged);
+    assert!(text.contains("started"), "logs output: {text}");
+    assert!(text.contains("run completed"), "logs output: {text}");
+}
+
+#[test]
+fn logs_with_no_previous_run_prints_nothing() {
+    let home = empty_home();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_freshen"))
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("XDG_CONFIG_HOME", home.join("config"))
+        .env("XDG_CACHE_HOME", home.join("cache"))
+        .env("APPDATA", home.join("appdata"))
+        .env("LOCALAPPDATA", home.join("localappdata"))
+        .args(["logs"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    assert!(stdout(&output).is_empty(), "stdout: {:?}", stdout(&output));
+}
+
+#[test]
+fn logs_subcommand_is_listed_in_help() {
+    let output = run(&["--help"]);
+
+    assert!(output.status.success());
+    let text = stdout(&output);
+    assert!(
+        text.contains("logs"),
+        "help does not mention the logs subcommand: {text}"
+    );
 }
 
 #[test]
