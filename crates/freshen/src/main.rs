@@ -123,6 +123,18 @@ fn main() -> ExitCode {
 
     freshen_lib::output::set_output_level(options.output_level());
 
+    // The `self-update` subcommand upgrades freshen itself through the package
+    // manager that installed it, so it is handled before any step runs.
+    if let Some(cli::Command::SelfUpdate) = cli.command {
+        match freshen_lib::self_update::self_update() {
+            Ok(()) => return exit::code(exit::OK),
+            Err(error) => {
+                eprintln!("freshen: {error}");
+                return exit::code(exit::STEP_FAILURE);
+            }
+        }
+    }
+
     // Validate `sudo` credentials once up front so every step that needs root
     // can be skipped with a "needs sudo" reason instead of failing mid-run.
     let privilege = SystemInfo::detect().privilege();

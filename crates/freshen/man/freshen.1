@@ -11,6 +11,7 @@ freshen man
 freshen completions {zsh|bash|fish|powershell}
 freshen logs
 freshen history
+freshen self-update
 .Sh DESCRIPTION
 freshen upgrades the package managers, language toolchains and containers on a
 developer machine.  It detects the tools that are installed, reports what is
@@ -191,6 +192,10 @@ Show the log of the last freshen run.
 .TP
 .B history
 List previous runs and what each one changed, from the snapshots.
+.TP
+.B self-update
+Upgrade freshen itself through the package manager that installed it. When
+Homebrew owns the installation, \fBbrew upgrade freshen\fR is run.
 .Sh EXIT CODES
 .TP
 .B 0
