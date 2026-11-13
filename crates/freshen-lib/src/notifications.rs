@@ -1,27 +1,29 @@
-//! macOS desktop notifications through Notification Center.
+//! Desktop notifications at the end of a run.
 //!
 //! At the end of a run, freshen posts a notification with the result summary
-//! so the outcome is visible without watching the terminal. Sending a
-//! notification never fails a run: when `osascript` is unavailable or the
-//! user has not granted notification permission, the error is ignored and the
-//! run finishes as usual.
+//! so the outcome is visible without watching the terminal. On macOS this uses
+//! `osascript` (Notification Center); on Linux it uses `notify-send`. Sending
+//! a notification never fails a run: when the notifier is unavailable or the
+//! user has not granted permission, the error is ignored and the run finishes
+//! as usual.
 
 use crate::runner::RunSummary;
 
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
 use crate::runner::format_duration;
 
 /// Title shown in the notification.
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
 pub(crate) const TITLE: &str = "freshen";
 
 /// Sends a desktop notification with the result of `summary`.
 ///
-/// On macOS this posts to Notification Center through `osascript`; on every
-/// other platform it does nothing. A failure to send is ignored so a run is
-/// never aborted because of a notification.
+/// On macOS this posts to Notification Center through `osascript`; on Linux it
+/// uses `notify-send`; on every other platform it does nothing. A failure to
+/// send is ignored so a run is never aborted because of a notification.
 pub(crate) fn send(summary: &RunSummary) {
     send_macos(summary);
+    send_linux(summary);
 }
 
 #[cfg(target_os = "macos")]
@@ -43,16 +45,37 @@ fn send_macos(summary: &RunSummary) {
         .spawn();
 }
 
+#[cfg(target_os = "linux")]
+fn send_linux(summary: &RunSummary) {
+    let body = body(summary);
+    // Fire and forget: a notification must never block the run or delay its
+    // exit. Errors (for example `notify-send` not being installed or the
+    // desktop session not supporting notifications) are ignored.
+    let _ = std::process::Command::new("notify-send")
+        .arg(TITLE)
+        .arg(&body)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
 #[cfg(not(target_os = "macos"))]
 fn send_macos(_summary: &RunSummary) {
     // Desktop notifications are a macOS feature; every other platform is
-    // silent here (see the `notify-send` and toast items in the plan).
+    // silent here (see `send_linux` for Linux).
+}
+
+#[cfg(not(target_os = "linux"))]
+fn send_linux(_summary: &RunSummary) {
+    // Desktop notifications are a Linux feature; every other platform is
+    // silent here (see `send_macos` for macOS).
 }
 
 /// The body of the notification: the run result as a single line.
 ///
 /// Kept platform-neutral so it can be tested on every operating system.
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
 #[must_use]
 pub(crate) fn body(summary: &RunSummary) -> String {
     let mut text = format!(
