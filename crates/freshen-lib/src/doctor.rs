@@ -200,6 +200,13 @@ fn config_check(report: &mut DoctorReport, config_path: &Path, config_error: Opt
                 "Create the file or drop --config if you did not mean to point at it.".to_string(),
             ));
         }
+        Some(ConfigError::WorldWritable { path }) => {
+            report.push(DoctorFinding::error(
+                "config",
+                format!("configuration file is world-writable: {}", path.display()),
+                "Make the configuration file and its parent directories not world-writable, or point --config at a different location.".to_string(),
+            ));
+        }
         Some(ConfigError::Read { path, source }) => {
             report.push(DoctorFinding::error(
                 "config",
