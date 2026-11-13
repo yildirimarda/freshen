@@ -32,7 +32,11 @@ fn the_end_of_a_run_posts_a_notification_with_the_result_summary() {
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
 
-    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let deadline = Instant::now() + Duration::from_secs(10);
     let notified = loop {
