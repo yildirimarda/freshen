@@ -12,6 +12,8 @@ freshen completions {zsh|bash|fish|powershell}
 freshen logs
 freshen history
 freshen self-update
+freshen schedule install [--every HOURS]
+freshen schedule remove
 .Sh DESCRIPTION
 freshen upgrades the package managers, language toolchains and containers on a
 developer machine.  It detects the tools that are installed, reports what is
@@ -202,6 +204,13 @@ List previous runs and what each one changed, from the snapshots.
 .B self-update
 Upgrade freshen itself through the package manager that installed it. When
 Homebrew owns the installation, \fBbrew upgrade freshen\fR is run.
+.TP
+.B schedule install [--every HOURS]
+Install (write and load) a launchd agent that runs \fBfreshen --check\fR
+every \fIHOURS\fR hours (default 24) on macOS.
+.TP
+.B schedule remove
+Unload and delete the scheduled launchd agent on macOS.
 .Sh EXIT CODES
 .TP
 .B 0

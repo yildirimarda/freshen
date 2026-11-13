@@ -95,6 +95,7 @@ pub mod restored_windows;
 pub mod rpm_ostree;
 pub mod runner;
 pub mod rustup;
+pub mod schedule;
 pub mod scoop;
 pub mod sdkman;
 pub mod self_update;
@@ -183,6 +184,9 @@ pub use process::{
 };
 pub use registry::{Registry, RegistryError};
 pub use runner::{RunSummary, Runner, StepResult, StepStatus, VersionChange};
+pub use schedule::{
+    install as schedule_install, remove as schedule_remove, ScheduleError, AGENT_LABEL,
+};
 pub use signals::{install as install_interrupt_handler, requested as interrupted, SignalError};
 pub use snapshot::{
     list_snapshots, snapshot_directory, RollbackCommand, SnapshotCommand, SnapshotEntryInfo,
