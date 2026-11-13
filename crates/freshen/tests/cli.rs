@@ -605,3 +605,60 @@ fn an_unknown_shell_is_rejected() {
         stderr(&output)
     );
 }
+
+/// Runs `freshen man` and asserts it exits successfully.
+fn man() -> String {
+    let output = run(&["man"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "man failed: {}",
+        stderr(&output)
+    );
+    stdout(&output)
+}
+
+#[test]
+fn man_page_names_the_command() {
+    let text = man();
+
+    assert!(text.starts_with(".\\\""), "man page: {text}");
+    assert!(text.contains(".Sh NAME"), "man page: {text}");
+    assert!(text.contains("freshen"), "man page: {text}");
+}
+
+#[test]
+fn man_page_documents_the_flags() {
+    let text = man();
+
+    for section in [".Sh NAME", ".Sh SYNOPSIS", ".Sh DESCRIPTION", ".Sh OPTIONS"] {
+        assert!(text.contains(section), "man page missing {section}: {text}");
+    }
+    for flag in [
+        "--dry-run",
+        "--check",
+        "--list-steps",
+        "--doctor",
+        "--yes",
+        "--cleanup",
+    ] {
+        assert!(
+            text.contains(flag),
+            "man page does not mention {flag}: {text}"
+        );
+    }
+    for subcommand in ["logs", "history", "completions", "man"] {
+        assert!(
+            text.contains(subcommand),
+            "man page does not mention {subcommand}: {text}"
+        );
+    }
+}
+
+#[test]
+fn man_page_lists_the_exit_codes() {
+    let text = man();
+
+    assert!(text.contains(".Sh EXIT CODES"), "man page: {text}");
+    assert!(text.contains("130"), "man page: {text}");
+}
