@@ -41,6 +41,15 @@ fn main() -> ExitCode {
         return exit::code(exit::STEP_FAILURE);
     };
 
+    // The `logs` subcommand only reads the log file; it never appends to it, so
+    // it is handled before this run's own log line is recorded.
+    if let Some(cli::Command::Logs) = cli.command {
+        if let Some(last_run) = freshen_lib::logging::last_run_log() {
+            print!("{last_run}");
+        }
+        return exit::code(exit::OK);
+    }
+
     // Log to a rotating file in the OS-appropriate location. Logging never
     // fails a run: when the log cannot be opened it is simply skipped.
     let mut logger = LogFile::open(LoggingEnvironment::from_env().log_path(platform)).ok();

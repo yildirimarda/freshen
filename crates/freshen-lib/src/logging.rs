@@ -109,6 +109,49 @@ pub fn log_path() -> Option<PathBuf> {
     Platform::current().map(|platform| LoggingEnvironment::from_env().log_path(platform))
 }
 
+/// Returns the log lines of the most recent run from the log file at `path`.
+///
+/// A run begins at a line that announces the start of a freshen invocation
+/// ("freshen <version> started"). Everything from the last such line to the
+/// end of the file is the last run. When the file contains no such line, the
+/// whole file is the last run.
+///
+/// Returns `None` when the file does not exist or is empty.
+///
+/// # Errors
+///
+/// Returns the underlying I/O error when the file cannot be read.
+pub fn last_run(path: &Path) -> io::Result<Option<String>> {
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+
+    let lines: Vec<&str> = contents.lines().collect();
+    let start = lines
+        .iter()
+        .rposition(|line| is_run_start(line))
+        .unwrap_or(0);
+    let last_run = lines[start..].join("\n");
+    if last_run.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(format!("{last_run}\n")))
+}
+
+/// Returns the log lines of the most recent run on the running platform, or
+/// `None` when there is no log file or the platform is unsupported.
+pub fn last_run_log() -> Option<String> {
+    let path = log_path()?;
+    last_run(&path).ok().flatten()
+}
+
+/// Returns `true` when `line` announces the start of a freshen run.
+fn is_run_start(line: &str) -> bool {
+    line.starts_with("freshen ") && line.contains(" started")
+}
+
 /// A problem that prevented a log file from being used.
 #[derive(Debug, thiserror::Error)]
 pub enum LogError {
@@ -299,7 +342,7 @@ fn env_path(key: &str) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{LogFile, LoggingEnvironment, LOG_DIR_NAME, LOG_FILE_NAME};
+    use super::{last_run, LogFile, LoggingEnvironment, LOG_DIR_NAME, LOG_FILE_NAME};
     use crate::platform::Platform;
     use std::env;
     use std::fs;
@@ -592,6 +635,62 @@ mod tests {
 
         let contents = fs::read_to_string(&path).unwrap_or_else(|error| panic!("{error:?}"));
         assert_eq!(contents, "this-line-is-much-longer-than-the-limit\n");
+    }
+
+    #[test]
+    fn last_run_returns_the_lines_of_the_most_recent_run() {
+        let directory = temp_directory();
+        let path = directory.join(LOG_FILE_NAME);
+        fs::create_dir_all(&directory).unwrap_or_else(|error| panic!("{error:?}"));
+        fs::write(
+            &path,
+            "freshen 0.1.0 started\nfirst run event\nrun completed with exit code 0\n\
+         freshen 0.1.0 started\nsecond run event\nrun completed with exit code 1\n",
+        )
+        .unwrap_or_else(|error| panic!("failed to write {path:?}: {error}"));
+
+        let last_run = last_run(&path)
+            .unwrap_or_else(|error| panic!("failed to read {path:?}: {error}"))
+            .unwrap_or_else(|| panic!("expected a last run"));
+        assert_eq!(
+            last_run, "freshen 0.1.0 started\nsecond run event\nrun completed with exit code 1\n",
+            "last run: {last_run:?}"
+        );
+    }
+
+    #[test]
+    fn last_run_returns_the_whole_file_when_there_is_no_run_start() {
+        let directory = temp_directory();
+        let path = directory.join(LOG_FILE_NAME);
+        fs::create_dir_all(&directory).unwrap_or_else(|error| panic!("{error:?}"));
+        fs::write(&path, "some orphaned line\n")
+            .unwrap_or_else(|error| panic!("failed to write {path:?}: {error}"));
+
+        let last_run =
+            last_run(&path).unwrap_or_else(|error| panic!("failed to read {path:?}: {error}"));
+        assert_eq!(last_run, Some("some orphaned line\n".to_owned()));
+    }
+
+    #[test]
+    fn last_run_is_none_when_the_log_file_is_missing() {
+        let directory = temp_directory();
+        let path = directory.join(LOG_FILE_NAME);
+        assert_eq!(
+            last_run(&path).unwrap_or_else(|error| panic!("failed to read {path:?}: {error}")),
+            None
+        );
+    }
+
+    #[test]
+    fn last_run_is_none_when_the_log_file_is_empty() {
+        let directory = temp_directory();
+        let path = directory.join(LOG_FILE_NAME);
+        fs::create_dir_all(&directory).unwrap_or_else(|error| panic!("{error:?}"));
+        fs::write(&path, "").unwrap_or_else(|error| panic!("failed to write {path:?}: {error}"));
+        assert_eq!(
+            last_run(&path).unwrap_or_else(|error| panic!("failed to read {path:?}: {error}")),
+            None
+        );
     }
 
     fn temp_directory() -> PathBuf {

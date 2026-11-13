@@ -14,7 +14,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use clap::{ArgAction, Parser};
+use clap::{ArgAction, Parser, Subcommand};
 use freshen_lib::{
     Config, ContainerRuntimeKind, OutputLevel, PackageManagerConfig, PreflightCheck,
     PreflightConfig, RunOptions, StepSelection, DEFAULT_JOBS, DEFAULT_MIN_BATTERY_PERCENT,
@@ -297,6 +297,17 @@ pub struct Cli {
     /// (default 20).
     #[arg(long, value_name = "PERCENT")]
     pub battery_threshold: Option<u8>,
+
+    /// Subcommand to run. When absent freshen runs the detected steps.
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+/// Subcommands of freshen.
+#[derive(Debug, Clone, Subcommand)]
+pub enum Command {
+    /// Show the log of the last freshen run.
+    Logs,
 }
 
 impl Cli {
