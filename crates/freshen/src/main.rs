@@ -80,6 +80,8 @@ fn main() -> ExitCode {
         .with_container_runtime(active_container_runtime(cli.container_runtime))
         .with_pre_commit_repositories(config.pre_commit_repositories());
 
+    freshen_lib::output::set_output_level(options.output_level());
+
     // Validate `sudo` credentials once up front so every step that needs root
     // can be skipped with a "needs sudo" reason instead of failing mid-run.
     let privilege = SystemInfo::detect().privilege();

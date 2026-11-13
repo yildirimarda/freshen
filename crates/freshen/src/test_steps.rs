@@ -12,6 +12,7 @@
 //! integration test can exercise interrupt and deadline handling while a
 //! command is waiting to retry.
 
+use freshen_lib::output::{print_progress, print_verbose};
 use freshen_lib::{
     Backoff, BatteryStatus, CheckReport, CommandSpec, Detection, PackageManagerProbe,
     PackageManagerProcess, Platform, PreflightProbe, Registry, Step, StepError, StepId,
@@ -233,6 +234,8 @@ impl Step for ProbeStep {
     }
 
     fn run(&self) -> Result<(), StepError> {
+        print_progress(&format!("{}: running {}", self.id, self.name));
+        print_verbose(&format!("{}: verbose diagnostics", self.id));
         self.command
             .run()
             .map(|_| ())
