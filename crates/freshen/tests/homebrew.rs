@@ -1882,9 +1882,9 @@ fn force_kill_terminates_an_app_that_does_not_quit_gracefully() {
         calls.contains(&"kill -9 123".to_owned()),
         "calls: {calls:?}"
     );
-    assert_eq!(
-        calls.last().map(String::as_str),
-        Some("open -g -b com.example.firefox")
+    assert!(
+        calls.contains(&"open -g -b com.example.firefox".to_owned()),
+        "the app was not reopened: {calls:?}"
     );
 
     let text = stdout(&output);

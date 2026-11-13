@@ -246,7 +246,9 @@ fn logs_with_no_previous_run_prints_nothing() {
         .env("HOME", &home)
         .env("USERPROFILE", &home)
         .env("XDG_CONFIG_HOME", home.join("config"))
+        .env("XDG_CACHE_HOME", home.join("cache"))
         .env("APPDATA", home.join("appdata"))
+        .env("LOCALAPPDATA", home.join("localappdata"))
         .args(["logs"])
         .output()
         .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
