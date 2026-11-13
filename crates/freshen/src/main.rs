@@ -245,6 +245,13 @@ fn main() -> ExitCode {
         }
     }
 
+    // Tell the user when freshen itself has an update available. The check is
+    // best effort: a missing package manager or a failed query just skips the
+    // hint and never blocks the run.
+    if let Some(hint) = freshen_lib::self_update::update_available_hint() {
+        freshen_lib::output::print_progress(&hint);
+    }
+
     let summary =
         Runner::with_options_and_sudo(steps, options, sudo_available, privilege, elevation_probe())
             .run();

@@ -129,6 +129,7 @@ impl StubTools {
             .env("FRESHEN_SNAPSHOT_DIR", self.dir.join("snapshots"))
             .env("FRESHEN_LOCK_DIR", self.dir.join("lock"))
             .env("FRESHEN_SKIP_PREFLIGHT", "1")
+            .env("FRESHEN_SKIP_UPDATE_CHECK", "1")
             .env("HOME", &self.dir)
             .env("FRESHEN_APP_ROOTS", self.dir.join("Applications"))
             .env(
