@@ -373,7 +373,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add a man page, covered by tests
 - [x] Add a `self-update` subcommand, covered by tests
 - [x] Add an update-available hint that never blocks the run, covered by tests
-- [ ] Cap captured subprocess output (for example the last N bytes per stream) so a runaway command cannot exhaust memory, while still streaming every line live, covered by tests
+- [x] Cap captured subprocess output (for example the last N bytes per stream) so a runaway command cannot exhaust memory, while still streaming every line live, covered by tests
 - [ ] Refuse to load the config file, hooks and custom steps from world-writable files or directories and print the offending path, covered by tests on Unix and with injected ACL facts on Windows
 - [ ] Print the exact command of every hook and custom step before running it (unless `--quiet`), covered by tests
 - [ ] Require `--trust-config`, or an interactive confirmation that stores a hash, the first time a new or changed hook or custom step is seen, covered by tests

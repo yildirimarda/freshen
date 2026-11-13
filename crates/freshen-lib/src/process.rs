@@ -55,6 +55,14 @@ pub(crate) static PATH_GUARD: Mutex<()> = Mutex::new(());
 /// finished by this deadline are detached.
 const READER_GRACE: Duration = Duration::from_millis(100);
 
+/// Maximum captured bytes retained per output stream.
+///
+/// A runaway command that prints without bound must not be able to exhaust
+/// memory, so only the last `CAPTURED_OUTPUT_LIMIT` bytes of each stream are
+/// kept for the run log. Live streaming is unaffected: every line is still
+/// handed to the `on_line` callback as it arrives, regardless of the cap.
+const CAPTURED_OUTPUT_LIMIT: usize = 1_048_576;
+
 /// Which of a command's output pipes a chunk came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OutputStream {
@@ -607,8 +615,7 @@ impl CommandSpec {
         let max_attempts = self.retries.saturating_add(1);
         let program = self.program.to_string_lossy().into_owned();
         let started = Instant::now();
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
+        let mut captured = Captured::new();
         let mut attempt: u32 = 1;
 
         loop {
@@ -625,8 +632,8 @@ impl CommandSpec {
                     program,
                     timeout,
                     output: Box::new(ProcessOutput {
-                        stdout: captured_text(&stdout),
-                        stderr: captured_text(&stderr),
+                        stdout: captured_text(&captured.stdout),
+                        stderr: captured_text(&captured.stderr),
                         status: None,
                         attempts: attempt.saturating_sub(1),
                         duration: started.elapsed(),
@@ -649,8 +656,8 @@ impl CommandSpec {
             let attempt_network_failure =
                 captured_network_failure(&result.captured.stdout, &result.captured.stderr);
             let retryable = self.should_retry(result.outcome, &result.captured);
-            stdout.extend_from_slice(&result.captured.stdout);
-            stderr.extend_from_slice(&result.captured.stderr);
+            captured.push(OutputStream::Stdout, &result.captured.stdout);
+            captured.push(OutputStream::Stderr, &result.captured.stderr);
 
             let outcome = result.outcome;
             if matches!(outcome, AttemptOutcome::Interrupted) {
@@ -659,8 +666,8 @@ impl CommandSpec {
             if let AttemptOutcome::Exited(status) = outcome {
                 if status.success() {
                     return Ok(ProcessOutput {
-                        stdout: captured_text(&stdout),
-                        stderr: captured_text(&stderr),
+                        stdout: captured_text(&captured.stdout),
+                        stderr: captured_text(&captured.stderr),
                         status: Some(status),
                         attempts: attempt,
                         duration: started.elapsed(),
@@ -671,8 +678,8 @@ impl CommandSpec {
 
             if attempt >= max_attempts || !retryable {
                 let output = Box::new(ProcessOutput {
-                    stdout: captured_text(&stdout),
-                    stderr: captured_text(&stderr),
+                    stdout: captured_text(&captured.stdout),
+                    stderr: captured_text(&captured.stderr),
                     status: match outcome {
                         AttemptOutcome::Exited(status) => Some(status),
                         AttemptOutcome::TimedOut | AttemptOutcome::Interrupted => None,
@@ -806,8 +813,7 @@ impl CommandSpec {
         }
         drop(sender);
 
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
+        let mut captured = Captured::new();
         let mut pending = readers.len();
         let mut reader_error = None;
         let attempt_started = Instant::now();
@@ -818,8 +824,7 @@ impl CommandSpec {
                 &receiver,
                 &mut pending,
                 &mut reader_error,
-                &mut stdout,
-                &mut stderr,
+                &mut captured,
                 on_line,
             );
 
@@ -867,8 +872,7 @@ impl CommandSpec {
                     event,
                     &mut pending,
                     &mut reader_error,
-                    &mut stdout,
-                    &mut stderr,
+                    &mut captured,
                     on_line,
                 ),
                 Err(_) => break,
@@ -878,8 +882,7 @@ impl CommandSpec {
             &receiver,
             &mut pending,
             &mut reader_error,
-            &mut stdout,
-            &mut stderr,
+            &mut captured,
             on_line,
         );
 
@@ -892,10 +895,7 @@ impl CommandSpec {
             return Err(ProcessError::Capture { program, source });
         }
 
-        Ok(AttemptResult {
-            outcome,
-            captured: Captured { stdout, stderr },
-        })
+        Ok(AttemptResult { outcome, captured })
     }
 }
 
@@ -960,9 +960,40 @@ enum ReaderEvent {
 }
 
 /// Output captured from one attempt.
+///
+/// Each stream is capped at [`CAPTURED_OUTPUT_LIMIT`] bytes so a runaway
+/// command cannot exhaust memory; only the last bytes of each stream survive.
 struct Captured {
     stdout: Vec<u8>,
     stderr: Vec<u8>,
+}
+
+impl Captured {
+    fn new() -> Self {
+        Self {
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        }
+    }
+
+    /// Appends `bytes` to the captured buffer for `stream`, retaining only the
+    /// last [`CAPTURED_OUTPUT_LIMIT`] bytes overall. A single write that is
+    /// larger than the limit contributes only its tail, so no unbounded
+    /// allocation can happen even when a command prints gigabytes.
+    fn push(&mut self, stream: OutputStream, bytes: &[u8]) {
+        let buf = match stream {
+            OutputStream::Stdout => &mut self.stdout,
+            OutputStream::Stderr => &mut self.stderr,
+        };
+        let keep = bytes.len().min(CAPTURED_OUTPUT_LIMIT);
+        let bytes = &bytes[bytes.len() - keep..];
+        let room = CAPTURED_OUTPUT_LIMIT - keep;
+        if buf.len() > room {
+            buf.drain(..buf.len() - room);
+        }
+        buf.extend_from_slice(bytes);
+        debug_assert!(buf.len() <= CAPTURED_OUTPUT_LIMIT);
+    }
 }
 
 /// How one attempt ended.
@@ -1266,12 +1297,11 @@ fn drain(
     receiver: &Receiver<ReaderEvent>,
     pending: &mut usize,
     reader_error: &mut Option<std::io::Error>,
-    stdout: &mut Vec<u8>,
-    stderr: &mut Vec<u8>,
+    captured: &mut Captured,
     on_line: &mut dyn FnMut(OutputStream, &str),
 ) {
     while let Ok(event) = receiver.try_recv() {
-        handle_event(event, pending, reader_error, stdout, stderr, on_line);
+        handle_event(event, pending, reader_error, captured, on_line);
     }
 }
 
@@ -1280,8 +1310,7 @@ fn handle_event(
     event: ReaderEvent,
     pending: &mut usize,
     reader_error: &mut Option<std::io::Error>,
-    stdout: &mut Vec<u8>,
-    stderr: &mut Vec<u8>,
+    captured: &mut Captured,
     on_line: &mut dyn FnMut(OutputStream, &str),
 ) {
     match event {
@@ -1289,10 +1318,7 @@ fn handle_event(
             let text = String::from_utf8_lossy(&chunk.bytes);
             let line = text.trim_end_matches(['\n', '\r']);
             on_line(chunk.stream, line);
-            match chunk.stream {
-                OutputStream::Stdout => stdout.extend_from_slice(&chunk.bytes),
-                OutputStream::Stderr => stderr.extend_from_slice(&chunk.bytes),
-            }
+            captured.push(chunk.stream, &chunk.bytes);
         }
         ReaderEvent::Done(error) => {
             *pending = pending.saturating_sub(1);
@@ -1754,6 +1780,60 @@ mod tests {
             Ok(Err(error)) => panic!("command failed: {error}"),
             Err(_) => panic!("runner thread panicked"),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn captured_output_is_capped_to_the_last_bytes_per_stream() {
+        let limit = super::CAPTURED_OUTPUT_LIMIT;
+        // Far more output than the cap on both streams, then a known tail.
+        let filler_a = "a".repeat(512);
+        let filler_b = "b".repeat(512);
+        let script = format!(
+            "i=0; while [ $i -lt 4096 ]; do printf '%s' '{filler_a}'; i=$((i + 1)); done; \
+             printf 'STDOUT_TAIL\\n'; \
+             j=0; while [ $j -lt 4096 ]; do printf '%s' '{filler_b}'; j=$((j + 1)); done >&2; \
+             printf 'STDERR_TAIL\\n' >&2",
+            filler_a = filler_a,
+            filler_b = filler_b,
+        );
+        let output = run_or_panic(&shell(&script));
+
+        // Each stream is capped at the limit and keeps its tail, not its head.
+        assert_eq!(output.stdout().len(), limit);
+        assert!(output.stdout().ends_with("STDOUT_TAIL\n"));
+        assert_eq!(output.stderr().len(), limit);
+        assert!(output.stderr().ends_with("STDERR_TAIL\n"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_streaming_delivers_every_line_while_captured_is_capped() {
+        let limit = super::CAPTURED_OUTPUT_LIMIT;
+        let line_count = 10_000;
+        let line = "a".repeat(300);
+        let script = format!(
+            "i=0; while [ $i -lt {line_count} ]; do printf '%s\\n' '{line}'; i=$((i + 1)); done",
+            line_count = line_count,
+            line = line,
+        );
+
+        let mut streamed_lines = Vec::new();
+        let mut streamed_bytes = 0usize;
+        let output = match shell(&script).run_streaming(|_stream, text| {
+            streamed_bytes += text.len() + 1; // +1 for the newline the callback strips
+            streamed_lines.push(text.to_owned());
+        }) {
+            Ok(output) => output,
+            Err(error) => panic!("command failed: {error}"),
+        };
+
+        // Every line was streamed live, even though the captured bytes are capped.
+        assert_eq!(streamed_lines.len(), line_count);
+        assert!(streamed_bytes > limit);
+        assert_eq!(streamed_lines.last(), Some(&line));
+        assert!(output.stdout().len() <= limit);
+        assert!(output.stdout().ends_with(&format!("{line}\n")));
     }
 
     #[cfg(unix)]
