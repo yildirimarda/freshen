@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use freshen_lib::doctor;
 use freshen_lib::logging::{LogFile, LoggingEnvironment};
 use freshen_lib::snapshot::{list_snapshots, snapshot_directory, SnapshotRecord};
@@ -35,6 +35,14 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     if cli.json || cli.markdown {
         freshen_lib::route_to_stderr();
+    }
+
+    // Shell completion scripts do not touch the machine, so they are produced
+    // before any platform check or logging happens.
+    if let Some(cli::Command::Completions { shell }) = cli.command {
+        let mut command = Cli::command();
+        clap_complete::generate(shell, &mut command, "freshen", &mut std::io::stdout());
+        return exit::code(exit::OK);
     }
 
     let Some(platform) = Platform::current() else {

@@ -523,3 +523,85 @@ fn an_unknown_profile_fails_with_a_clear_message() {
         stderr(&output)
     );
 }
+
+/// Runs `freshen completions <shell>` and asserts it exits successfully.
+fn completions(shell: &str) -> String {
+    let output = run(&["completions", shell]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "completions {shell} failed: {}",
+        stderr(&output)
+    );
+    stdout(&output)
+}
+
+#[test]
+fn zsh_completions_start_with_compdef_and_list_flags() {
+    let text = completions("zsh");
+
+    assert!(
+        text.starts_with("#compdef freshen"),
+        "zsh completions: {text}"
+    );
+    assert!(text.contains("_freshen()"), "zsh completions: {text}");
+    assert!(text.contains("--dry-run"), "zsh completions: {text}");
+    assert!(text.contains("--check"), "zsh completions: {text}");
+    assert!(text.contains("logs"), "zsh completions: {text}");
+    assert!(text.contains("history"), "zsh completions: {text}");
+}
+
+#[test]
+fn bash_completions_register_the_freshen_command() {
+    let text = completions("bash");
+
+    assert!(text.contains("_freshen()"), "bash completions: {text}");
+    assert!(
+        text.contains("complete -F _freshen"),
+        "bash completions: {text}"
+    );
+    assert!(text.contains("--dry-run"), "bash completions: {text}");
+    assert!(text.contains("completions"), "bash completions: {text}");
+}
+
+#[test]
+fn fish_completions_register_the_freshen_command() {
+    let text = completions("fish");
+
+    assert!(
+        text.contains("function __fish_freshen_global_optspecs"),
+        "fish completions: {text}"
+    );
+    assert!(
+        text.contains("complete -c freshen"),
+        "fish completions: {text}"
+    );
+    assert!(text.contains("dry-run"), "fish completions: {text}");
+    assert!(text.contains("logs"), "fish completions: {text}");
+    assert!(text.contains("history"), "fish completions: {text}");
+}
+
+#[test]
+fn powershell_completions_register_an_argument_completer() {
+    let text = completions("powershell");
+
+    assert!(
+        text.contains("Register-ArgumentCompleter -Native -CommandName 'freshen'"),
+        "powershell completions: {text}"
+    );
+    assert!(text.contains("dry-run"), "powershell completions: {text}");
+    assert!(text.contains("logs"), "powershell completions: {text}");
+    assert!(text.contains("history"), "powershell completions: {text}");
+}
+
+#[test]
+fn an_unknown_shell_is_rejected() {
+    let output = run(&["completions", "nope"]);
+
+    assert_eq!(output.status.code(), Some(2), "stderr: {}", stderr(&output));
+    assert!(
+        stderr(&output).contains("nope"),
+        "stderr: {}",
+        stderr(&output)
+    );
+}
