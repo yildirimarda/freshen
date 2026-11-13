@@ -91,6 +91,7 @@ freshen --install-macos-updates                       # install the macOS system
 | `UPDATE_TIMEOUT` | `60` | Seconds to wait for an app that is updating itself to finish its update |
 | `FRESHEN_SKIP_PREFLIGHT` | unset | Set to `1` to disable every preflight and package-manager check |
 | `FRESHEN_LOCK_DIR` | platform state directory | Override where the single-run lock file lives |
+| `NO_COLOR` | unset | Set to any non-empty value to disable ANSI colour in the spinner and other styled output (see <https://no-color.org/>) |
 
 `--yes` and `--force-kill` replace the old `ASSUME_YES`/`FORCE_KILL` environment variables.
 

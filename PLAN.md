@@ -361,7 +361,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Environment variable overrides for every config key with a documented naming scheme, covered by tests
 - [x] Add `--doctor` that verifies the environment (tools found, permissions, config validity) and prints actionable fixes, covered by tests
 - [x] Rich terminal output: step progress and spinners when interactive, plain output when piped or in CI, covered by tests
-- [ ] Add `NO_COLOR` support and document it, covered by tests
+- [x] Add `NO_COLOR` support and document it, covered by tests
 - [ ] Add macOS desktop notifications at the end of a run (Notification Center) with the result summary, covered by tests
 - [ ] Add Linux desktop notifications at the end of a run (`notify-send`) with the result summary, covered by tests
 - [ ] Add Windows toast notifications at the end of a run with the result summary, covered by tests Platform guard: this code is Windows-only. Put it behind `#[cfg(windows)]` with its tests and imports inside the gated module, and keep parsers and decision logic platform-neutral so they are tested on every OS; otherwise Linux and macOS CI fail with `unused_imports`/`dead_code` under `-D warnings`
