@@ -92,6 +92,7 @@ fn self_update_reports_when_freshen_is_not_owned_by_brew() {
     );
 }
 
+#[cfg(not(windows))]
 #[test]
 fn update_available_hint_prints_without_blocking_the_run() {
     let tools = StubTools::new(&["brew"]);
@@ -153,6 +154,7 @@ fn update_available_hint_is_skipped_when_brew_is_absent() {
     );
 }
 
+#[cfg(not(windows))]
 #[test]
 fn update_available_hint_is_skipped_when_freshen_is_up_to_date() {
     let tools = StubTools::new(&["brew"]);
@@ -174,6 +176,7 @@ fn update_available_hint_is_skipped_when_freshen_is_up_to_date() {
     );
 }
 
+#[cfg(not(windows))]
 #[test]
 fn update_available_hint_is_skipped_on_unparsable_output() {
     let tools = StubTools::new(&["brew"]);
