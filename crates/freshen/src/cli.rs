@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::{ArgAction, Parser, Subcommand};
+use clap_complete::Shell;
 use freshen_lib::{
     Config, ContainerRuntimeKind, OutputLevel, PackageManagerConfig, PreflightCheck,
     PreflightConfig, RunOptions, StepSelection, DEFAULT_JOBS, DEFAULT_MIN_BATTERY_PERCENT,
@@ -310,6 +311,12 @@ pub enum Command {
     Logs,
     /// List previous runs and what each one changed, from the snapshots.
     History,
+    /// Print a shell completion script for zsh, bash, fish or PowerShell.
+    Completions {
+        /// The shell to generate completions for.
+        #[arg(value_enum)]
+        shell: Shell,
+    },
 }
 
 impl Cli {
