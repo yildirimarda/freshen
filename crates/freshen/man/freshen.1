@@ -1,0 +1,221 @@
+.\" Man page for freshen, generated and kept in sync with the CLI by hand.
+.\" Run `freshen man` to print this page, or `man -l crates/freshen/man/freshen.1`.
+.Dd November 13, 2026
+.Dt FRESHEN 1
+.Os freshen
+.Sh NAME
+freshen \- keep a developer machine up to date
+.Sh SYNOPSIS
+freshen [options]
+freshen man
+freshen completions {zsh|bash|fish|powershell}
+freshen logs
+freshen history
+.Sh DESCRIPTION
+freshen upgrades the package managers, language toolchains and containers on a
+developer machine.  It detects the tools that are installed, reports what is
+outdated, performs the upgrades and prints a summary.  It runs on macOS,
+Linux and Windows.
+
+By default freshen runs every step it detects.  A step that is not installed is
+skipped.  Use --only or --skip to restrict the run, and --check to report
+outdated items without changing anything.
+
+The configuration file is optional.  On macOS and Linux it is read from
+~/.config/freshen/config.toml, on Windows from %APPDATA%\\freshen\\config.toml.
+The --config option overrides the default location.
+.Sh OPTIONS
+.TP
+.B --dry-run
+Show what would run without changing anything.
+.TP
+.B --doctor
+Verify the environment (tools found, permissions, config validity) and print
+actionable fixes without changing anything.
+.TP
+.B --verbose
+Print more detail about what freshen is doing, including diagnostic lines.
+Mutually exclusive with --quiet.
+.TP
+.B --quiet
+Print less: suppress informational progress lines, keeping only errors.
+Mutually exclusive with --verbose.
+.TP
+.B --check
+Report outdated items without changing anything; exit 2 when updates are pending.
+.TP
+.B --list-steps
+List every known step, whether it was detected and why it would be skipped.
+.TP
+.B --json
+Print the report as JSON instead of the plain-text summary. Mutually exclusive
+with --markdown.
+.TP
+.B --markdown
+Print the report as Markdown instead of the plain-text summary. Mutually
+exclusive with --json.
+.TP
+.B --config PATH
+Read the configuration from this file instead of the default location.
+.TP
+.B --container-runtime RUNTIME
+Use this container runtime instead of detecting the active one (colima,
+orbstack, docker-desktop, podman-desktop, rancher-desktop, podman, docker).
+.TP
+.B --only STEP
+Only run the named steps (comma-separated, repeatable).
+.TP
+.B --skip STEP
+Skip the named steps (comma-separated, repeatable).
+.TP
+.B --profile PROFILE
+Run the steps enabled by the named profile, defined in the configuration file.
+.TP
+.B --except PACKAGE
+Exclude these Chocolatey packages from the upgrade (repeatable,
+comma-separated). Chocolatey only runs on Windows.
+.TP
+.B --yes, \-y
+Assume yes for every confirmation prompt.
+.TP
+.B --force-kill
+Force-kill applications that do not quit gracefully.
+.TP
+.B --cleanup
+Run destructive cleanup (cache, old-version and image pruning). Aliases:
+--allow-cleanup, --destructive-cleanup.
+.TP
+.B --prune-report
+Report the reclaimable space from each cleanup step's dry-run listing without
+removing anything.
+.TP
+.B --install-macos-updates
+Install the macOS system updates instead of only reporting them (macOS only).
+.TP
+.B --install-firmware-updates
+Install the available firmware updates instead of only reporting them
+(Linux only).
+.TP
+.B --install-wsl-updates
+Install the WSL kernel update with \fBwsl --update\fR instead of only
+reporting that it is available (Windows only).
+.TP
+.B --install-nvim-lazy
+Sync lazy.nvim plugins instead of only reporting that the sync is available.
+.TP
+.B --install-nvim-packer
+Sync packer.nvim plugins instead of only reporting that the sync is available.
+.TP
+.B --install-nvim-mason
+Update Mason packages instead of only reporting that the update is available.
+.TP
+.B --install-nvim-treesitter
+Update Treesitter parsers instead of only reporting that the update is available.
+.TP
+.B --wsl-distro DISTRO
+Run the Linux package-manager steps inside this WSL distribution on Windows.
+.TP
+.B --restart-services
+Restart the services that need a restart after a step, restoring their previous
+enabled/running state on error or interrupt (Linux only).
+.TP
+.B --restart-apps
+Restart the desktop applications that were stopped before an upgrade, reusing
+the recorded snapshot of what was stopped (Linux only).
+.TP
+.B --bump
+Replace \fBlts\fR/\fBlatest\fR mise tool requests with a fixed version when
+upgrading mise-managed tools (opt-in, off by default).
+.TP
+.B --docker-bump
+Pull pinned container images too (opt-in, off by default).
+.TP
+.B --prune-unused-older-than DAYS
+Prune dangling container images that have not been used for N days (only runs
+with --cleanup, opt-in, off by default).
+.TP
+.B --reinstall-go
+Reinstall outdated \fBgo install\fR binaries instead of only reporting them
+(opt-in, off by default).
+.TP
+.B --install-aws-cli-updates
+Update AWS CLI v2 through the official installer instead of only reporting that
+a newer version is available (opt-in, off by default).
+.TP
+.B --snapshot-retention COUNT
+Keep this many pre-upgrade snapshot files (0 keeps every snapshot, default 10).
+.TP
+.B --step-timeout SECONDS
+Stop a single step after this many seconds (0 disables the timeout, default 0).
+.TP
+.B --timeout SECONDS
+Stop the whole run after this many seconds (0 disables the timeout, default 0).
+.TP
+.B --jobs N
+How many read-only checks --check may query at the same time (default 4).
+.TP
+.B --skip-network-check [true|false]
+Skip the preflight check that the network is reachable.
+.TP
+.B --skip-disk-check [true|false]
+Skip the preflight check that enough disk space is free.
+.TP
+.B --skip-battery-check [true|false]
+Skip the preflight check that the battery is not too low.
+.TP
+.B --skip-metered-check [true|false]
+Skip the preflight check for a metered connection or hotspot.
+.TP
+.B --skip-package-manager-check [true|false]
+Skip the check for another package manager process.
+.TP
+.B --package-manager-wait SECONDS
+Seconds to wait for another package manager to finish before aborting
+(default 30).
+.TP
+.B --min-free-disk-gib GIB
+Minimum free disk space in GiB required before updating (default 1).
+.TP
+.B --battery-threshold PERCENT
+Battery percentage below which an update on battery is refused (default 20).
+.Sh SUBCOMMANDS
+.TP
+.B man
+Print this man page.
+.TP
+.B completions {zsh|bash|fish|powershell}
+Print a shell completion script for the given shell.
+.TP
+.B logs
+Show the log of the last freshen run.
+.TP
+.B history
+List previous runs and what each one changed, from the snapshots.
+.Sh EXIT CODES
+.TP
+.B 0
+Success: every step succeeded or was skipped.
+.TP
+.B 1
+A step failed or timed out (also used for startup errors).
+.TP
+.B 2
+Updates are pending (--check).
+.TP
+.B 3
+A preflight or package-manager check failed.
+.TP
+.B 130
+The run was interrupted.
+.Sh CONFIGURATION
+freshen reads an optional TOML configuration file.  On macOS and Linux the
+default path is ~/.config/freshen/config.toml; on Windows it is
+%APPDATA%\\freshen\\config.toml.  Command-line flags win over values in the
+configuration file, and the configuration file wins over built-in defaults.
+.Sh FILES
+~/.config/freshen/config.toml  configuration file on macOS and Linux
+%APPDATA%\\freshen\\config.toml  configuration file on Windows
+.Sh SEE ALSO
+The freshen README and documentation: https://github.com/yildirimarda/freshen
+.Sh AUTHOR
+Written by the freshen project.

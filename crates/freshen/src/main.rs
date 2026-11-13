@@ -44,6 +44,13 @@ fn main() -> ExitCode {
         clap_complete::generate(shell, &mut command, "freshen", &mut std::io::stdout());
         return exit::code(exit::OK);
     }
+    if let Some(cli::Command::Man) = cli.command {
+        // The man page is a static roff document kept in sync with the CLI by
+        // hand; it is printed to stdout so it can be piped to `man -l -` or
+        // installed into the system man path by a package.
+        print!("{}", include_str!("../man/freshen.1"));
+        return exit::code(exit::OK);
+    }
 
     let Some(platform) = Platform::current() else {
         eprintln!("freshen: unsupported operating system");

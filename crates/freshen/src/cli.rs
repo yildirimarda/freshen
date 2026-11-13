@@ -317,6 +317,8 @@ pub enum Command {
         #[arg(value_enum)]
         shell: Shell,
     },
+    /// Print a man page for freshen.
+    Man,
 }
 
 impl Cli {
