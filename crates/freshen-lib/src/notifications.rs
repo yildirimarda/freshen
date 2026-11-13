@@ -39,7 +39,7 @@ fn send_macos(summary: &RunSummary) {
         .arg(&script)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::io::Stderr::null())
+        .stderr(std::process::Stdio::null())
         .spawn();
 }
 
