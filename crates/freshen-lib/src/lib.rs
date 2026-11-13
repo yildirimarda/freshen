@@ -81,6 +81,7 @@ pub mod policy;
 pub mod pre_commit;
 pub mod preflight;
 pub mod process;
+pub mod progress;
 pub mod pyenv;
 pub mod rbenv;
 pub mod registry;

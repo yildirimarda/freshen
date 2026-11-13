@@ -337,7 +337,7 @@ fn a_failing_step_is_recorded_and_the_run_continues_to_exit_1() {
     );
     let failed_line = text
         .lines()
-        .find(|line| line.contains("freshen-definitely-not-a-real-tool"))
+        .find(|line| line.contains("freshen-definitely-not-a-real-tool") && line.contains("failed"))
         .unwrap_or_else(|| panic!("summary does not list the failed step: {text}"));
     assert!(failed_line.contains("failed"), "summary: {text}");
 }
