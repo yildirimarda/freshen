@@ -86,7 +86,10 @@ fn send_windows(summary: &RunSummary) {
     let Some(powershell) = crate::shell::windows::powershell() else {
         return;
     };
-    let _ = std::process::Command::new(powershell.command())
+    let Some(path) = crate::executable::resolve(powershell.command()) else {
+        return;
+    };
+    let _ = std::process::Command::new(path)
         .args(crate::shell::windows::invocation_args(&script, true))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())

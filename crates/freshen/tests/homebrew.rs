@@ -2017,7 +2017,10 @@ fn a_menu_bar_app_is_ended_and_reopened_in_the_background() {
         "the app was quit through an Apple event: {calls:?}"
     );
     assert_eq!(
-        calls.last().map(String::as_str),
+        calls
+            .iter()
+            .rfind(|call| !is_desktop_notification_call(call))
+            .map(String::as_str),
         Some("open -g -j -b com.example.menubar")
     );
 
