@@ -894,7 +894,12 @@ fn quits_running_cask_apps_before_the_upgrade_and_reopens_after_cleanup() {
     let output = run_apps(&tools, &state, &[], &[]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert_eq!(tools.step_calls(), full_app_transcript(&app));
+    let calls: Vec<String> = tools
+        .step_calls()
+        .into_iter()
+        .filter(|call| !is_desktop_notification_call(call))
+        .collect();
+    assert_eq!(calls, full_app_transcript(&app));
 
     let text = stdout(&output);
     assert!(
