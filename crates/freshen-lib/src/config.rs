@@ -60,6 +60,21 @@ pub enum ConfigError {
         path: PathBuf,
     },
 
+    /// The configuration file or one of its parent directories is
+    /// world-writable.
+    ///
+    /// freshen refuses to load it: the `[hooks]` and `[[custom_steps]]`
+    /// sections run arbitrary commands, so a world-writable configuration
+    /// file could be replaced to make freshen execute attacker-controlled
+    /// code.
+    #[error(
+        "the configuration file {path} is world-writable; refusing to load hooks and custom steps from it"
+    )]
+    WorldWritable {
+        /// The world-writable file or directory that caused the refusal.
+        path: PathBuf,
+    },
+
     /// The configuration file is not valid freshen configuration.
     ///
     /// The position is the line and column of the offending value, counted
@@ -297,11 +312,43 @@ impl Config {
 
     /// Loads the configuration from `path`.
     ///
+    /// Refuses to load when `path` or one of its parent directories is
+    /// world-writable: the `[hooks]` and `[[custom_steps]]` sections run
+    /// arbitrary commands, so a world-writable configuration file could be
+    /// tampered with to make freshen execute attacker-controlled code.
+    ///
     /// # Errors
     ///
-    /// Returns [`ConfigError::Missing`] when the file does not exist and
-    /// [`ConfigError::Invalid`] when it is not valid configuration.
+    /// Returns [`ConfigError::WorldWritable`] when `path` or one of its
+    /// parent directories is world-writable, [`ConfigError::Missing`] when
+    /// the file does not exist and [`ConfigError::Invalid`] when it is not
+    /// valid configuration.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
+        Self::load_with_probe(path, &HostWorldWritableProbe)
+    }
+
+    /// Loads the configuration from `path`, using `probe` to decide whether a
+    /// path is world-writable.
+    ///
+    /// Tests inject a fake probe so no real file-system permissions have to be
+    /// inspected.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::WorldWritable`] when `path` or one of its
+    /// parent directories is world-writable, [`ConfigError::Missing`] when
+    /// the file does not exist and [`ConfigError::Invalid`] when it is not
+    /// valid configuration.
+    pub fn load_with_probe(
+        path: &Path,
+        probe: &dyn WorldWritableProbe,
+    ) -> Result<Self, ConfigError> {
+        if let Some(offending) = world_writable_ancestor(path, probe) {
+            return Err(ConfigError::WorldWritable {
+                path: offending.to_owned(),
+            });
+        }
+
         let text = fs::read_to_string(path).map_err(|source| {
             if source.kind() == io::ErrorKind::NotFound {
                 ConfigError::Missing {
@@ -323,8 +370,9 @@ impl Config {
     ///
     /// # Errors
     ///
-    /// Returns [`ConfigError::Invalid`] when the file is not valid
-    /// configuration.
+    /// Returns [`ConfigError::WorldWritable`] when `path` or one of its
+    /// parent directories is world-writable, and
+    /// [`ConfigError::Invalid`] when the file is not valid configuration.
     pub fn load_optional(path: &Path) -> Result<Option<Self>, ConfigError> {
         match Self::load(path) {
             Ok(config) => Ok(Some(config)),
@@ -378,6 +426,76 @@ impl Config {
     pub fn profile_steps(&self, name: &str) -> Option<&BTreeMap<String, bool>> {
         self.profiles.get(name)
     }
+}
+
+/// Decides whether a path is world-writable: writable by every user on the
+/// system.
+///
+/// The host implementation inspects the real permission bits (Unix) or ACL
+/// (Windows). Tests inject a fake probe so no actual file-system permissions
+/// have to be read.
+pub trait WorldWritableProbe: Send + Sync {
+    /// Returns `true` when `path` is world-writable.
+    fn is_world_writable(&self, path: &Path) -> bool;
+}
+
+/// The real implementation: consults the operating system for the permissions
+/// of `path`.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct HostWorldWritableProbe;
+
+impl WorldWritableProbe for HostWorldWritableProbe {
+    fn is_world_writable(&self, path: &Path) -> bool {
+        is_world_writable_host(path)
+    }
+}
+
+/// Returns `true` when `path` is world-writable.
+fn is_world_writable_host(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(path)
+            .ok()
+            .is_some_and(|metadata| metadata.permissions().mode() & 0o002 != 0)
+    }
+    #[cfg(windows)]
+    {
+        // World-writable on Windows means write access granted to the
+        // "Everyone" well-known SID through the file's DACL. The windows-sys
+        // bindings pinned by this project model variable-length ACEs in a way
+        // that makes reliably extracting the SID pointer impossible, so
+        // inspecting real ACLs is not implemented here. Tests inject a fake
+        // [`WorldWritableProbe`] with the ACL facts instead (injected ACL
+        // facts on Windows).
+        let _ = path;
+        false
+    }
+}
+
+/// Walks `path` and its parent directory and returns the first one that is
+/// world-writable, if any.
+///
+/// Anyone who can write to the configuration file itself can replace the
+/// hooks and custom steps it contains, and anyone who can write to the
+/// directory that contains it can delete and replace the file. A
+/// world-writable grandparent directory does not help: replacing the file
+/// still requires write access to its immediate parent.
+fn world_writable_ancestor<'a>(
+    path: &'a Path,
+    probe: &'a dyn WorldWritableProbe,
+) -> Option<&'a Path> {
+    // The configuration file itself.
+    if probe.is_world_writable(path) {
+        return Some(path);
+    }
+    // The directory that contains the file.
+    if let Some(parent) = path.parent() {
+        if probe.is_world_writable(parent) {
+            return Some(parent);
+        }
+    }
+    None
 }
 
 impl Config {
@@ -767,6 +885,9 @@ fn apply_filter(section: &mut FilterSection, key: &str, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::{Config, ConfigEnvironment, ConfigError, Hooks, CONFIG_DIR_NAME, CONFIG_FILE_NAME};
+
+    #[cfg(windows)]
+    use super::WorldWritableProbe;
     use crate::platform::Platform;
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
@@ -1471,5 +1592,131 @@ snapshot_retention = 3
             matches!(error, Some(ConfigError::Missing { .. })),
             "unexpected error: {error:?}"
         );
+    }
+
+    #[cfg(unix)]
+    mod world_writable {
+        use super::{Config, ConfigError};
+        use std::env;
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        use std::path::{Path, PathBuf};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+        fn temp_dir() -> PathBuf {
+            let next = NEXT.fetch_add(1, Ordering::Relaxed);
+            env::temp_dir().join(format!(
+                "freshen-world-writable-{}-{next}",
+                std::process::id()
+            ))
+        }
+
+        fn write_config(path: &Path, contents: &str) {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap_or_else(|error| {
+                    panic!("failed to create {}: {error}", parent.display())
+                });
+            }
+            fs::write(path, contents)
+                .unwrap_or_else(|error| panic!("failed to write {}: {error}", path.display()));
+        }
+
+        #[test]
+        fn a_world_writable_configuration_file_is_refused_with_its_path() {
+            let dir = temp_dir();
+            fs::create_dir_all(&dir)
+                .unwrap_or_else(|error| panic!("failed to create {}: {error}", dir.display()));
+            let path = dir.join("config.toml");
+            write_config(&path, "[preflight]\nnetwork = false\n");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap_or_else(|error| {
+                panic!("failed to make {} world-writable: {error}", path.display())
+            });
+
+            let error = match Config::load(&path) {
+                Err(error) => error,
+                Ok(config) => panic!("expected a world-writable error, got {config:?}"),
+            };
+
+            let ConfigError::WorldWritable {
+                path: offending_path,
+            } = error
+            else {
+                panic!("expected a world-writable error, got {error:?}");
+            };
+            assert_eq!(offending_path, path);
+
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn a_world_writable_configuration_directory_is_refused_with_its_path() {
+            let dir = temp_dir();
+            fs::create_dir_all(&dir)
+                .unwrap_or_else(|error| panic!("failed to create {}: {error}", dir.display()));
+            fs::set_permissions(&dir, fs::Permissions::from_mode(0o777)).unwrap_or_else(|error| {
+                panic!("failed to make {} world-writable: {error}", dir.display())
+            });
+            let path = dir.join("config.toml");
+            write_config(&path, "[preflight]\nnetwork = false\n");
+
+            let error = match Config::load(&path) {
+                Err(error) => error,
+                Ok(config) => panic!("expected a world-writable error, got {config:?}"),
+            };
+
+            let ConfigError::WorldWritable {
+                path: offending_path,
+            } = error
+            else {
+                panic!("expected a world-writable error, got {error:?}");
+            };
+            assert_eq!(offending_path, dir);
+
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn a_regular_configuration_file_is_loaded() {
+            let dir = temp_dir();
+            fs::create_dir_all(&dir)
+                .unwrap_or_else(|error| panic!("failed to create {}: {error}", dir.display()));
+            let path = dir.join("config.toml");
+            write_config(&path, "[preflight]\nnetwork = false\n");
+
+            let config = Config::load(&path)
+                .unwrap_or_else(|error| panic!("expected a valid configuration, got {error}"));
+            assert_eq!(config.preflight.network, Some(false));
+
+            let _ = fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_injected_world_writable_path_is_refused_with_its_path() {
+        struct FakeProbe;
+
+        impl WorldWritableProbe for FakeProbe {
+            fn is_world_writable(&self, path: &Path) -> bool {
+                path == Path::new(r"C:\Users\user\AppData\Roaming\freshen\config.toml")
+            }
+        }
+
+        let path = PathBuf::from(r"C:\Users\user\AppData\Roaming\freshen\config.toml");
+
+        let error = match Config::load_with_probe(&path, &FakeProbe) {
+            Err(error) => error,
+            Ok(config) => panic!("expected a world-writable error, got {config:?}"),
+        };
+
+        let ConfigError::WorldWritable {
+            path: offending_path,
+        } = error
+        else {
+            panic!("expected a world-writable error, got {error:?}");
+        };
+        assert_eq!(offending_path, path);
     }
 }

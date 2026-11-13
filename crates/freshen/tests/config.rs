@@ -255,3 +255,26 @@ fn an_invalid_configuration_file_stops_a_listing() {
         stderr(&output)
     );
 }
+
+#[test]
+#[cfg(unix)]
+fn a_world_writable_configuration_file_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tools = StubTools::new(&["uv"]);
+    let path = tools.config_path();
+    write_config(&path, ENOUGH_DISK_SPACE_CONFIG);
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap_or_else(|error| {
+        panic!("failed to make {} world-writable: {error}", path.display())
+    });
+
+    let output = run(&tools, &[]);
+
+    assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
+    let stderr = stderr(&output);
+    assert!(stderr.contains("world-writable"), "stderr: {stderr}");
+    assert!(
+        stderr.contains(path.to_string_lossy().as_ref()),
+        "stderr: {stderr}"
+    );
+}
