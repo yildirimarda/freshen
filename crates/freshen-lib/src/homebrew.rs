@@ -1643,7 +1643,7 @@ struct QuitPlan {
 /// The apps on the always-quit list are quit without asking, so a run whose
 /// apps are all on that list never shows the prompt. Every other app is quit
 /// only when the user says so.
-fn quit_plan(scan: &AppScan, app_lists: &AppLists, assume_yes: bool) -> QuitPlan {
+fn quit_plan(scan: &AppScan, app_lists: &AppLists, assume_yes: bool, unattended: bool) -> QuitPlan {
     let always: Vec<RunningApp> = scan
         .running()
         .iter()
@@ -1654,7 +1654,7 @@ fn quit_plan(scan: &AppScan, app_lists: &AppLists, assume_yes: bool) -> QuitPlan
 
     QuitPlan {
         always,
-        ask: !assume_yes && !everything_is_always,
+        ask: !assume_yes && !unattended && !everything_is_always,
     }
 }
 
@@ -2060,7 +2060,12 @@ impl CasksStep {
             human!("   - {}", app.name());
         }
 
-        let always_quit = quit_plan(&scan, options.app_lists(), options.assume_yes());
+        let always_quit = quit_plan(
+            &scan,
+            options.app_lists(),
+            options.assume_yes(),
+            options.unattended(),
+        );
 
         let choice = if always_quit.ask {
             ask_quit_choice()
@@ -3455,7 +3460,7 @@ mod tests {
     fn the_user_is_asked_when_no_app_is_on_the_always_quit_list() {
         let scan = scan_with(&[("com.firefox", "Firefox.app")]);
 
-        let plan = quit_plan(&scan, &AppLists::new(), false);
+        let plan = quit_plan(&scan, &AppLists::new(), false, false);
 
         assert!(plan.ask);
         assert!(plan.always.is_empty());
@@ -3466,7 +3471,7 @@ mod tests {
         let scan = scan_with(&[("com.firefox", "Firefox.app"), ("com.editor", "Editor.app")]);
         let lists = AppLists::new().with_always_quit(["com.firefox", "Editor"]);
 
-        let plan = quit_plan(&scan, &lists, false);
+        let plan = quit_plan(&scan, &lists, false, false);
 
         assert!(!plan.ask);
         assert_eq!(plan.always.len(), 2);
@@ -3477,7 +3482,7 @@ mod tests {
         let scan = scan_with(&[("com.firefox", "Firefox.app"), ("com.editor", "Editor.app")]);
         let lists = AppLists::new().with_always_quit(["com.firefox"]);
 
-        let plan = quit_plan(&scan, &lists, false);
+        let plan = quit_plan(&scan, &lists, false, false);
 
         assert!(plan.ask);
         assert_eq!(plan.always.len(), 1);
@@ -3488,7 +3493,16 @@ mod tests {
     fn assuming_yes_never_asks_the_user() {
         let scan = scan_with(&[("com.firefox", "Firefox.app")]);
 
-        let plan = quit_plan(&scan, &AppLists::new(), true);
+        let plan = quit_plan(&scan, &AppLists::new(), true, false);
+
+        assert!(!plan.ask);
+    }
+
+    #[test]
+    fn unattended_never_asks_the_user() {
+        let scan = scan_with(&[("com.firefox", "Firefox.app")]);
+
+        let plan = quit_plan(&scan, &AppLists::new(), false, true);
 
         assert!(!plan.ask);
     }

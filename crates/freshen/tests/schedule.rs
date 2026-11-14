@@ -66,8 +66,8 @@ fn schedule_install_writes_and_loads_the_agent() {
         "plist missing label: {content}"
     );
     assert!(
-        content.contains("--check"),
-        "plist missing --check: {content}"
+        content.contains("--unattended"),
+        "plist missing --unattended: {content}"
     );
     assert!(
         content.contains("<key>StartInterval</key>"),
@@ -214,8 +214,8 @@ fn schedule_install_writes_and_starts_the_timer() {
     let service_content = std::fs::read_to_string(&service)
         .unwrap_or_else(|error| panic!("failed to read service unit {service:?}: {error}"));
     assert!(
-        service_content.contains("--check"),
-        "service missing --check: {service_content}"
+        service_content.contains("--unattended"),
+        "service missing --unattended: {service_content}"
     );
     assert!(
         service_content.contains("Type=oneshot"),
@@ -293,8 +293,8 @@ fn expect_register_call(calls: &[String], every_hours: u64) {
     assert!(
         calls
             .iter()
-            .any(|call| call.contains("/tr ") && call.contains(" --check")),
-        "expected a schtasks create call that runs freshen --check, got {calls:?}"
+            .any(|call| call.contains("/tr ") && call.contains(" --unattended")),
+        "expected a schtasks create call that runs freshen --unattended, got {calls:?}"
     );
     assert!(
         calls.iter().any(|call| call.contains(" /f")),

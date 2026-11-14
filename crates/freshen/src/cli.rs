@@ -123,6 +123,14 @@ pub struct Cli {
     #[arg(long, short = 'y')]
     pub yes: bool,
 
+    /// Run without any interactive prompt, as a scheduled run would.
+    ///
+    /// This is separate from `--yes`: `--yes` is for an interactive run whose
+    /// user simply wants to skip prompts, while `--unattended` marks the run as
+    /// unattended so no prompt is ever shown and no confirmation is awaited.
+    #[arg(long)]
+    pub unattended: bool,
+
     /// Force-kill applications that do not quit gracefully.
     #[arg(long)]
     pub force_kill: bool,
@@ -413,6 +421,7 @@ impl Cli {
                 _ => OutputLevel::Normal,
             })
             .with_assume_yes(self.yes)
+            .with_unattended(self.unattended)
             .with_force_kill(self.force_kill)
             .with_cleanup(self.cleanup)
             .with_prune_report(self.prune_report)
@@ -553,6 +562,7 @@ mod tests {
         assert_eq!(cli.skip_package_manager_check, None);
         assert!(!options.is_dry_run());
         assert!(!options.assume_yes());
+        assert!(!options.unattended());
         assert!(!options.force_kill());
         assert!(!options.cleanup_enabled());
         assert_eq!(options.output_level(), OutputLevel::Normal);
@@ -609,6 +619,7 @@ mod tests {
             "--skip",
             "casks",
             "--yes",
+            "--unattended",
             "--verbose",
             "--force-kill",
             "--cleanup",
@@ -661,6 +672,7 @@ mod tests {
         );
         assert!(options.is_dry_run());
         assert!(options.assume_yes());
+        assert!(options.unattended());
         assert!(options.force_kill());
         assert_eq!(options.output_level(), OutputLevel::Verbose);
         assert!(options.cleanup_enabled());
@@ -997,6 +1009,7 @@ mod tests {
             "--skip",
             "--profile",
             "--yes",
+            "--unattended",
             "--force-kill",
             "--cleanup",
             "--install-macos-updates",
