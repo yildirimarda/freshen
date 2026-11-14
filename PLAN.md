@@ -429,7 +429,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add recorded-transcript fixtures for the apt/dpkg parsers, covering several distributions
 - [x] Add property tests (`proptest`) for the parsers so unexpected output never crashes the run
 - [x] Add `cargo fuzz` targets for the parsers and wire them into a scheduled workflow proposal under `ci-proposals/`
-- [ ] Enforce a minimum test coverage threshold in CI with `cargo llvm-cov`, proposed under `ci-proposals/`
+- [x] Enforce a minimum test coverage threshold in CI with `cargo llvm-cov`, proposed under `ci-proposals/`
 - [ ] Container-based integration tests on Linux that exercise real package managers against throwaway images
 - [ ] Add a scheduled CI job that runs against the latest Homebrew/winget/apt metadata to catch upstream output changes early, proposed under `ci-proposals/`
 - [ ] Add performance budget: `--check` on a typical machine completes within a documented time
