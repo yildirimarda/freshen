@@ -382,7 +382,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 
 ## Milestone 10: Automation
 
-- [ ] Add a `schedule install` / `schedule remove` subcommand for macOS that writes and removes a launchd agent, covered by tests
+- [x] Add a `schedule install` / `schedule remove` subcommand for macOS that writes and removes a launchd agent, covered by tests
 - [ ] Add a `schedule install` / `schedule remove` subcommand for Linux that writes and removes a systemd user timer, covered by tests Platform guard: tests that need Unix-only fixtures (executable shell-script stubs, `chmod`, `PermissionsExt`) go in a `#[cfg(unix)]` submodule that also owns every import only they use, never the shared `use` block at the top of `mod tests`; otherwise `windows-latest` fails with `unused_imports` under `-D warnings`, which does not reproduce on Linux
 - [ ] Add a `schedule install` / `schedule remove` subcommand for Windows that registers and deletes a Task Scheduler task, covered by tests Platform guard: this code is Windows-only. Put it behind `#[cfg(windows)]` with its tests and imports inside the gated module, and keep parsers and decision logic platform-neutral so they are tested on every OS; otherwise Linux and macOS CI fail with `unused_imports`/`dead_code` under `-D warnings`
 - [ ] Scheduled runs default to check-only mode and notify when updates are pending, covered by tests

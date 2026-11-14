@@ -12,11 +12,12 @@ use freshen_lib::sudo::{HostSudoProbe, SudoState};
 #[cfg(windows)]
 use freshen_lib::HostElevationProbe;
 use freshen_lib::{
-    detect_active_runtime, exit, install_interrupt_handler, list_steps, wait_for_package_managers,
-    ActiveContainerRuntime, AppLists, Config, ConfigEnvironment, ContainerRuntimeKind,
-    CustomStepConfig, CustomStepError, HostContainerRuntimeProbe, HostPackageManagerProbe,
-    HostPreflightProbe, NoElevationProbe, PackageManagerConfig, PackageManagerProbe, Platform,
-    PreflightReport, Registry, RunLock, Runner, SystemInfo, TrustStore, WaitOutcome,
+    detect_active_runtime, exit, install_interrupt_handler, list_steps, schedule,
+    wait_for_package_managers, ActiveContainerRuntime, AppLists, Config, ConfigEnvironment,
+    ContainerRuntimeKind, CustomStepConfig, CustomStepError, HostContainerRuntimeProbe,
+    HostPackageManagerProbe, HostPreflightProbe, NoElevationProbe, PackageManagerConfig,
+    PackageManagerProbe, Platform, PreflightReport, Registry, RunLock, Runner, SystemInfo,
+    TrustStore, WaitOutcome,
 };
 
 mod cli;
@@ -75,6 +76,23 @@ fn main() -> ExitCode {
                 print_history(&records);
                 return exit::code(exit::OK);
             }
+            Err(error) => {
+                eprintln!("freshen: {error}");
+                return exit::code(exit::STEP_FAILURE);
+            }
+        }
+    }
+
+    // Scheduling unattended runs is a standalone operation: it writes or
+    // removes a launchd agent and never touches the step registry, so it is
+    // handled before any step runs.
+    if let Some(cli::Command::Schedule { action }) = cli.command {
+        let result = match action {
+            cli::ScheduleAction::Install { every } => schedule::install(every),
+            cli::ScheduleAction::Remove => schedule::remove(),
+        };
+        match result {
+            Ok(()) => return exit::code(exit::OK),
             Err(error) => {
                 eprintln!("freshen: {error}");
                 return exit::code(exit::STEP_FAILURE);

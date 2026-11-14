@@ -328,6 +328,27 @@ pub enum Command {
     Man,
     /// Upgrade freshen itself through the package manager that installed it.
     SelfUpdate,
+    /// Schedule unattended freshen runs through the platform's scheduler
+    /// (macOS only).
+    Schedule {
+        /// Install or remove the scheduled agent.
+        #[command(subcommand)]
+        action: ScheduleAction,
+    },
+}
+
+/// What `schedule` does.
+#[derive(Debug, Clone, Subcommand)]
+pub enum ScheduleAction {
+    /// Install (write and load) a launchd agent that runs freshen on a
+    /// schedule.
+    Install {
+        /// Run every N hours (default 24).
+        #[arg(long, default_value = "24")]
+        every: u64,
+    },
+    /// Remove (unload and delete) the scheduled agent.
+    Remove,
 }
 
 impl Cli {
@@ -492,7 +513,7 @@ fn timeout(seconds: Option<u64>) -> Option<Duration> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, CliError};
+    use super::{Cli, CliError, Command, ScheduleAction};
     use clap::Parser;
     use freshen_lib::{
         AppSection, Config, FilterSection, OutputLevel, PreflightCheck, PreflightSection,
@@ -1002,6 +1023,42 @@ mod tests {
             "--trust-config",
         ] {
             assert!(help.contains(flag), "help does not mention {flag}: {help}");
+        }
+    }
+
+    #[test]
+    fn schedule_install_parses_with_default_interval() {
+        let cli = parse(&["freshen", "schedule", "install"]);
+        let Some(Command::Schedule { action }) = cli.command else {
+            panic!("expected schedule install, got {:?}", cli.command);
+        };
+        match action {
+            ScheduleAction::Install { every } => assert_eq!(every, 24),
+            ScheduleAction::Remove => panic!("expected install, got remove"),
+        }
+    }
+
+    #[test]
+    fn schedule_install_parses_a_custom_interval() {
+        let cli = parse(&["freshen", "schedule", "install", "--every", "6"]);
+        let Some(Command::Schedule { action }) = cli.command else {
+            panic!("expected schedule install --every 6, got {:?}", cli.command);
+        };
+        match action {
+            ScheduleAction::Install { every } => assert_eq!(every, 6),
+            ScheduleAction::Remove => panic!("expected install, got remove"),
+        }
+    }
+
+    #[test]
+    fn schedule_remove_parses() {
+        let cli = parse(&["freshen", "schedule", "remove"]);
+        let Some(Command::Schedule { action }) = cli.command else {
+            panic!("expected schedule remove, got {:?}", cli.command);
+        };
+        match action {
+            ScheduleAction::Remove => {}
+            ScheduleAction::Install { .. } => panic!("expected remove, got install"),
         }
     }
 }
