@@ -23,7 +23,7 @@ pub const AGENT_LABEL: &str = "com.freshen.schedule";
 pub(crate) const PLIST_FILE_NAME: &str = "com.freshen.schedule.plist";
 
 /// How often the scheduled agent runs by default, in hours.
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(test)]
 pub(crate) const DEFAULT_EVERY_HOURS: u64 = 24;
 
 /// A problem installing or removing the scheduled agent.
@@ -162,8 +162,7 @@ pub fn remove() -> Result<(), ScheduleError> {
 /// Writes the agent property list and loads it with `launchctl`.
 #[cfg(target_os = "macos")]
 fn install_macos(every_hours: u64) -> Result<(), ScheduleError> {
-    let home = std::env::var_os("HOME")
-        .ok_or_else(|| ScheduleError::NotSupported { platform: "macos" })?;
+    let home = std::env::var_os("HOME").ok_or(ScheduleError::NotSupported { platform: "macos" })?;
     let home = PathBuf::from(home);
     let directory = launch_agents_dir(&home);
     std::fs::create_dir_all(&directory).map_err(|source| ScheduleError::WritePlist {
@@ -193,8 +192,7 @@ fn install_macos(every_hours: u64) -> Result<(), ScheduleError> {
 /// Unloads the agent with `launchctl` and deletes its property list.
 #[cfg(target_os = "macos")]
 fn remove_macos() -> Result<(), ScheduleError> {
-    let home = std::env::var_os("HOME")
-        .ok_or_else(|| ScheduleError::NotSupported { platform: "macos" })?;
+    let home = std::env::var_os("HOME").ok_or(ScheduleError::NotSupported { platform: "macos" })?;
     let home = PathBuf::from(home);
     let path = plist_path(&home);
     // An agent that was never loaded cannot be unloaded; ignore that error so
