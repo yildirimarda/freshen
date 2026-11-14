@@ -389,7 +389,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add a separate opt-in that enables unattended upgrades for scheduled runs, covered by tests
 - [x] Skip scheduled runs when on battery or on a metered connection, covered by tests with injected facts
 - [x] Skip scheduled runs when the user is in a meeting or presentation (frontmost full-screen app) or was active in the last N minutes, covered by tests with injected facts
-- [ ] Catch-up behaviour: run once after wake/login when the scheduled time was missed, covered by tests
+- [x] Catch-up behaviour: run once after wake/login when the scheduled time was missed, covered by tests
 - [ ] Add a `--non-interactive` mode that never prompts and picks the safe default for every decision, covered by tests
 - [ ] Make `--non-interactive` skip the casks whose installer needs an administrator password, so a scheduled run never waits for a password even when a terminal is attached, covered by tests
 
