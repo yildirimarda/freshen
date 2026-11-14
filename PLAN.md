@@ -427,7 +427,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add recorded-transcript fixtures for the `docker compose ls` parser, covering several compose versions
 - [x] Add recorded-transcript fixtures for the winget parser, covering several winget versions
 - [x] Add recorded-transcript fixtures for the apt/dpkg parsers, covering several distributions
-- [ ] Add property tests (`proptest`) for the parsers so unexpected output never crashes the run
+- [x] Add property tests (`proptest`) for the parsers so unexpected output never crashes the run
 - [ ] Add `cargo fuzz` targets for the parsers and wire them into a scheduled workflow proposal under `ci-proposals/`
 - [ ] Enforce a minimum test coverage threshold in CI with `cargo llvm-cov`, proposed under `ci-proposals/`
 - [ ] Container-based integration tests on Linux that exercise real package managers against throwaway images
