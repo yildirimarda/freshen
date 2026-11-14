@@ -18,11 +18,16 @@
 //! the probe steps described by `FRESHEN_TEST_STEPS`. The project test command
 //! (`cargo test --all-features`) enables it.
 
+#![allow(dead_code)]
+
 pub mod container_transcripts;
+pub mod recorded_transcripts;
 pub mod tool_transcripts;
 
 #[allow(unused_imports)]
 pub use container_transcripts::*;
+#[allow(unused_imports)]
+pub use recorded_transcripts::RecordedTranscripts;
 #[allow(unused_imports)]
 pub use tool_transcripts::*;
 
