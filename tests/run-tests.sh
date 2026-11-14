@@ -181,4 +181,36 @@ if [[ "${RUN_TESTS_SKIP_WORKFLOW_LAYOUTS:-}" != "1" && -f tests/workflow-layouts
   bash tests/workflow-layouts.sh || fail=1
 fi
 
+# 11. The release-signing workflow signs and notarizes the prebuilt binaries:
+#     macOS archives are code-signed (codesign, hardened runtime, timestamp)
+#     and notarized (notarytool), Windows archives are signed with signtool,
+#     and a final job refreshes checksums.txt so it matches the signed
+#     artifacts. It is triggered by release tags and never touches a package
+#     manager.
+if signing_file="$(workflow_path release-signing)"; then
+  signing_ok=1
+  for runner in macos-latest windows-latest ubuntu-latest; do
+    grep -qF "runs-on: $runner" "$signing_file" || { echo "  no $runner job"; signing_ok=0; }
+  done
+  grep -qF 'tags: ["v*"]' "$signing_file" || { echo "  does not trigger on release tags"; signing_ok=0; }
+  grep -qF -- 'codesign' "$signing_file" || { echo "  does not code sign macOS binaries"; signing_ok=0; }
+  grep -qF -- 'notarytool' "$signing_file" || { echo "  does not notarize macOS binaries"; signing_ok=0; }
+  grep -qF -- 'signtool' "$signing_file" || { echo "  does not sign Windows binaries"; signing_ok=0; }
+  grep -qF -- '--clobber' "$signing_file" || { echo "  does not re-upload over the unsigned assets"; signing_ok=0; }
+  grep -qF -- 'APPLE_DEVELOPER_CERTIFICATE' "$signing_file" || { echo "  no Apple certificate secret"; signing_ok=0; }
+  grep -qF -- 'WINDOWS_CODE_SIGNING_CERTIFICATE' "$signing_file" || { echo "  no Windows certificate secret"; signing_ok=0; }
+  if grep -v '^[[:space:]]*#' "$signing_file" | grep -Eq \
+    'brew[[:space:]]+(update|upgrade|install|uninstall|reinstall|autoremove|cleanup|prune)|apt(-get)?[[:space:]]+(update|upgrade|install|remove|purge|autoremove|autoclean|clean)|choco[[:space:]]+(upgrade|install|uninstall|update)|winget[[:space:]]+(upgrade|install|uninstall)'; then
+    echo "  runs a mutating package-manager command"
+    signing_ok=0
+  fi
+  if (( signing_ok )); then
+    ok "$signing_file signs and notarizes macOS and Windows release binaries"
+  else
+    bad "$signing_file is not a release-signing workflow"
+  fi
+else
+  bad "no release-signing workflow in ci-proposals/ or .github/workflows/"
+fi
+
 exit "$fail"

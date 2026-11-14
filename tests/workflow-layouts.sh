@@ -35,7 +35,7 @@ MD
     fi
   done
 
-  for name in rust ci real-tools; do
+  for name in rust ci real-tools release-signing; do
     src="$root/ci-proposals/$name.yml"
     [[ -f "$src" ]] || src="$root/.github/workflows/$name.yml"
     if [[ "$layout" == proposals ]]; then
