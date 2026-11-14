@@ -194,3 +194,61 @@ fn the_skip_environment_variable_disables_every_check() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(tools.calls(), ["probe run"]);
 }
+
+#[test]
+fn a_fullscreen_frontmost_app_defers_an_unattended_run() {
+    let tools = StubTools::new(&["probe"]);
+
+    let output = run(&tools, "fullscreen=yes", &["--unattended"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("scheduled run deferred"), "{text}");
+    assert!(
+        text.contains("the frontmost app is full screen (a meeting or presentation)"),
+        "{text}"
+    );
+    assert!(
+        tools.calls().is_empty(),
+        "no step should run while deferred"
+    );
+}
+
+#[test]
+fn a_recently_active_user_defers_an_unattended_run() {
+    let tools = StubTools::new(&["probe"]);
+
+    let output = run(&tools, "idle=5", &["--unattended"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("scheduled run deferred"), "{text}");
+    assert!(
+        text.contains("the user was active 5 minutes ago, within the 15-minute idle window"),
+        "{text}"
+    );
+    assert!(
+        tools.calls().is_empty(),
+        "no step should run while deferred"
+    );
+}
+
+#[test]
+fn an_idle_unattended_run_proceeds() {
+    let tools = StubTools::new(&["probe"]);
+
+    let output = run(&tools, "idle=20", &["--unattended"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(tools.calls(), ["probe run"]);
+}
+
+#[test]
+fn an_interactive_run_is_not_deferred_by_user_activity() {
+    let tools = StubTools::new(&["probe"]);
+
+    let output = run(&tools, "fullscreen=yes", &[]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(tools.calls(), ["probe run"]);
+}

@@ -109,6 +109,10 @@ pub struct Config {
     #[serde(default)]
     pub preflight: PreflightSection,
 
+    /// The guards that defer a scheduled run while the user is busy.
+    #[serde(default)]
+    pub user_activity: UserActivitySection,
+
     /// The check for another package manager that is running.
     #[serde(default)]
     pub package_manager: PackageManagerSection,
@@ -185,6 +189,19 @@ pub struct PreflightSection {
     /// (default: `20`, maximum: `100`).
     #[serde(default, deserialize_with = "deserialize_battery_threshold")]
     pub battery_threshold: Option<u8>,
+}
+
+/// The `[user_activity]` section: guards that defer a scheduled run while the
+/// user is busy.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UserActivitySection {
+    /// Whether the user-activity guard runs (default: `true`).
+    pub enabled: Option<bool>,
+
+    /// Minutes of user inactivity required before a scheduled run may start
+    /// (default: 15).
+    pub idle_minutes: Option<u64>,
 }
 
 /// The `[package_manager]` section: what happens when another package
@@ -492,6 +509,18 @@ impl Config {
             "preflight.battery_threshold"
         );
 
+        // [user_activity]
+        option!(
+            self.user_activity.enabled,
+            default.user_activity.enabled,
+            "user_activity.enabled"
+        );
+        option!(
+            self.user_activity.idle_minutes,
+            default.user_activity.idle_minutes,
+            "user_activity.idle_minutes"
+        );
+
         // [package_manager]
         option!(
             self.package_manager.enabled,
@@ -767,6 +796,7 @@ impl Config {
             };
             match section {
                 "PREFLIGHT" => self.apply_preflight(rest, &value),
+                "USER_ACTIVITY" => self.apply_user_activity(rest, &value),
                 "PACKAGE_MANAGER" => self.apply_package_manager(rest, &value),
                 "TIMEOUTS" => self.apply_timeouts(rest, &value),
                 "RUN" => self.apply_run(rest, &value),
@@ -812,6 +842,22 @@ impl Config {
             "BATTERY_THRESHOLD" => {
                 if let Some(v) = parse_u8(value).filter(|v| *v <= 100) {
                     self.preflight.battery_threshold = Some(v);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_user_activity(&mut self, key: &str, value: &str) {
+        match key {
+            "ENABLED" => {
+                if let Some(v) = parse_bool(value) {
+                    self.user_activity.enabled = Some(v);
+                }
+            }
+            "IDLE_MINUTES" => {
+                if let Some(v) = parse_u64(value) {
+                    self.user_activity.idle_minutes = Some(v);
                 }
             }
             _ => {}

@@ -16,6 +16,7 @@ use freshen_lib::output::{print_progress, print_verbose};
 use freshen_lib::{
     Backoff, BatteryStatus, CheckReport, CommandSpec, Detection, PackageManagerProbe,
     PackageManagerProcess, Platform, PreflightProbe, Registry, Step, StepError, StepId,
+    UserActivityProbe,
 };
 use std::time::Duration;
 
@@ -41,8 +42,9 @@ pub fn requested() -> bool {
 /// A preflight probe built from `FRESHEN_TEST_PREFLIGHT`, when it is set.
 ///
 /// The value is a semicolon-separated list of `key=value` facts:
-/// `network=down`, `disk=<bytes>`, `battery=<percent>:<charging|discharging>`
-/// and `metered=<yes|no>`. Unknown keys are ignored.
+/// `network=down`, `disk=<bytes>`, `battery=<percent>:<charging|discharging>`,
+/// `metered=<yes|no>`, `fullscreen=<yes|no>` and `idle=<minutes>`. Unknown
+/// keys are ignored.
 pub fn preflight_probe() -> Option<ScriptedPreflightProbe> {
     let value = std::env::var(PREFLIGHT_ENV_VAR).ok()?;
     let mut probe = ScriptedPreflightProbe {
@@ -50,6 +52,8 @@ pub fn preflight_probe() -> Option<ScriptedPreflightProbe> {
         disk: None,
         battery: None,
         metered: None,
+        frontmost_app_is_fullscreen: false,
+        user_idle_minutes: None,
     };
 
     for entry in value.split(';') {
@@ -76,6 +80,12 @@ pub fn preflight_probe() -> Option<ScriptedPreflightProbe> {
                 } else {
                     None
                 };
+            }
+            "fullscreen" => {
+                probe.frontmost_app_is_fullscreen = is_true(value);
+            }
+            "idle" => {
+                probe.user_idle_minutes = value.trim().parse().ok();
             }
             _ => {}
         }
@@ -104,6 +114,8 @@ pub struct ScriptedPreflightProbe {
     disk: Option<u64>,
     battery: Option<BatteryStatus>,
     metered: Option<bool>,
+    frontmost_app_is_fullscreen: bool,
+    user_idle_minutes: Option<u64>,
 }
 
 impl PreflightProbe for ScriptedPreflightProbe {
@@ -121,6 +133,24 @@ impl PreflightProbe for ScriptedPreflightProbe {
 
     fn metered_connection(&self) -> Option<bool> {
         self.metered
+    }
+
+    fn frontmost_app_is_fullscreen(&self) -> bool {
+        self.frontmost_app_is_fullscreen
+    }
+
+    fn user_idle_minutes(&self) -> Option<u64> {
+        self.user_idle_minutes
+    }
+}
+
+impl UserActivityProbe for ScriptedPreflightProbe {
+    fn frontmost_app_is_fullscreen(&self) -> bool {
+        self.frontmost_app_is_fullscreen
+    }
+
+    fn user_idle_minutes(&self) -> Option<u64> {
+        self.user_idle_minutes
     }
 }
 

@@ -20,6 +20,8 @@ use std::fmt;
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::user_activity::UserActivityProbe;
+
 /// Default minimum free disk space, in GiB.
 pub const DEFAULT_MIN_FREE_DISK_GIB: u64 = 1;
 
@@ -213,6 +215,21 @@ pub trait PreflightProbe {
     /// Whether the active connection is metered or a hotspot, or `None` when
     /// the host cannot tell.
     fn metered_connection(&self) -> Option<bool>;
+
+    /// Returns `true` when the frontmost app is full screen (a meeting or
+    /// presentation), which defers a scheduled run.
+    fn frontmost_app_is_fullscreen(&self) -> bool {
+        let _ = self;
+        false
+    }
+
+    /// Minutes since the last user input, or `None` when the host cannot tell.
+    /// A scheduled run is skipped when this is below the configured idle
+    /// window.
+    fn user_idle_minutes(&self) -> Option<u64> {
+        let _ = self;
+        None
+    }
 }
 
 /// One failed preflight check.
@@ -403,6 +420,24 @@ impl PreflightProbe for HostPreflightProbe {
         {
             None
         }
+    }
+
+    fn frontmost_app_is_fullscreen(&self) -> bool {
+        crate::user_activity::HostUserActivityProbe.frontmost_app_is_fullscreen()
+    }
+
+    fn user_idle_minutes(&self) -> Option<u64> {
+        crate::user_activity::HostUserActivityProbe.user_idle_minutes()
+    }
+}
+
+impl UserActivityProbe for HostPreflightProbe {
+    fn frontmost_app_is_fullscreen(&self) -> bool {
+        crate::user_activity::HostUserActivityProbe.frontmost_app_is_fullscreen()
+    }
+
+    fn user_idle_minutes(&self) -> Option<u64> {
+        crate::user_activity::HostUserActivityProbe.user_idle_minutes()
     }
 }
 
