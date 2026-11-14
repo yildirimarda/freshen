@@ -6,6 +6,18 @@ One command to keep a developer machine current: **Homebrew**, **container image
 freshen
 ```
 
+## Demo
+
+Watch a short terminal recording of freshen running a dry run and a `--check` query:
+
+<asciinema-player src="docs/assets/freshen-demo.cast" cols="120" rows="24" preload="true" autoplay="true" loop="true"></asciinema-player>
+
+Download the cast and play it locally with [`asciinema`](https://asciinema.org):
+
+```bash
+asciinema play docs/assets/freshen-demo.cast
+```
+
 The implementation is the Rust workspace under `crates/`: `freshen-lib` holds all logic and the `freshen` binary is a thin CLI wrapper. It runs on macOS, Linux and Windows. The roadmap ([PLAN.md](PLAN.md)) covers the remaining steps, a config file, rollback snapshots and scheduling. Every step is optional: if a tool is not installed, its section is skipped.
 
 ## What it does
