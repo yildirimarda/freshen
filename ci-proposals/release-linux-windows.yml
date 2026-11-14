@@ -1,9 +1,10 @@
-# Prebuilt Linux (x86_64, aarch64) and Windows (x86_64) binaries with SHA-256
-# checksums, published as a GitHub Release on every git tag matching `v*`.
+# Prebuilt Linux (x86_64 and aarch64; glibc and fully static musl) and Windows
+# (x86_64 and aarch64) binaries with SHA-256 checksums, published as a GitHub
+# Release on every git tag matching `v*`.
 #
-# This is an equivalent of cargo-dist: it builds freshen for the three targets
-# in a matrix, writes a combined checksums file, creates the GitHub Release
-# for the tag, and uploads every binary plus the checksums file as release
+# This is an equivalent of cargo-dist: it builds freshen for every target in
+# a matrix, writes a combined checksums file, creates the GitHub Release for
+# the tag, and uploads every binary plus the checksums file as release
 # assets. cargo-dist is intentionally not used, so the repo does not take on
 # another tool and the workflow keeps full control over the matrix and the
 # artifact names.
@@ -47,7 +48,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, x86_64-unknown-linux-musl, aarch64-unknown-linux-musl]
     steps:
       - uses: actions/checkout@v4
 
@@ -61,9 +62,15 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-aarch64-linux-gnu
 
+      - name: Install the musl toolchain
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+
       - name: Build freshen in release mode
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_x86_64_unknown_linux_musl: musl-gcc
+          CC_aarch64_unknown_linux_musl: musl-gcc
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Stage the binary and its checksum
@@ -79,8 +86,12 @@ jobs:
           path: dist/${{ matrix.target }}/
 
   build-windows:
-    name: build freshen for x86_64-pc-windows-msvc
+    name: build freshen for ${{ matrix.target }}
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
     steps:
       - uses: actions/checkout@v4
 
@@ -88,23 +99,24 @@ jobs:
         run: rustup show active-toolchain
 
       - name: Add the Windows target
-        run: rustup target add x86_64-pc-windows-msvc
+        run: rustup target add ${{ matrix.target }}
 
       - name: Build freshen in release mode
-        run: cargo build --release --locked --target x86_64-pc-windows-msvc
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Stage the binary and its checksum
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
-          New-Item -ItemType Directory -Force -Path "dist\x86_64-pc-windows-msvc" | Out-Null
-          Copy-Item "target\x86_64-pc-windows-msvc\release\freshen.exe" \
-            "dist\x86_64-pc-windows-msvc\freshen.exe"
-          (Get-FileHash "dist\x86_64-pc-windows-msvc\freshen.exe" -Algorithm SHA256).Hash |
-            Set-Content "dist\x86_64-pc-windows-msvc\freshen.sha256"
+          New-Item -ItemType Directory -Force -Path "dist\$env:TARGET" | Out-Null
+          Copy-Item "target\$env:TARGET\release\freshen.exe" "dist\$env:TARGET\freshen.exe"
+          (Get-FileHash "dist\$env:TARGET\freshen.exe" -Algorithm SHA256).Hash |
+            Set-Content "dist\$env:TARGET\freshen.sha256"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: freshen-x86_64-pc-windows-msvc
-          path: dist\x86_64-pc-windows-msvc\
+          name: freshen-${{ matrix.target }}
+          path: dist\${{ matrix.target }}\
 
   release:
     name: create GitHub Release and upload Linux and Windows binaries
@@ -124,7 +136,10 @@ jobs:
           sha256sum \
             freshen-x86_64-unknown-linux-gnu/freshen \
             freshen-aarch64-unknown-linux-gnu/freshen \
-            freshen-x86_64-pc-windows-msvc/freshen.exe > checksums.txt
+            freshen-x86_64-unknown-linux-musl/freshen \
+            freshen-aarch64-unknown-linux-musl/freshen \
+            freshen-x86_64-pc-windows-msvc/freshen.exe \
+            freshen-aarch64-pc-windows-msvc/freshen.exe > checksums.txt
           cat checksums.txt
 
       - name: Create the GitHub Release for this tag
@@ -138,9 +153,12 @@ jobs:
 
             Prebuilt binaries:
 
-            - `freshen-x86_64-unknown-linux-gnu` — Linux x86_64
-            - `freshen-aarch64-unknown-linux-gnu` — Linux aarch64 (ARM 64-bit)
+            - `freshen-x86_64-unknown-linux-gnu` — Linux x86_64 (glibc)
+            - `freshen-aarch64-unknown-linux-gnu` — Linux aarch64 (glibc, ARM 64-bit)
+            - `freshen-x86_64-unknown-linux-musl` — Linux x86_64, fully static (musl)
+            - `freshen-aarch64-unknown-linux-musl` — Linux aarch64, fully static (musl)
             - `freshen-x86_64-pc-windows-msvc` — Windows x86_64
+            - `freshen-aarch64-pc-windows-msvc` — Windows aarch64 (ARM 64-bit)
 
             Verify a download against `checksums.txt`:
 
@@ -155,9 +173,12 @@ jobs:
         with:
           tag_name: ${{ github.inputs.tag || github.ref_name }}
           files: |
-            dist/x86_64-unknown-linux-gnu/freshen
-            dist/aarch64-unknown-linux-gnu/freshen
-            dist/x86_64-pc-windows-msvc/freshen.exe
+            dist/freshen-x86_64-unknown-linux-gnu/freshen
+            dist/freshen-aarch64-unknown-linux-gnu/freshen
+            dist/freshen-x86_64-unknown-linux-musl/freshen
+            dist/freshen-aarch64-unknown-linux-musl/freshen
+            dist/freshen-x86_64-pc-windows-msvc/freshen.exe
+            dist/freshen-aarch64-pc-windows-msvc/freshen.exe
             dist/checksums.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
