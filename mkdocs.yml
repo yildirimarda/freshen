@@ -35,6 +35,7 @@ nav:
       - Windows: platform-notes/windows.md
   - FAQ: faq.md
   - Troubleshooting: troubleshooting.md
+  - 'Writing a step': writing-a-step.md
   - Steps:
       - 'antidote': steps/antidote.md
       - 'apk': steps/apk.md
