@@ -42,6 +42,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 concurrency:
   group: release-binaries-${{ github.ref }}
@@ -67,7 +68,8 @@ jobs:
       - name: Build freshen in release mode
         run: cargo build --release --locked --target ${{ matrix.target }}
 
-      - name: Stage the binary archive and its checksum
+      - id: stage
+        name: Stage the binary archive and its checksum
         env:
           VERSION: ${{ github.inputs.tag || github.ref_name }}
         run: |
@@ -79,11 +81,22 @@ jobs:
             -C "dist/${{ matrix.target }}" freshen
           sha256sum "dist/${{ matrix.target }}/freshen-${VERSION}-${{ matrix.target }}.tar.gz" \
             > "dist/${{ matrix.target }}/freshen-${VERSION}-${{ matrix.target }}.tar.gz.sha256"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
           name: freshen-${{ matrix.target }}
           path: dist/${{ matrix.target }}/
+
+      - name: Generate SBOM attestation
+        uses: actions/attest-sbom@v1
+        with:
+          subject: dist/${{ matrix.target }}/freshen-${{ steps.stage.outputs.version }}-${{ matrix.target }}.tar.gz
+
+      - name: Generate provenance attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject: dist/${{ matrix.target }}/freshen-${{ steps.stage.outputs.version }}-${{ matrix.target }}.tar.gz
 
   build-linux:
     name: build freshen for ${{ matrix.target }}
@@ -116,7 +129,8 @@ jobs:
           CC_aarch64_unknown_linux_musl: musl-gcc
         run: cargo build --release --locked --target ${{ matrix.target }}
 
-      - name: Stage the binary archive and its checksum
+      - id: stage
+        name: Stage the binary archive and its checksum
         env:
           VERSION: ${{ github.inputs.tag || github.ref_name }}
         run: |
@@ -128,11 +142,22 @@ jobs:
             -C "dist/${{ matrix.target }}" freshen
           sha256sum "dist/${{ matrix.target }}/freshen-${VERSION}-${{ matrix.target }}.tar.gz" \
             > "dist/${{ matrix.target }}/freshen-${VERSION}-${{ matrix.target }}.tar.gz.sha256"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
           name: freshen-${{ matrix.target }}
           path: dist/${{ matrix.target }}/
+
+      - name: Generate SBOM attestation
+        uses: actions/attest-sbom@v1
+        with:
+          subject: dist/${{ matrix.target }}/freshen-${{ steps.stage.outputs.version }}-${{ matrix.target }}.tar.gz
+
+      - name: Generate provenance attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject: dist/${{ matrix.target }}/freshen-${{ steps.stage.outputs.version }}-${{ matrix.target }}.tar.gz
 
   build-windows:
     name: build freshen for ${{ matrix.target }}
@@ -153,7 +178,8 @@ jobs:
       - name: Build freshen in release mode
         run: cargo build --release --locked --target ${{ matrix.target }}
 
-      - name: Stage the binary archive and its checksum
+      - id: stage
+        name: Stage the binary archive and its checksum
         env:
           TARGET: ${{ matrix.target }}
           VERSION: ${{ github.inputs.tag || github.ref_name }}
@@ -165,11 +191,22 @@ jobs:
             -DestinationPath "dist\$env:TARGET\freshen-$env:VERSION-$env:TARGET.zip" -Force
           (Get-FileHash "dist\$env:TARGET\freshen-$env:VERSION-$env:TARGET.zip" -Algorithm SHA256).Hash `
             | Set-Content "dist\$env:TARGET\freshen-$env:VERSION-$env:TARGET.zip.sha256"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$VERSION"
 
       - uses: actions/upload-artifact@v4
         with:
           name: freshen-${{ matrix.target }}
           path: dist\${{ matrix.target }}\
+
+      - name: Generate SBOM attestation
+        uses: actions/attest-sbom@v1
+        with:
+          subject: dist/${{ matrix.target }}/freshen-${{ steps.stage.outputs.version }}-${{ matrix.target }}.zip
+
+      - name: Generate provenance attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject: dist/${{ matrix.target }}/freshen-${{ steps.stage.outputs.version }}-${{ matrix.target }}.zip
 
   release:
     name: create GitHub Release and upload every binary archive
@@ -196,6 +233,16 @@ jobs:
             freshen-x86_64-pc-windows-msvc/freshen-*-x86_64-pc-windows-msvc.zip \
             freshen-aarch64-pc-windows-msvc/freshen-*-aarch64-pc-windows-msvc.zip > checksums.txt
           cat checksums.txt
+
+      - name: Generate SBOM attestation for the checksums file
+        uses: actions/attest-sbom@v1
+        with:
+          subject: dist/checksums.txt
+
+      - name: Generate provenance attestation for the checksums file
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject: dist/checksums.txt
 
       - name: Create the GitHub Release for this tag
         id: release

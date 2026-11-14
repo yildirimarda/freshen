@@ -213,4 +213,38 @@ else
   bad "no release-signing workflow in ci-proposals/ or .github/workflows/"
 fi
 
+# 12. The release-binaries workflow publishes SBOM and provenance attestations
+#     for every release artifact (each prebuilt binary archive and the combined
+#     checksums file) using GitHub's attest-sbom and attest-build-provenance
+#     actions, which require the id-token permission.
+if binaries_file="$(workflow_path release-binaries)"; then
+  binaries_ok=1
+  grep -qF -- 'id-token: write' "$binaries_file" || { echo "  no id-token permission"; binaries_ok=0; }
+  grep -qF -- 'actions/attest-sbom@v1' "$binaries_file" || { echo "  no SBOM attestation step"; binaries_ok=0; }
+  grep -qF -- 'actions/attest-build-provenance@v1' "$binaries_file" || { echo "  no provenance attestation step"; binaries_ok=0; }
+  if (( binaries_ok )); then
+    ok "$binaries_file publishes SBOM and provenance attestations for release artifacts"
+  else
+    bad "$binaries_file does not publish SBOM/provenance attestations"
+  fi
+else
+  bad "no release-binaries workflow in ci-proposals/ or .github/workflows/"
+fi
+
+# 13. The release-crates-io workflow attests the crates.io publish with an
+#     SBOM and provenance attestation, which require the id-token permission.
+if crates_file="$(workflow_path release-crates-io)"; then
+  crates_ok=1
+  grep -qF -- 'id-token: write' "$crates_file" || { echo "  no id-token permission"; crates_ok=0; }
+  grep -qF -- 'actions/attest-sbom@v1' "$crates_file" || { echo "  no SBOM attestation step"; crates_ok=0; }
+  grep -qF -- 'actions/attest-build-provenance@v1' "$crates_file" || { echo "  no provenance attestation step"; crates_ok=0; }
+  if (( crates_ok )); then
+    ok "$crates_file attests the crates.io publish with SBOM and provenance"
+  else
+    bad "$crates_file does not attest the crates.io publish"
+  fi
+else
+  bad "no release-crates-io workflow in ci-proposals/ or .github/workflows/"
+fi
+
 exit "$fail"
