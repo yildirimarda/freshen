@@ -285,7 +285,7 @@ const TASK_NAME: &str = "FreshenSchedule";
 /// The `schtasks` create call that registers the scheduled task.
 #[cfg(target_os = "windows")]
 fn expect_register_call(calls: &[String], every_hours: u64) {
-    let expected = format!("schtasks /create /tn {TASK_NAME} /sc hourly /mo {every_hours} /f");
+    let expected = format!("schtasks /create /tn {TASK_NAME} /sc hourly /mo {every_hours}");
     assert!(
         calls.iter().any(|call| call.starts_with(&expected)),
         "expected a schtasks create call starting with {expected:?}, got {calls:?}"
@@ -295,6 +295,10 @@ fn expect_register_call(calls: &[String], every_hours: u64) {
             .iter()
             .any(|call| call.contains("/tr ") && call.contains(" --check")),
         "expected a schtasks create call that runs freshen --check, got {calls:?}"
+    );
+    assert!(
+        calls.iter().any(|call| call.contains(" /f")),
+        "expected a schtasks create call that overwrites with /f, got {calls:?}"
     );
 }
 
