@@ -176,7 +176,10 @@ fn install_macos(every_hours: u64) -> Result<(), ScheduleError> {
     })?;
     let plist = plist_xml(&binary, every_hours);
     let path = plist_path(&home);
-    std::fs::write(&path, plist).map_err(|source| ScheduleError::WritePlist { path, source })?;
+    std::fs::write(&path, plist).map_err(|source| ScheduleError::WritePlist {
+        path: path.clone(),
+        source,
+    })?;
     crate::process::CommandSpec::new("launchctl")
         .arg("load")
         .arg(path.to_string_lossy().into_owned())
