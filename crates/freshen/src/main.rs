@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{CommandFactory, Parser};
 use freshen_lib::doctor;
@@ -304,6 +305,28 @@ fn main() -> ExitCode {
         }
     }
 
+    // Catch-up behaviour: run the scheduled (unattended) upgrades only when the
+    // previous scheduled run was missed, that is when the configured interval
+    // has elapsed since the last completed scheduled run. When there is no
+    // record of a previous run yet the run proceeds so the baseline is
+    // established. This keeps the scheduler from repeating work it already did
+    // and makes it run once after wake or login when a scheduled time was
+    // missed.
+    let now = SystemTime::now();
+    let state_path = schedule::scheduled_state_path(platform);
+    let state = state_path
+        .as_ref()
+        .map(|path| schedule::read_scheduled_state(path))
+        .unwrap_or_default();
+    let due = state_path
+        .as_ref()
+        .is_none_or(|_| schedule::catch_up_due(&state, now));
+    let run_scheduled = !options.is_dry_run() && options.unattended();
+    if run_scheduled && !due {
+        log_event(&mut logger, "freshen: scheduled run not due, skipping");
+        return exit::code(exit::OK);
+    }
+
     // Tell the user when freshen itself has an update available. The check is
     // best effort: a missing package manager or a failed query just skips the
     // hint and never blocks the run.
@@ -315,6 +338,25 @@ fn main() -> ExitCode {
         Runner::with_options_and_sudo(steps, options, sudo_available, privilege, elevation_probe())
             .run()
             .with_config(config_loaded.then_some(config_path.clone()), &config_values);
+    // Record the scheduled run so the next invocation knows whether a
+    // scheduled time was missed. `now` is the run's start time so the next
+    // interval firing is still due; best effort: a failed state write never
+    // fails the run.
+    if run_scheduled {
+        if let Some(path) = &state_path {
+            let _ = schedule::write_scheduled_state(
+                path,
+                &schedule::ScheduledState {
+                    last_run: Some(
+                        now.duration_since(UNIX_EPOCH)
+                            .map(|duration| duration.as_secs())
+                            .unwrap_or(0),
+                    ),
+                    interval_hours: state.interval_hours,
+                },
+            );
+        }
+    }
     log_event(
         &mut logger,
         &format!("run completed with exit code {:?}", summary.exit_code()),

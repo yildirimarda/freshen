@@ -11,9 +11,15 @@
 
 mod support;
 
+use std::fs;
+use std::path::PathBuf;
 use std::process::Output;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use support::StubTools;
+
+/// The default scheduled interval, in hours (matches `schedule::DEFAULT_EVERY_HOURS`).
+const DEFAULT_INTERVAL_HOURS: u64 = 24;
 
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
@@ -439,4 +445,100 @@ mod cli_parsing {
             "schedule remove should parse: {text}"
         );
     }
+}
+
+/// The state file recording the last completed scheduled run.
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+fn state_path(tools: &StubTools) -> PathBuf {
+    tools
+        .config_path()
+        .parent()
+        .unwrap()
+        .join("scheduled-last-run.toml")
+}
+
+/// Writes a scheduled-run state file reporting a last run `ago` ago and an
+/// interval of `interval_hours`.
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+fn write_state(tools: &StubTools, ago: Duration, interval_hours: u64) {
+    let path = state_path(tools);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    let last_run = SystemTime::now()
+        .checked_sub(ago)
+        .unwrap()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    fs::write(
+        &path,
+        format!("last_run = {last_run}\ninterval_hours = {interval_hours}\n"),
+    )
+    .unwrap();
+}
+
+/// Runs `freshen --unattended` with a probe step and returns the stub
+/// calls it made.
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+fn run_unattended_with_probe(tools: &StubTools) -> Output {
+    tools
+        .command()
+        .env("FRESHEN_TEST_STEPS", "probe run")
+        .args(["--unattended"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"))
+}
+
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[test]
+fn scheduled_run_catches_up_when_the_scheduled_time_was_missed() {
+    let tools = StubTools::new(&["probe"]);
+    write_state(
+        &tools,
+        Duration::from_secs(25 * 60 * 60),
+        DEFAULT_INTERVAL_HOURS,
+    );
+
+    let output = run_unattended_with_probe(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.calls(),
+        ["probe run"],
+        "the catch-up run should have run the step, got {:?}",
+        tools.calls()
+    );
+}
+
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[test]
+fn scheduled_run_skips_when_the_scheduled_time_was_not_missed() {
+    let tools = StubTools::new(&["probe"]);
+    write_state(&tools, Duration::from_secs(60 * 60), DEFAULT_INTERVAL_HOURS);
+
+    let output = run_unattended_with_probe(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        tools.calls().is_empty(),
+        "no step should run when not due, got {:?}",
+        tools.calls()
+    );
+}
+
+#[test]
+fn scheduled_run_runs_when_there_is_no_previous_record() {
+    let tools = StubTools::new(&["probe"]);
+    let _ = fs::remove_file(state_path(&tools));
+
+    let output = run_unattended_with_probe(&tools);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        tools.calls(),
+        ["probe run"],
+        "the first scheduled run should run the step, got {:?}",
+        tools.calls()
+    );
 }

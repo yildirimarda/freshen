@@ -17,9 +17,13 @@
 //! [`remove`] report that it is not supported.
 
 use std::fmt;
-#[cfg(any(test, target_os = "macos", target_os = "linux"))]
-use std::path::Path;
-use std::path::PathBuf;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use crate::config::ConfigEnvironment;
+use crate::platform::Platform;
 
 /// The label of the scheduled launchd agent.
 pub const AGENT_LABEL: &str = "com.freshen.schedule";
@@ -41,8 +45,10 @@ pub(crate) const SERVICE_FILE_NAME: &str = "com.freshen.schedule.service";
 pub(crate) const TASK_NAME: &str = "FreshenSchedule";
 
 /// How often the scheduled agent runs by default, in hours.
-#[cfg(test)]
 pub(crate) const DEFAULT_EVERY_HOURS: u64 = 24;
+
+/// The state file recording the last completed scheduled run and its interval.
+pub(crate) const SCHEDULED_STATE_FILE_NAME: &str = "scheduled-last-run.toml";
 
 /// A problem installing or removing the scheduled unit.
 #[derive(Debug)]
@@ -110,6 +116,81 @@ impl fmt::Display for ScheduleError {
 }
 
 impl std::error::Error for ScheduleError {}
+
+/// The persisted state of the scheduled run: when it last completed and the
+/// interval it runs on. Used to detect when a scheduled time was missed so the
+/// scheduler can run once after wake or login.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ScheduledState {
+    /// Seconds since the UNIX epoch of the last completed scheduled run, or
+    /// `None` when no scheduled run has completed yet.
+    pub last_run: Option<u64>,
+    /// The configured interval, in hours.
+    pub interval_hours: u64,
+}
+
+impl Default for ScheduledState {
+    fn default() -> Self {
+        Self {
+            last_run: None,
+            interval_hours: DEFAULT_EVERY_HOURS,
+        }
+    }
+}
+
+/// The path of the scheduled-run state file on `platform`.
+#[must_use]
+pub fn scheduled_state_path(platform: Platform) -> Option<PathBuf> {
+    let environment = ConfigEnvironment::from_env();
+    let config_dir = environment.config_dir(platform);
+    Some(config_dir.join(SCHEDULED_STATE_FILE_NAME))
+}
+
+/// Reads the persisted scheduled-run state.
+///
+/// A missing or unreadable state file is treated as "no previous run", which
+/// never blocks a run: it is best effort.
+#[must_use]
+pub fn read_scheduled_state(state_path: &Path) -> ScheduledState {
+    let text = match fs::read_to_string(state_path) {
+        Ok(text) => text,
+        Err(_) => return ScheduledState::default(),
+    };
+    toml::from_str(&text).unwrap_or_else(|_| ScheduledState::default())
+}
+
+/// Writes the persisted scheduled-run state.
+///
+/// Errors are best effort: a run must never fail because its state could not
+/// be persisted.
+pub fn write_scheduled_state(state_path: &Path, state: &ScheduledState) -> io::Result<()> {
+    let text = toml::to_string(state)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    if let Some(parent) = state_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(state_path, text)?;
+    Ok(())
+}
+
+/// Returns `true` when the scheduled time was missed and a catch-up run is
+/// due: the configured interval has elapsed since the last completed scheduled
+/// run, or there is no record of a previous run yet (so the first scheduled
+/// run happens and establishes the baseline).
+#[must_use]
+pub fn catch_up_due(state: &ScheduledState, now: SystemTime) -> bool {
+    let Some(last_run) = state.last_run else {
+        return true;
+    };
+    let Some(last_run) = UNIX_EPOCH.checked_add(Duration::from_secs(last_run)) else {
+        return true;
+    };
+    let interval = Duration::from_secs(state.interval_hours * 60 * 60);
+    match now.duration_since(last_run) {
+        Ok(elapsed) => elapsed >= interval,
+        Err(_) => true,
+    }
+}
 
 /// The directory the agent property list lives in, derived from the home
 /// directory.
@@ -216,25 +297,41 @@ WantedBy=timers.target
 /// On macOS this writes the property list and loads it with `launchctl`. On
 /// every other platform it reports that scheduling is not supported.
 pub fn install(every_hours: u64) -> Result<(), ScheduleError> {
-    #[cfg(target_os = "macos")]
-    {
-        install_macos(every_hours)
+    let result = {
+        #[cfg(target_os = "macos")]
+        {
+            install_macos(every_hours)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            install_linux(every_hours)
+        }
+        #[cfg(windows)]
+        {
+            install_windows(every_hours)
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        {
+            let _ = every_hours;
+            Err(ScheduleError::NotSupported {
+                platform: std::env::consts::OS,
+            })
+        }
+    };
+    // Record the configured interval so a later run knows whether a scheduled
+    // time was missed. Best effort: a failed state write never fails install.
+    if result.is_ok() {
+        if let Some(platform) = Platform::current() {
+            if let Some(state_path) = scheduled_state_path(platform) {
+                let state = ScheduledState {
+                    last_run: None,
+                    interval_hours: every_hours,
+                };
+                let _ = write_scheduled_state(&state_path, &state);
+            }
+        }
     }
-    #[cfg(target_os = "linux")]
-    {
-        install_linux(every_hours)
-    }
-    #[cfg(windows)]
-    {
-        install_windows(every_hours)
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    {
-        let _ = every_hours;
-        Err(ScheduleError::NotSupported {
-            platform: std::env::consts::OS,
-        })
-    }
+    result
 }
 
 /// Removes (unloads and deletes) the scheduled launchd agent.
@@ -580,5 +677,91 @@ mod tests {
         fn task_name_is_freshen_schedule() {
             assert_eq!(TASK_NAME, "FreshenSchedule");
         }
+    }
+
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
+    #[test]
+    fn catch_up_due_with_no_previous_run_is_due() {
+        let state = ScheduledState::default();
+        let now = SystemTime::now();
+        assert!(catch_up_due(&state, now));
+    }
+
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
+    #[test]
+    fn catch_up_due_runs_when_interval_has_elapsed() {
+        let now = SystemTime::now();
+        let day_ago = now
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .checked_sub(Duration::from_secs(25 * 60 * 60))
+            .unwrap();
+        let state = ScheduledState {
+            last_run: Some(day_ago.as_secs()),
+            interval_hours: DEFAULT_EVERY_HOURS,
+        };
+        assert!(catch_up_due(&state, now));
+    }
+
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
+    #[test]
+    fn catch_up_due_skips_when_interval_has_not_elapsed() {
+        let now = SystemTime::now();
+        let hour_ago = now
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .checked_sub(Duration::from_secs(60 * 60))
+            .unwrap();
+        let state = ScheduledState {
+            last_run: Some(hour_ago.as_secs()),
+            interval_hours: DEFAULT_EVERY_HOURS,
+        };
+        assert!(!catch_up_due(&state, now));
+    }
+
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
+    #[test]
+    fn catch_up_due_uses_the_configured_interval() {
+        let now = SystemTime::now();
+        let seven_hours_ago = now
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .checked_sub(Duration::from_secs(7 * 60 * 60))
+            .unwrap();
+        let six_hours = ScheduledState {
+            last_run: Some(seven_hours_ago.as_secs()),
+            interval_hours: 6,
+        };
+        let twenty_four_hours = ScheduledState {
+            last_run: Some(seven_hours_ago.as_secs()),
+            interval_hours: DEFAULT_EVERY_HOURS,
+        };
+        assert!(catch_up_due(&six_hours, now));
+        assert!(!catch_up_due(&twenty_four_hours, now));
+    }
+
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
+    #[test]
+    fn scheduled_state_read_write_round_trips() {
+        let dir = std::env::temp_dir().join(format!(
+            "freshen-schedule-state-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("scheduled-last-run.toml");
+
+        let state = ScheduledState {
+            last_run: Some(1_700_000_000),
+            interval_hours: 6,
+        };
+        write_scheduled_state(&path, &state).unwrap();
+        let read_back = read_scheduled_state(&path);
+        assert_eq!(read_back, state);
+
+        // A missing file yields the default state.
+        let missing = dir.join("does-not-exist.toml");
+        assert_eq!(read_scheduled_state(&missing), ScheduledState::default());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
