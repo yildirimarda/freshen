@@ -37,6 +37,10 @@
   a parser reports an error, skips a step or turns an unrecognised line into a
   bogus package name; `tests/real-tools-workflow.sh` proves the validator
   accepts clean reports for each profile and rejects each of those failures
+- the `linux-containers-real-tools` workflow (proposed under `ci-proposals/`)
+  runs the same read-only check against the real package manager — apt on
+  Ubuntu, dnf on Fedora, pacman on Arch — inside throwaway container images,
+  so the parsers are exercised against each distro's real userland output
 - every CI workflow is accepted either as a proposal in `ci-proposals/` or
   after being applied to `.github/workflows/`, including `real-tools.yml`;
   `tests/workflow-layouts.sh` runs the repository checks against a fixture in

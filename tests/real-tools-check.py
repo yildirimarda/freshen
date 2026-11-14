@@ -34,6 +34,16 @@ PROFILES = {
         "tool": "apt",
         "noun": "apt package name",
     },
+    "dnf": {
+        "steps": ("dnf",),
+        "tool": "dnf",
+        "noun": "dnf package name",
+    },
+    "pacman": {
+        "steps": ("pacman",),
+        "tool": "pacman",
+        "noun": "pacman package name",
+    },
     "windows": {
         "steps": ("winget", "choco"),
         "tool": "winget or Chocolatey",

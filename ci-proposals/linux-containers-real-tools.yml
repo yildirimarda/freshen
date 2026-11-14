@@ -1,0 +1,132 @@
+name: linux-containers-real-tools
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-containers-real-tools-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Like the stub-based linux-containers job, but exercising the real package
+  # manager (apt on Ubuntu, dnf on Fedora, pacman on Arch) inside throwaway
+  # container images. freshen runs read-only (`--check` / `--dry-run`), so
+  # nothing is upgraded or installed; the JSON report is validated with
+  # tests/real-tools-check.py so parser drift against the distro's real output
+  # fails the job instead of being reported as a bogus package.
+  linux-containers-real-tools:
+    name: real package managers (${{ matrix.container }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - container: ubuntu:24.04
+            package-manager: apt
+            profile: apt
+          - container: fedora:latest
+            package-manager: dnf
+            profile: dnf
+          - container: archlinux:latest
+            package-manager: pacman
+            profile: pacman
+    container:
+      image: ${{ matrix.container }}
+    steps:
+      - name: Install build dependencies (${{ matrix.container }})
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            apt-get update -y && apt-get install -y --no-install-recommends \
+              git build-essential curl ca-certificates
+          elif command -v dnf >/dev/null 2>&1; then
+            dnf install -y git gcc gcc-c++ make curl ca-certificates
+          elif command -v pacman >/dev/null 2>&1; then
+            # -Syu, never a bare -Sy: a partial upgrade can leave Arch broken.
+            pacman -Syu --needed --noconfirm git base-devel curl ca-certificates
+          else
+            echo "::error::no supported package manager found in ${{ matrix.container }}"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins the exact channel (with rustfmt + clippy) and
+      # the release targets. rustup is not preinstalled in these images, so
+      # install it without a default toolchain, then let it install what the
+      # file asks for.
+      - name: Install rustup
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain none --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
+
+      - name: Build freshen
+        run: cargo build --locked --bin freshen
+
+      - name: Real ${{ matrix.package-manager }} is available
+        run: |
+          command -v ${{ matrix.package-manager }}
+          ${{ matrix.package-manager }} --version
+
+      # Exit code 2 is success here: it means the package manager has updates
+      # pending, which is exactly what the read-only check is supposed to
+      # report. Preflight is skipped so the job tests package-manager parsing,
+      # not network reachability inside the container.
+      - name: freshen --check against the real ${{ matrix.package-manager }}
+        env:
+          FRESHEN_SKIP_PREFLIGHT: 1
+        run: |
+          set -euo pipefail
+          status=0
+          ./target/debug/freshen --check --json --jobs 1 --step-timeout 600 \
+            --only "${{ matrix.package-manager }}" > check.json 2> check.log || status=$?
+          cat check.log
+          cat check.json
+          case "$status" in
+            0|2) ;;
+            *)
+              echo "::error::freshen --check exited $status"
+              exit 1
+              ;;
+          esac
+
+      - name: freshen --dry-run against the real ${{ matrix.package-manager }}
+        env:
+          FRESHEN_SKIP_PREFLIGHT: 1
+        run: |
+          set -euo pipefail
+          status=0
+          ./target/debug/freshen --dry-run --json --jobs 1 \
+            --only "${{ matrix.package-manager }}" > dry-run.json 2> dry-run.log || status=$?
+          cat dry-run.log
+          cat dry-run.json
+          if [ "$status" -ne 0 ]; then
+            echo "::error::freshen --dry-run exited $status"
+            exit 1
+          fi
+
+      # A failed step is not the only way a parser can break: a lenient parser
+      # can turn an unrecognised line into a bogus package name instead of
+      # returning an error. The validator rejects those names, a skipped or
+      # failed step (so an undetected package manager cannot pass silently)
+      # and any explicit parser error in the JSON report.
+      - name: Fail on ${{ matrix.package-manager }} parser errors
+        run: |
+          set -euo pipefail
+          python3 tests/real-tools-check.py check check.json --profile "${{ matrix.profile }}"
+          python3 tests/real-tools-check.py dry-run dry-run.json --profile "${{ matrix.profile }}"
+          if grep -E 'failed during (detect|check|run|cleanup)' check.log dry-run.log; then
+            echo "::error::freshen reported a ${{ matrix.package-manager }} parser error"
+            exit 1
+          fi
