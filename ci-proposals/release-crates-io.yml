@@ -17,6 +17,10 @@
 
 name: release-crates-io
 
+permissions:
+  contents: read
+  id-token: write
+
 on:
   push:
     tags: ["v*"]
@@ -57,3 +61,13 @@ jobs:
         run: cargo publish -p freshen --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Generate SBOM attestation for the published crate source
+        uses: actions/attest-sbom@v1
+        with:
+          subject: crates/
+
+      - name: Generate provenance attestation for the crates.io publish
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject: Cargo.toml
