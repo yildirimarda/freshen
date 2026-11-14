@@ -2,16 +2,19 @@
 //!
 //! On macOS, [`install`] writes a per-user launchd agent property list to
 //! `~/Library/LaunchAgents/com.freshen.schedule.plist` and loads it with
-//! `launchctl`, so `freshen` runs on a repeating interval. [`remove`] unloads
-//! and deletes the agent.
+//! `launchctl`, so `freshen` runs on a repeating interval. On Linux, [`install`]
+//! writes a per-user systemd service and timer unit to
+//! `~/.config/systemd/user/` and enables the timer with `systemctl --user`.
+//! [`remove`] unloads/deletes (macOS) or stops/disables and deletes (Linux) the
+//! scheduled unit.
 //!
-//! The agent runs `freshen --check` so a scheduled run reports available
-//! updates without changing anything. Scheduling is a macOS-only feature: on
-//! every other platform [`install`] and [`remove`] report that it is not
-//! supported.
+//! The scheduled unit runs `freshen --check` so a scheduled run reports
+//! available updates without changing anything. Scheduling is supported on
+//! macOS and Linux: on every other platform [`install`] and [`remove`] report
+//! that it is not supported.
 
 use std::fmt;
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -22,26 +25,34 @@ pub const AGENT_LABEL: &str = "com.freshen.schedule";
 #[cfg(any(test, target_os = "macos"))]
 pub(crate) const PLIST_FILE_NAME: &str = "com.freshen.schedule.plist";
 
+/// The timer unit file name on Linux.
+#[cfg(any(test, target_os = "linux"))]
+pub(crate) const TIMER_FILE_NAME: &str = "com.freshen.schedule.timer";
+
+/// The service unit file name the timer runs on Linux.
+#[cfg(any(test, target_os = "linux"))]
+pub(crate) const SERVICE_FILE_NAME: &str = "com.freshen.schedule.service";
+
 /// How often the scheduled agent runs by default, in hours.
 #[cfg(test)]
 pub(crate) const DEFAULT_EVERY_HOURS: u64 = 24;
 
-/// A problem installing or removing the scheduled agent.
+/// A problem installing or removing the scheduled unit.
 #[derive(Debug)]
 pub enum ScheduleError {
     /// Scheduling is not supported on this operating system.
     NotSupported { platform: &'static str },
-    /// The agent property list could not be written.
-    WritePlist {
+    /// A unit file could not be written.
+    WriteUnit {
         path: PathBuf,
         source: std::io::Error,
     },
-    /// The agent could not be loaded with `launchctl`.
+    /// The timer could not be enabled and started.
     LoadFailed { source: std::io::Error },
-    /// The agent could not be unloaded with `launchctl`.
+    /// The timer could not be disabled and stopped.
     UnloadFailed { source: std::io::Error },
-    /// The agent property list could not be removed.
-    RemovePlist {
+    /// A unit file could not be removed.
+    RemoveUnit {
         path: PathBuf,
         source: std::io::Error,
     },
@@ -53,26 +64,26 @@ impl fmt::Display for ScheduleError {
             Self::NotSupported { platform } => {
                 write!(f, "scheduling is not supported on {platform}")
             }
-            Self::WritePlist { path, source } => write!(
+            Self::WriteUnit { path, source } => write!(
                 f,
-                "could not write the scheduled agent property list to {}: {source}",
+                "could not write the scheduled timer unit file to {}: {source}",
                 path.display()
             ),
             Self::LoadFailed { source } => {
                 write!(
                     f,
-                    "could not load the scheduled agent with launchctl: {source}"
+                    "could not enable and start the scheduled timer with systemctl --user: {source}"
                 )
             }
             Self::UnloadFailed { source } => {
                 write!(
                     f,
-                    "could not unload the scheduled agent with launchctl: {source}"
+                    "could not disable and stop the scheduled timer with systemctl --user: {source}"
                 )
             }
-            Self::RemovePlist { path, source } => write!(
+            Self::RemoveUnit { path, source } => write!(
                 f,
-                "could not remove the scheduled agent property list {}: {source}",
+                "could not remove the scheduled timer unit file {}: {source}",
                 path.display()
             ),
         }
@@ -124,6 +135,63 @@ pub(crate) fn plist_xml(binary: &Path, every_hours: u64) -> String {
     )
 }
 
+/// The directory the systemd user units live in, derived from the home
+/// directory.
+#[cfg(any(test, target_os = "linux"))]
+#[must_use]
+pub(crate) fn systemd_user_dir(home: &Path) -> PathBuf {
+    home.join(".config").join("systemd").join("user")
+}
+
+/// The path of the timer unit on Linux.
+#[cfg(any(test, target_os = "linux"))]
+#[must_use]
+pub(crate) fn timer_path(home: &Path) -> PathBuf {
+    systemd_user_dir(home).join(TIMER_FILE_NAME)
+}
+
+/// The path of the service unit the timer runs on Linux.
+#[cfg(any(test, target_os = "linux"))]
+#[must_use]
+pub(crate) fn service_path(home: &Path) -> PathBuf {
+    systemd_user_dir(home).join(SERVICE_FILE_NAME)
+}
+
+/// The systemd service unit that runs `freshen --check`.
+#[cfg(any(test, target_os = "linux"))]
+#[must_use]
+pub(crate) fn service_unit(binary: &Path) -> String {
+    format!(
+        r#"[Unit]
+Description=freshen scheduled update check
+
+[Service]
+Type=oneshot
+ExecStart={} --check
+"#,
+        binary.display()
+    )
+}
+
+/// The systemd timer unit that runs the service every `every_hours` hours.
+#[cfg(any(test, target_os = "linux"))]
+#[must_use]
+pub(crate) fn timer_unit(every_hours: u64) -> String {
+    let seconds = every_hours * 60 * 60;
+    format!(
+        r#"[Unit]
+Description=freshen scheduled update check timer
+
+[Timer]
+OnUnitActiveSec={seconds}
+Unit=com.freshen.schedule.service
+
+[Install]
+WantedBy=timers.target
+"#
+    )
+}
+
 /// Installs (writes and loads) the scheduled launchd agent.
 ///
 /// On macOS this writes the property list and loads it with `launchctl`. On
@@ -133,7 +201,11 @@ pub fn install(every_hours: u64) -> Result<(), ScheduleError> {
     {
         install_macos(every_hours)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        install_linux(every_hours)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let _ = every_hours;
         Err(ScheduleError::NotSupported {
@@ -145,13 +217,19 @@ pub fn install(every_hours: u64) -> Result<(), ScheduleError> {
 /// Removes (unloads and deletes) the scheduled launchd agent.
 ///
 /// On macOS this unloads the agent with `launchctl` and deletes its property
-/// list. On every other platform it reports that scheduling is not supported.
+/// list. On Linux this stops and disables the timer with `systemctl --user`
+/// and deletes its unit files. On every other platform it reports that
+/// scheduling is not supported.
 pub fn remove() -> Result<(), ScheduleError> {
     #[cfg(target_os = "macos")]
     {
         remove_macos()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        remove_linux()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         Err(ScheduleError::NotSupported {
             platform: std::env::consts::OS,
@@ -165,17 +243,17 @@ fn install_macos(every_hours: u64) -> Result<(), ScheduleError> {
     let home = std::env::var_os("HOME").ok_or(ScheduleError::NotSupported { platform: "macos" })?;
     let home = PathBuf::from(home);
     let directory = launch_agents_dir(&home);
-    std::fs::create_dir_all(&directory).map_err(|source| ScheduleError::WritePlist {
+    std::fs::create_dir_all(&directory).map_err(|source| ScheduleError::WriteUnit {
         path: plist_path(&home),
         source,
     })?;
-    let binary = std::env::current_exe().map_err(|source| ScheduleError::WritePlist {
+    let binary = std::env::current_exe().map_err(|source| ScheduleError::WriteUnit {
         path: plist_path(&home),
         source,
     })?;
     let plist = plist_xml(&binary, every_hours);
     let path = plist_path(&home);
-    std::fs::write(&path, plist).map_err(|source| ScheduleError::WritePlist {
+    std::fs::write(&path, plist).map_err(|source| ScheduleError::WriteUnit {
         path: path.clone(),
         source,
     })?;
@@ -201,7 +279,72 @@ fn remove_macos() -> Result<(), ScheduleError> {
         .arg("unload")
         .arg(path.to_string_lossy().into_owned())
         .run();
-    std::fs::remove_file(&path).map_err(|source| ScheduleError::RemovePlist { path, source })?;
+    std::fs::remove_file(&path).map_err(|source| ScheduleError::RemoveUnit { path, source })?;
+    Ok(())
+}
+
+/// Writes the service and timer unit files and enables the timer with
+/// `systemctl --user`.
+#[cfg(target_os = "linux")]
+fn install_linux(every_hours: u64) -> Result<(), ScheduleError> {
+    let home = std::env::var_os("HOME").ok_or(ScheduleError::NotSupported { platform: "linux" })?;
+    let home = PathBuf::from(home);
+    let directory = systemd_user_dir(&home);
+    std::fs::create_dir_all(&directory).map_err(|source| ScheduleError::WriteUnit {
+        path: timer_path(&home),
+        source,
+    })?;
+    let binary = std::env::current_exe().map_err(|source| ScheduleError::WriteUnit {
+        path: timer_path(&home),
+        source,
+    })?;
+    let service = service_unit(&binary);
+    let service_path = service_path(&home);
+    std::fs::write(&service_path, service).map_err(|source| ScheduleError::WriteUnit {
+        path: service_path.clone(),
+        source,
+    })?;
+    let timer = timer_unit(every_hours);
+    let path = timer_path(&home);
+    std::fs::write(&path, timer).map_err(|source| ScheduleError::WriteUnit {
+        path: path.clone(),
+        source,
+    })?;
+    // Reload systemd so it picks up the new units.
+    crate::process::CommandSpec::new("systemctl")
+        .args(["--user", "daemon-reload"])
+        .run()
+        .map_err(|source| ScheduleError::LoadFailed {
+            source: std::io::Error::other(source),
+        })?;
+    // Enable and start the timer so it runs on schedule.
+    crate::process::CommandSpec::new("systemctl")
+        .args(["--user", "enable", "--now", "com.freshen.schedule.timer"])
+        .run()
+        .map_err(|source| ScheduleError::LoadFailed {
+            source: std::io::Error::other(source),
+        })?;
+    Ok(())
+}
+
+/// Stops and disables the timer with `systemctl --user` and deletes its unit
+/// files.
+#[cfg(target_os = "linux")]
+fn remove_linux() -> Result<(), ScheduleError> {
+    let home = std::env::var_os("HOME").ok_or(ScheduleError::NotSupported { platform: "linux" })?;
+    let home = PathBuf::from(home);
+    let path = timer_path(&home);
+    // A timer that was never enabled cannot be disabled; ignore that error so
+    // removing an absent timer still deletes any leftover unit files.
+    let _ = crate::process::CommandSpec::new("systemctl")
+        .args(["--user", "disable", "--now", "com.freshen.schedule.timer"])
+        .run();
+    let _ = crate::process::CommandSpec::new("systemctl")
+        .args(["--user", "daemon-reload"])
+        .run();
+    std::fs::remove_file(&path).map_err(|source| ScheduleError::RemoveUnit { path, source })?;
+    let service_path = service_path(&home);
+    let _ = std::fs::remove_file(&service_path);
     Ok(())
 }
 
@@ -248,7 +391,51 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn timer_path_is_under_systemd_user_dir() {
+        let home = PathBuf::from("/home/developer");
+        let path = timer_path(&home);
+        assert_eq!(
+            path,
+            PathBuf::from("/home/developer/.config/systemd/user/com.freshen.schedule.timer")
+        );
+        assert!(path.ends_with("com.freshen.schedule.timer"));
+    }
+
+    #[test]
+    fn service_path_is_under_systemd_user_dir() {
+        let home = PathBuf::from("/home/developer");
+        let path = service_path(&home);
+        assert_eq!(
+            path,
+            PathBuf::from("/home/developer/.config/systemd/user/com.freshen.schedule.service")
+        );
+    }
+
+    #[test]
+    fn service_unit_runs_freshen_check() {
+        let binary = PathBuf::from("/usr/bin/freshen");
+        let unit = service_unit(&binary);
+        assert!(unit.contains("/usr/bin/freshen --check"));
+        assert!(unit.contains("Type=oneshot"));
+        assert!(unit.contains("Description=freshen scheduled update check"));
+    }
+
+    #[test]
+    fn timer_unit_runs_every_configured_interval() {
+        let unit = timer_unit(6);
+        assert!(unit.contains("OnUnitActiveSec=21600"));
+        assert!(unit.contains("Unit=com.freshen.schedule.service"));
+        assert!(unit.contains("WantedBy=timers.target"));
+    }
+
+    #[test]
+    fn timer_unit_uses_the_default_interval() {
+        let unit = timer_unit(DEFAULT_EVERY_HOURS);
+        assert!(unit.contains("OnUnitActiveSec=86400"));
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     #[test]
     fn install_reports_not_supported_on_other_platforms() {
         let error = match install(24) {
@@ -261,7 +448,7 @@ mod tests {
         assert_eq!(*platform, std::env::consts::OS);
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     #[test]
     fn remove_reports_not_supported_on_other_platforms() {
         let error = match remove() {
@@ -282,27 +469,27 @@ mod tests {
             "scheduling is not supported on linux"
         );
 
-        let write_failed = ScheduleError::WritePlist {
-            path: PathBuf::from("/tmp/x.plist"),
+        let write_failed = ScheduleError::WriteUnit {
+            path: PathBuf::from("/tmp/x.timer"),
             source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"),
         };
-        assert!(write_failed.to_string().contains("/tmp/x.plist"));
+        assert!(write_failed.to_string().contains("/tmp/x.timer"));
         assert!(write_failed.to_string().contains("denied"));
 
         let load_failed = ScheduleError::LoadFailed {
             source: std::io::Error::new(std::io::ErrorKind::NotFound, "missing"),
         };
-        assert!(load_failed.to_string().contains("launchctl"));
+        assert!(load_failed.to_string().contains("scheduled timer"));
 
         let unload_failed = ScheduleError::UnloadFailed {
             source: std::io::Error::other("boom"),
         };
-        assert!(unload_failed.to_string().contains("launchctl"));
+        assert!(unload_failed.to_string().contains("scheduled timer"));
 
-        let remove_failed = ScheduleError::RemovePlist {
-            path: PathBuf::from("/tmp/x.plist"),
+        let remove_failed = ScheduleError::RemoveUnit {
+            path: PathBuf::from("/tmp/x.timer"),
             source: std::io::Error::new(std::io::ErrorKind::NotFound, "gone"),
         };
-        assert!(remove_failed.to_string().contains("/tmp/x.plist"));
+        assert!(remove_failed.to_string().contains("/tmp/x.timer"));
     }
 }

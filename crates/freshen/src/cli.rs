@@ -329,9 +329,9 @@ pub enum Command {
     /// Upgrade freshen itself through the package manager that installed it.
     SelfUpdate,
     /// Schedule unattended freshen runs through the platform's scheduler
-    /// (macOS only).
+    /// (macOS, Linux).
     Schedule {
-        /// Install or remove the scheduled agent.
+        /// Install or remove the scheduled agent or timer.
         #[command(subcommand)]
         action: ScheduleAction,
     },
@@ -340,14 +340,14 @@ pub enum Command {
 /// What `schedule` does.
 #[derive(Debug, Clone, Subcommand)]
 pub enum ScheduleAction {
-    /// Install (write and load) a launchd agent that runs freshen on a
-    /// schedule.
+    /// Install (write and start) the scheduled agent or timer that runs
+    /// freshen on a schedule.
     Install {
         /// Run every N hours (default 24).
         #[arg(long, default_value = "24")]
         every: u64,
     },
-    /// Remove (unload and delete) the scheduled agent.
+    /// Remove (stop and delete) the scheduled agent or timer.
     Remove,
 }
 
