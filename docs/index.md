@@ -52,3 +52,4 @@ You can also install with Homebrew (`brew install yildirimarda/homebrew-tap/fres
 * [FAQ](faq.md) — frequently asked questions
 * [PLAN.md](https://github.com/yildirimarda/freshen/blob/main/PLAN.md) — the project roadmap
 * [CONTRIBUTING.md](https://github.com/yildirimarda/freshen/blob/main/CONTRIBUTING.md) — how to contribute
+* [Writing a step](writing-a-step.md) — contributor guide with a worked example and a step template

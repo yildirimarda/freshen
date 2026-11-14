@@ -125,6 +125,8 @@ pub mod warnings;
 pub mod windows_duplicates;
 pub mod windows_update;
 pub mod winget;
+#[cfg(test)]
+mod writing_a_step_example;
 pub mod wsl;
 pub mod xcode;
 pub mod yarn;
