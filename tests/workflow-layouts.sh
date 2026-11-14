@@ -40,6 +40,10 @@ MD
     cp "$root/aur/freshen/PKGBUILD" "$dir/aur/freshen/PKGBUILD"
   fi
 
+  if [[ -f "$root/flake.nix" ]]; then
+    cp "$root/flake.nix" "$dir/flake.nix"
+  fi
+
   for name in rust ci real-tools release-signing release-binaries release-crates-io; do
     src="$root/ci-proposals/$name.yml"
     [[ -f "$src" ]] || src="$root/.github/workflows/$name.yml"

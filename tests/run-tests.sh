@@ -270,4 +270,23 @@ else
   bad "aur/freshen/PKGBUILD is missing"; fail=1
 fi
 
+# 15. The Nix flake exists at the repo root and declares the outputs a freshen
+#     consumer needs (packages, devShells and checks) for each supported system.
+if [[ -f flake.nix ]]; then
+  flake_ok=1
+  for token in 'description' 'inputs' 'outputs' 'packages' 'devShells' 'checks'; do
+    grep -q "${token}" flake.nix || { flake_ok=0; echo "  missing $token"; }
+  done
+  for system in x86_64-linux aarch64-linux; do
+    grep -qF "${system}" flake.nix || { flake_ok=0; echo "  missing system $system"; }
+  done
+  if (( flake_ok )); then
+    ok "flake.nix (description, inputs, outputs, packages, devShells, checks)"
+  else
+    bad "flake.nix is missing required outputs"; fail=1
+  fi
+else
+  bad "flake.nix is missing"; fail=1
+fi
+
 exit "$fail"
