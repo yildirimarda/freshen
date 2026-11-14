@@ -1,0 +1,8 @@
+Reading package lists... Done
+Building dependency tree... Done
+Reading state information... Done
+The following packages will be upgraded:
+  git curl
+Inst git [1:2.43.4-2kali1] (1:2.45.2-1kali1 [amd64])
+Inst curl [7.88.1-10+kali1] (7.92.1-1 [amd64])
+2 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.

@@ -1,0 +1,8 @@
+Reading package lists... Done
+Building dependency tree... Done
+Reading state information... Done
+The following packages will be upgraded:
+  raspi-firmware curl
+Inst raspi-firmware [1:1.20240605-1] (1:1.20240704-1 [armhf])
+Inst curl [7.88.1-10+deb12u5+rpt1] (7.88.1-10+deb12u6+rpt1 [armhf])
+2 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.
