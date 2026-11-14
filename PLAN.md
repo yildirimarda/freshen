@@ -399,7 +399,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add prebuilt Linux (x86_64, aarch64) and Windows (x86_64) binaries to the release workflow, with checksums for every artifact
 - [x] Add Windows aarch64 and fully static Linux (musl) targets to the release workflow, with checksums for every artifact
 - [x] Publish to crates.io, proposed as a release workflow change
-- [ ] Support `cargo binstall` for the published crate
+- [x] Support `cargo binstall` for the published crate
 - [ ] Sign and notarize the macOS binary and sign the Windows binary, proposed as a release workflow change
 - [ ] Publish SBOM / provenance attestations for every release artifact
 - [ ] Add a Homebrew tap formula
