@@ -1,0 +1,4 @@
+[
+  {"Name": "web", "Status": "running", "ConfigFiles": "/srv/web/compose.yml,/srv/web/override.yml", "WorkingDirectory": "/srv/web"},
+  {"Name": "db", "Status": "exited", "ConfigFiles": "/srv/db/compose.yml", "WorkingDirectory": "/srv/db"}
+]
