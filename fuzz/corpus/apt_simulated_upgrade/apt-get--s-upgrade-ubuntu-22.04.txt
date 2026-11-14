@@ -1,0 +1,8 @@
+Reading package lists... Done
+Building dependency tree... Done
+Reading state information... Done
+The following packages will be upgraded:
+  curl git
+Inst curl [7.81.0-1ubuntu1.17] (7.88.0-1ubuntu1.3 [amd64])
+Inst git [1:2.34.1-1ubuntu1.10] (1:2.43.0-2ubuntu0.1 [amd64])
+2 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.

@@ -8,6 +8,7 @@ graphify-out/
 *.log
 .env
 /target/
+fuzz/target/
 __pycache__/
 *.pyc
 site/

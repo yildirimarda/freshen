@@ -1,0 +1,4 @@
+[
+  {"Name": "web", "Status": "running", "ConfigFiles": "/srv/web/compose.yml", "Labels": {"freshen.com/skip": "true"}, "WorkingDirectory": "/srv/web"},
+  {"Name": "cache", "Status": "running", "ConfigFiles": "/srv/cache/compose.yml", "WorkingDirectory": "/srv/cache"}
+]
