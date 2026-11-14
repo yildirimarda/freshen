@@ -181,7 +181,9 @@ fn install_macos(every_hours: u64) -> Result<(), ScheduleError> {
         .arg("load")
         .arg(path.to_string_lossy().into_owned())
         .run()
-        .map_err(|source| ScheduleError::LoadFailed { source })?;
+        .map_err(|source| ScheduleError::LoadFailed {
+            source: std::io::Error::other(source),
+        })?;
     Ok(())
 }
 
