@@ -1,0 +1,234 @@
+# Sign prebuilt release binaries so users can verify their origin:
+#
+#   macOS: code sign every archive with the Apple Developer ID certificate
+#          (hardened runtime, secure timestamp), notarize it with Apple's
+#          notary service (notarytool) and re-upload it over the unsigned
+#          asset.
+#   Windows: sign every archive's freshen.exe with signtool and the
+#            code-signing certificate (RFC 3161 timestamp).
+#
+# release-binaries creates the release and uploads the unsigned archives
+# first; this workflow downloads them, signs them in place, and re-uploads
+# them over the unsigned assets (--clobber), then refreshes checksums.txt so
+# it matches the signed artifacts. Both workflows are triggered by the same
+# `v*` tag, so the signing jobs poll until the assets show up — nothing is
+# published unsigned, and if the signing credentials are missing the jobs
+# fail instead of silently shipping unsigned binaries.
+#
+# Apply this proposal:
+#   git mv ci-proposals/release-signing.yml .github/workflows/release-signing.yml
+#
+# Repository secrets that only a human can create (see HUMAN-TASKS.md):
+#   APPLE_DEVELOPER_CERTIFICATE   base64-encoded Developer ID code-signing .p12
+#   APPLE_CERTIFICATE_PASSWORD    password that decrypts the .p12
+#   APPLE_DEVELOPER_ID            code-signing identity, e.g.
+#                                 "Developer ID Application: freshen (TEAMID)"
+#   APPLE_ID                      Apple ID used to talk to notarytool
+#   APPLE_TEAM_ID                 10-character Apple developer team ID
+#   APPLE_APP_SPECIFIC_PASSWORD   app-specific password for notarytool
+#   WINDOWS_CODE_SIGNING_CERTIFICATE  base64-encoded code-signing .pfx
+#   WINDOWS_CODE_SIGNING_PASSWORD     password that decrypts the .pfx
+
+name: release-signing
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag to sign (for example v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-signing-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sign-macos:
+    name: sign and notarize macOS binaries
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve the tag to sign
+        id: tag
+        run: echo "tag=${{ github.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      # release-binaries creates the release and uploads the archives; wait
+      # for both to appear before downloading (the same tag push starts both
+      # workflows and they run concurrently).
+      - name: Wait for and download the unsigned macOS archives
+        run: |
+          tag="${{ steps.tag.outputs.tag }}"
+          ok=0
+          for i in $(seq 1 60); do
+            if gh release download "$tag" \
+              -p 'freshen-*-aarch64-apple-darwin.tar.gz' \
+              -p 'freshen-*-x86_64-apple-darwin.tar.gz' \
+              -D dist/macos 2>/dev/null; then
+              ok=1; break
+            fi
+            sleep 20
+          done
+          [ "$ok" = 1 ] || { echo "::error::macOS release assets for $tag never appeared (is release-binaries applied?)" >&2; exit 1; }
+
+      - name: Import the Apple Developer ID certificate into a keychain
+        run: |
+          printf '%s' "${{ secrets.APPLE_DEVELOPER_CERTIFICATE }}" | base64 -D > dist/macos/cert.p12
+          security create-keychain -p "" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "" build.keychain
+          security import dist/macos/cert.p12 -k build.keychain \
+              -P "${{ secrets.APPLE_CERTIFICATE_PASSWORD }}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
+
+      - name: Code sign the macOS binaries (hardened runtime, timestamped)
+        run: |
+          cat > dist/macos/entitlements.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>com.apple.security.cs.allow-jit</key><false/>
+            <key>com.apple.security.cs.allow-unsigned-executable-memory</key><false/>
+            <key>com.apple.security.cs.debugger</key><false/>
+            <key>com.apple.security.cs.disable-library-validation</key><false/>
+          </dict>
+          </plist>
+          EOF
+          for archive in dist/macos/freshen-*-*.tar.gz; do
+            dir="$(dirname "$archive")/signed"
+            rm -rf "$dir"; mkdir -p "$dir"
+            tar -xzf "$archive" -C "$dir"
+            codesign --sign "${{ secrets.APPLE_DEVELOPER_ID }}" \
+                --entitlements dist/macos/entitlements.plist \
+                --options runtime --timestamp -v "$dir/freshen"
+            tar -czf "$archive" -C "$dir" freshen
+          done
+
+      - name: Notarize the macOS archives with Apple notarytool
+        run: |
+          for archive in dist/macos/freshen-*-*.tar.gz; do
+            xcrun notarytool submit "$archive" \
+              --apple-id "${{ secrets.APPLE_ID }}" \
+              --team-id "${{ secrets.APPLE_TEAM_ID }}" \
+              --password "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}" \
+              --wait
+          done
+
+      - name: Upload the signed macOS archives over the unsigned assets
+        run: |
+          gh release upload "${{ steps.tag.outputs.tag }}" \
+            dist/macos/freshen-*-*.tar.gz --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  sign-windows:
+    name: sign Windows binaries
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve the tag to sign
+        id: tag
+        run: |
+          $tag = "${{ github.inputs.tag || github.ref_name }}"
+          echo "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      # Same concurrency as the macOS job: download retries until the
+      # release-binaries archives exist for this tag.
+      - name: Wait for and download the unsigned Windows archives
+        run: |
+          $tag = "${{ steps.tag.outputs.tag }}"
+          $ok = $false
+          for ($i = 1; $i -le 60; $i++) {
+            gh release download $tag `
+              -p 'freshen-*-x86_64-pc-windows-msvc.zip' `
+              -p 'freshen-*-aarch64-pc-windows-msvc.zip' `
+              -D dist\windows 2>$null
+            if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+            Start-Sleep -Seconds 20
+          }
+          if (-not $ok) { throw "Windows release assets for $tag never appeared (is release-binaries applied?)" }
+
+      - name: Decode the Windows code-signing certificate
+        env:
+          WINDOWS_CODE_SIGNING_CERTIFICATE: ${{ secrets.WINDOWS_CODE_SIGNING_CERTIFICATE }}
+        run: |
+          $bytes = [Convert]::FromBase64String($env:WINDOWS_CODE_SIGNING_CERTIFICATE)
+          [IO.File]::WriteAllBytes("dist\windows\cert.pfx", $bytes)
+
+      - name: Sign the Windows binaries with signtool (timestamped)
+        env:
+          WINDOWS_CODE_SIGNING_PASSWORD: ${{ secrets.WINDOWS_CODE_SIGNING_PASSWORD }}
+        run: |
+          Get-ChildItem dist\windows\freshen-*.zip | ForEach-Object {
+            $dir = Join-Path $_.DirectoryName $_.BaseName
+            Expand-Archive -Path $_.FullName -DestinationPath $dir -Force
+            signtool sign /f dist\windows\cert.pfx `
+              /p $env:WINDOWS_CODE_SIGNING_PASSWORD `
+              /tr http://timestamp.digicert.com /td SHA256 /fd SHA256 /v `
+              (Join-Path $dir freshen.exe)
+            Compress-Archive -Path (Join-Path $dir '*') -DestinationPath $_.FullName -Force
+          }
+
+      - name: Upload the signed Windows archives over the unsigned assets
+        run: |
+          $tag = "${{ steps.tag.outputs.tag }}"
+          gh release upload $tag dist\windows\freshen-*.zip --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  finalize:
+    name: refresh checksums.txt for the signed artifacts
+    needs: [sign-macos, sign-windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve the tag
+        id: tag
+        run: echo "tag=${{ github.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for the signed release assets
+        run: |
+          tag="${{ steps.tag.outputs.tag }}"
+          for i in $(seq 1 60); do
+            count="$(gh release view "$tag" --json assets --jq '.assets | length' 2>/dev/null || echo 0)"
+            [ "${count:-0}" -gt 0 ] 2>/dev/null && exit 0
+            sleep 20
+          done
+          echo "::error::no release assets found for $tag" >&2
+          exit 1
+
+      - name: Download all release assets
+        run: |
+          mkdir -p dist
+          gh release download "${{ steps.tag.outputs.tag }}" -D dist
+
+      - name: Regenerate checksums.txt over the signed archives
+        run: |
+          cd dist
+          shopt -s nullglob
+          files=(freshen-*.tar.gz freshen-*.zip)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "no archives or zips to checksum" >&2
+            exit 0
+          fi
+          sha256sum "${files[@]}" > checksums.txt
+          cat checksums.txt
+
+      - name: Upload checksums.txt over the stale unsigned one
+        run: gh release upload "${{ steps.tag.outputs.tag }}" dist/checksums.txt --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

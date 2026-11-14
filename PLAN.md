@@ -400,7 +400,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add Windows aarch64 and fully static Linux (musl) targets to the release workflow, with checksums for every artifact
 - [x] Publish to crates.io, proposed as a release workflow change
 - [x] Support `cargo binstall` for the published crate
-- [ ] Sign and notarize the macOS binary and sign the Windows binary, proposed as a release workflow change
+- [x] Sign and notarize the macOS binary and sign the Windows binary, proposed as a release workflow change
 - [ ] Publish SBOM / provenance attestations for every release artifact
 - [ ] Add a Homebrew tap formula
 - [ ] Add a Scoop bucket manifest

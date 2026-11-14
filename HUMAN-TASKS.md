@@ -40,8 +40,8 @@ Pending proposals:
 The agent can prepare workflows and manifests, but only you can create these:
 
 - [ ] crates.io API token, stored as the repository secret `CARGO_REGISTRY_TOKEN`
-- [ ] Apple Developer ID certificate and notarization credentials (repository secrets) for signing the macOS binary
-- [ ] Windows code-signing certificate (repository secret)
+- [ ] Apple Developer ID code-signing certificate and notarization credentials (repository secrets) for signing the macOS binary: `APPLE_DEVELOPER_CERTIFICATE` (base64-encoded .p12), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_DEVELOPER_ID`, `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_SPECIFIC_PASSWORD`
+- [ ] Windows code-signing certificate (repository secret): `WINDOWS_CODE_SIGNING_CERTIFICATE` (base64-encoded .pfx) and `WINDOWS_CODE_SIGNING_PASSWORD`
 - [ ] Repository `yildirimarda/homebrew-tap` for the Homebrew formula, and a Scoop bucket repository
 - [ ] A pull request to `microsoft/winget-pkgs` for the winget manifest
 - [ ] An AUR account and SSH key for the PKGBUILD
