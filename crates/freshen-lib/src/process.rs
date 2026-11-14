@@ -1237,17 +1237,22 @@ impl ProcessTree {
 
         #[cfg(windows)]
         {
+            // Kill the whole process tree, not just the processes that were
+            // assigned to the job: child processes a shell spawns are not
+            // automatic job members, so kill-on-close alone can leave a
+            // grandchild running past the step. `taskkill /T /F` terminates
+            // the child and every descendant. It must run while `child` is
+            // still alive so the tree is rooted at it.
+            let _ = Command::new("taskkill")
+                .args(["/T", "/F", "/PID", &child.id().to_string()])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
             if let Some(job) = self.job.take() {
-                // The job was created with kill-on-close, so dropping the last
-                // handle terminates every process that belongs to it.
+                // kill-on-close is now redundant after taskkill, but releasing
+                // the job still clears the handle.
                 drop(job);
-            } else {
-                let _ = Command::new("taskkill")
-                    .args(["/T", "/F", "/PID", &child.id().to_string()])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
             }
         }
 
