@@ -207,10 +207,12 @@ Homebrew owns the installation, \fBbrew upgrade freshen\fR is run.
 .TP
 .B schedule install [--every HOURS]
 Install (write and load) a launchd agent that runs \fBfreshen --check\fR
-every \fIHOURS\fR hours (default 24) on macOS.
+every \fIHOURS\fR hours (default 24) on macOS, a systemd user timer on Linux,
+or a Task Scheduler task on Windows.
 .TP
 .B schedule remove
-Unload and delete the scheduled launchd agent on macOS.
+Unload and delete the scheduled launchd agent on macOS, stop and delete the
+systemd user timer on Linux, or delete the Task Scheduler task on Windows.
 .Sh EXIT CODES
 .TP
 .B 0

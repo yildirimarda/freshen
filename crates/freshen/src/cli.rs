@@ -329,7 +329,7 @@ pub enum Command {
     /// Upgrade freshen itself through the package manager that installed it.
     SelfUpdate,
     /// Schedule unattended freshen runs through the platform's scheduler
-    /// (macOS, Linux).
+    /// (macOS, Linux, Windows).
     Schedule {
         /// Install or remove the scheduled agent or timer.
         #[command(subcommand)]
