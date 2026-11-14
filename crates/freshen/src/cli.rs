@@ -18,8 +18,9 @@ use clap::{ArgAction, Parser, Subcommand};
 use clap_complete::Shell;
 use freshen_lib::{
     Config, ContainerRuntimeKind, OutputLevel, PackageManagerConfig, PreflightCheck,
-    PreflightConfig, RunOptions, StepSelection, DEFAULT_JOBS, DEFAULT_MIN_BATTERY_PERCENT,
-    DEFAULT_MIN_FREE_DISK_GIB, DEFAULT_SNAPSHOT_RETENTION, DEFAULT_WAIT,
+    PreflightConfig, RunOptions, StepSelection, UserActivityConfig, DEFAULT_IDLE_MINUTES,
+    DEFAULT_JOBS, DEFAULT_MIN_BATTERY_PERCENT, DEFAULT_MIN_FREE_DISK_GIB,
+    DEFAULT_SNAPSHOT_RETENTION, DEFAULT_WAIT,
 };
 
 /// A problem combining the command line with the configuration file.
@@ -451,6 +452,13 @@ impl Cli {
             .with_jobs(self.jobs.or(config.run.jobs).unwrap_or(DEFAULT_JOBS))
             .with_preflight(preflight)
             .with_package_manager(package_manager)
+            .with_user_activity(UserActivityConfig {
+                enabled: config.user_activity.enabled.unwrap_or(true),
+                idle_minutes: config
+                    .user_activity
+                    .idle_minutes
+                    .unwrap_or(DEFAULT_IDLE_MINUTES),
+            })
             .with_selection(
                 StepSelection::new()
                     .with_only(self.only.clone())

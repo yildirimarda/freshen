@@ -12,12 +12,12 @@ use freshen_lib::sudo::{HostSudoProbe, SudoState};
 #[cfg(windows)]
 use freshen_lib::HostElevationProbe;
 use freshen_lib::{
-    detect_active_runtime, exit, install_interrupt_handler, list_steps, schedule,
-    wait_for_package_managers, ActiveContainerRuntime, AppLists, Config, ConfigEnvironment,
-    ContainerRuntimeKind, CustomStepConfig, CustomStepError, HostContainerRuntimeProbe,
-    HostPackageManagerProbe, HostPreflightProbe, NoElevationProbe, PackageManagerConfig,
-    PackageManagerProbe, Platform, PreflightReport, Registry, RunLock, Runner, SystemInfo,
-    TrustStore, WaitOutcome,
+    assess_user_activity, detect_active_runtime, exit, install_interrupt_handler, list_steps,
+    schedule, wait_for_package_managers, ActiveContainerRuntime, AppLists, Config,
+    ConfigEnvironment, ContainerRuntimeKind, CustomStepConfig, CustomStepError,
+    HostContainerRuntimeProbe, HostPackageManagerProbe, HostPreflightProbe, NoElevationProbe,
+    PackageManagerConfig, PackageManagerProbe, Platform, PreflightReport, Registry, RunLock,
+    Runner, SystemInfo, TrustStore, UserActivityOutcome, UserActivityProbe, WaitOutcome,
 };
 
 mod cli;
@@ -286,6 +286,24 @@ fn main() -> ExitCode {
         }
     }
 
+    // Defer scheduled (unattended) runs while the user is in a meeting or
+    // presentation (frontmost app full screen) or has been active recently. A
+    // deferral is not a failure: the scheduler tries again at the next run.
+    if !options.is_dry_run() && options.unattended() {
+        let probe = user_activity_probe();
+        match assess_user_activity(&*probe, options.user_activity()) {
+            UserActivityOutcome::Skip(reason) => {
+                log_event(
+                    &mut logger,
+                    &format!("freshen: scheduled run deferred: {reason}"),
+                );
+                eprintln!("freshen: scheduled run deferred: {reason}");
+                return exit::code(exit::OK);
+            }
+            UserActivityOutcome::Ok => {}
+        }
+    }
+
     // Tell the user when freshen itself has an update available. The check is
     // best effort: a missing package manager or a failed query just skips the
     // hint and never blocks the run.
@@ -451,6 +469,18 @@ fn run_preflight(options: &freshen_lib::RunOptions) -> PreflightReport {
     }
 
     PreflightReport::run(&HostPreflightProbe, options.preflight())
+}
+
+/// The user-activity probe: scripted facts under the test harness, the real
+/// host otherwise. Returns `true`/`None` facts that never block when they
+/// cannot be determined.
+fn user_activity_probe() -> Box<dyn UserActivityProbe> {
+    #[cfg(feature = "test-harness")]
+    if let Some(probe) = test_steps::preflight_probe() {
+        return Box::new(probe);
+    }
+
+    Box::new(HostPreflightProbe)
 }
 
 fn package_manager_probe() -> Box<dyn PackageManagerProbe> {

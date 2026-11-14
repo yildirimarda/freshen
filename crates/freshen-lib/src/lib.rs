@@ -115,6 +115,7 @@ pub mod tooling;
 pub mod tpm;
 pub mod treesitter;
 pub mod trust;
+pub mod user_activity;
 pub mod volta;
 pub mod vscode;
 pub mod vscodium;
@@ -140,8 +141,8 @@ pub use check::{CheckResult, CheckStatus, CheckSummary};
 pub use cleanup::{CleanupReport, ENABLE_FLAG as CLEANUP_FLAG};
 pub use config::{
     AppSection, Config, ConfigEnvironment, ConfigError, FilterSection, HookSection, Hooks,
-    PackageManagerSection, PreflightSection, RunSection, TimeoutSection, CONFIG_DIR_NAME,
-    CONFIG_FILE_NAME,
+    PackageManagerSection, PreflightSection, RunSection, TimeoutSection, UserActivitySection,
+    CONFIG_DIR_NAME, CONFIG_FILE_NAME,
 };
 pub use containers::{
     detect_active_runtime, detect_compose_command, parse_compose_projects,
@@ -201,6 +202,10 @@ pub use system::{
     Privilege, ProcessInfo, SystemInfo, SystemProbe, Terminal, TerminalApp,
 };
 pub use trust::{TrustStore, TRUSTED_FILE_NAME};
+pub use user_activity::{
+    assess as assess_user_activity, HostUserActivityProbe, UserActivityConfig, UserActivityOutcome,
+    UserActivityProbe, UserActivitySkipReason, DEFAULT_IDLE_MINUTES,
+};
 pub use warnings::supported_session_managers;
 
 /// Major and minor feature release this binary implements, e.g. `"0.1"`.

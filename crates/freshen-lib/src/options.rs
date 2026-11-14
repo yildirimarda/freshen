@@ -21,6 +21,7 @@ use crate::registry::{Registry, RegistryError};
 use crate::snapshot::DEFAULT_SNAPSHOT_RETENTION;
 use crate::step::{Step, StepId};
 use crate::trust::TrustStore;
+use crate::user_activity::UserActivityConfig;
 
 /// Default number of steps `--check` queries at the same time.
 pub const DEFAULT_JOBS: usize = 4;
@@ -229,6 +230,7 @@ pub struct RunOptions {
     wsl_distro: Option<String>,
     selection: StepSelection,
     preflight: PreflightConfig,
+    user_activity: UserActivityConfig,
     package_manager: PackageManagerConfig,
     step_timeout: Option<Duration>,
     global_timeout: Option<Duration>,
@@ -407,6 +409,13 @@ impl RunOptions {
     #[must_use]
     pub fn with_package_manager(mut self, package_manager: PackageManagerConfig) -> Self {
         self.package_manager = package_manager;
+        self
+    }
+
+    /// Replaces the user-activity guard configuration for scheduled runs.
+    #[must_use]
+    pub fn with_user_activity(mut self, user_activity: UserActivityConfig) -> Self {
+        self.user_activity = user_activity;
         self
     }
 
@@ -757,6 +766,12 @@ impl RunOptions {
     #[must_use]
     pub fn package_manager(&self) -> &PackageManagerConfig {
         &self.package_manager
+    }
+
+    /// Configuration for the user-activity guard that defers scheduled runs.
+    #[must_use]
+    pub fn user_activity(&self) -> &UserActivityConfig {
+        &self.user_activity
     }
 
     /// Maximum time one step may take, when a timeout is configured.
