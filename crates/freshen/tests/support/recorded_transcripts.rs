@@ -39,12 +39,15 @@ impl RecordedTranscripts {
     /// empty string.
     pub fn stdout(&self, tool: &str, version: &str, command: &str) -> String {
         let path = self.path(tool, version, command);
-        std::fs::read_to_string(&path).unwrap_or_else(|error| {
+        let content = std::fs::read_to_string(&path).unwrap_or_else(|error| {
             panic!(
                 "missing recorded transcript for {tool} {version} `{command}` at {}: {error}",
                 path.display()
             )
-        })
+        });
+        // Normalize line endings: fixtures checked out with CRLF on Windows
+        // read identically to the LF originals stored in the repository.
+        content.replace("\r\n", "\n")
     }
 }
 
