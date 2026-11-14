@@ -180,7 +180,7 @@ The exit codes are part of the command-line contract and are stable across relea
 
 ## Migrating from update-all.sh
 
-The zsh implementation and its deprecated POSIX `sh` compatibility wrapper have been removed now that the Rust port reached parity, and `freshen` is the implementation. Existing aliases and scripts should call `freshen` directly; install it with `cargo install --path crates/freshen` or use a release binary.
+The zsh implementation and its deprecated POSIX `sh` compatibility wrapper have been removed now that the Rust port reached parity, and `freshen` is the implementation. Existing aliases and scripts should call `freshen` directly; install it with `cargo install --path crates/freshen`, `brew install yildirimarda/homebrew-tap/freshen` (the formula lives in `Formula/freshen.rb` and is published to the `homebrew-tap` tap on the first release) or use a release binary.
 
 | Old | New |
 |---|---|

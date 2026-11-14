@@ -402,7 +402,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Support `cargo binstall` for the published crate
 - [x] Sign and notarize the macOS binary and sign the Windows binary, proposed as a release workflow change
 - [x] Publish SBOM / provenance attestations for every release artifact
-- [ ] Add a Homebrew tap formula
+- [x] Add a Homebrew tap formula
 - [ ] Add a Scoop bucket manifest
 - [ ] Add a winget manifest and the pull request to `microsoft/winget-pkgs`
 - [ ] Add a `.deb` package, proposed under `ci-proposals/`
