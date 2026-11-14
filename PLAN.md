@@ -432,7 +432,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Enforce a minimum test coverage threshold in CI with `cargo llvm-cov`, proposed under `ci-proposals/`
 - [x] Container-based integration tests on Linux that exercise real package managers against throwaway images
 - [x] Add a scheduled CI job that runs against the latest Homebrew/winget/apt metadata to catch upstream output changes early, proposed under `ci-proposals/`
-- [ ] Add performance budget: `--check` on a typical machine completes within a documented time
+- [x] Add performance budget: `--check` on a typical machine completes within a documented time
 - [ ] Add `docs/TESTING.md` with a manual checklist per operating system (a real run on macOS, Linux and Windows with the expected output and a rollback check) to run before every minor release
 
 ## Discovered

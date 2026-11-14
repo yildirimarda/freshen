@@ -61,12 +61,13 @@ What happens when another package manager is already running.
 
 ### `[timeouts]`
 
-How long a step and the whole run may take. `0` disables the timeout.
+How long a step, the whole run and a `--check` run may take. `0` disables a timeout.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `step_seconds` | integer | `0` | Seconds a single step may take. |
 | `total_seconds` | integer | `0` | Seconds the whole run may take. |
+| `check_seconds` | integer | `30` | Seconds a `--check` run may take (the performance budget). `0` disables it. |
 
 ### `[run]`
 
