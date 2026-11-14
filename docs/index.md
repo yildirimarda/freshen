@@ -12,6 +12,7 @@ freshen
 |---|---|
 | [Quick start](quick-start.md) | Install freshen, run it for the first time, and understand the output |
 | [Configuration reference](config.md) | The `config.toml` file: where it lives, every key, validation errors, environment variable overrides |
+| [FAQ](faq.md) | Frequently asked questions about installation, steps, check/update/cleanup, exit codes and configuration |
 
 ## What freshen does
 
@@ -46,5 +47,7 @@ You can also install with Homebrew (`brew install yildirimarda/homebrew-tap/fres
 
 * [Quick start](quick-start.md) — install and run freshen for the first time
 * [Configuration reference](config.md) — every `config.toml` key and how to use it
+* [Platform notes](platform-notes/macos.md) — how freshen behaves on macOS, Linux and Windows (each page links to the others)
+* [FAQ](faq.md) — frequently asked questions
 * [PLAN.md](https://github.com/yildirimarda/freshen/blob/main/PLAN.md) — the project roadmap
 * [CONTRIBUTING.md](https://github.com/yildirimarda/freshen/blob/main/CONTRIBUTING.md) — how to contribute

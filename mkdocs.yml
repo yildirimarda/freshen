@@ -29,6 +29,11 @@ nav:
   - Home: index.md
   - Quick start: quick-start.md
   - Configuration reference: config.md
+  - Platform notes:
+      - macOS: platform-notes/macos.md
+      - Linux: platform-notes/linux.md
+      - Windows: platform-notes/windows.md
+  - FAQ: faq.md
   - Steps:
       - 'antidote': steps/antidote.md
       - 'apk': steps/apk.md
