@@ -10,3 +10,4 @@ graphify-out/
 /target/
 __pycache__/
 *.pyc
+site/
