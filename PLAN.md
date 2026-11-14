@@ -405,7 +405,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add a Homebrew tap formula
 - [x] Add a Scoop bucket manifest
 - [x] Add a winget manifest and the pull request to `microsoft/winget-pkgs`
-- [ ] Add a `.deb` package, proposed under `ci-proposals/`
+- [x] Add a `.deb` package, proposed under `ci-proposals/`
 - [ ] Add an `.rpm` package, proposed under `ci-proposals/`
 - [ ] Add an AUR PKGBUILD
 - [ ] Add a Nix flake
