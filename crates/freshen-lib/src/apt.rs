@@ -362,7 +362,7 @@ fn parse_needrestart_services(output: &str) -> Vec<String> {
 /// Each package the simulator would install is printed as
 /// `Inst <name> [<current>] (<candidate> ...)`; only the name and the two
 /// versions are reported. Lines that do not match that shape are ignored.
-fn parse_apt_simulated_upgrade(output: &str) -> Vec<OutdatedItem> {
+pub fn parse_apt_simulated_upgrade(output: &str) -> Vec<OutdatedItem> {
     output
         .lines()
         .filter_map(|line| {

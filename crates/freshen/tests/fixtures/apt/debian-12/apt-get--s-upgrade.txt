@@ -1,0 +1,11 @@
+Reading package lists... Done
+Building dependency tree... Done
+Reading state information... Done
+The following packages will be upgraded:
+  curl git openssh-client
+The following packages are kept back:
+  linux-image-amd64
+Inst curl [7.88.1-10+deb12u5] (7.88.1-10+deb12u6 [amd64])
+Inst git [1:2.39.2-1.2] (1:2.39.5-1~deb12u1 [amd64])
+Inst openssh-client [1:8.9p1-3+deb12u2] (1:8.9p1-3+deb12u3 [amd64])
+3 upgraded, 0 newly installed, 0 to remove and 1 not upgraded.
