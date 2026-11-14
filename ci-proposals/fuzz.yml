@@ -1,0 +1,58 @@
+# Scheduled fuzzing of freshen's parsers.
+#
+# Runs `cargo fuzz` against every fuzz target in `fuzz/fuzz_targets/` on a
+# nightly schedule. Malformed package-manager output that would crash a parser
+# (and therefore a freshen run) is caught here, without blocking pull requests:
+# the job is not required for merges because fuzzing is probabilistic and
+# time-boxed, so a flaky fuzz run must never stop a PR from landing.
+#
+# Apply this proposal:
+#   git mv ci-proposals/fuzz.yml .github/workflows/fuzz.yml
+#
+# It needs the nightly toolchain because `cargo fuzz` builds with the
+# `-Zsanitizer` coverage flags. rust-toolchain.toml pins the stable channel for
+# the rest of the repo, so nightly is installed side by side for this job only.
+# It runs on ubuntu-latest: the fuzz targets are pure string parsers, so Linux
+# coverage is representative, and `cargo fuzz`/libFuzzer are simplest on Linux.
+#
+# It needs no repository secrets beyond the default GITHUB_TOKEN (none used).
+
+name: fuzz
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    name: fuzz
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # cargo fuzz passes `-Zsanitizer=address` and `-Zsanitizer-coverage-*`
+      # flags to rustc, which are nightly-only.
+      - name: Install nightly toolchain
+        run: rustup toolchain install nightly --profile minimal
+
+      - name: Install cargo-fuzz
+        run: cargo +nightly install cargo-fuzz --version 0.13.2
+
+      - name: Build every fuzz target
+        run: cargo +nightly fuzz build
+
+      - name: Run every fuzz target against the seed corpus
+        run: |
+          for target in $(cargo +nightly fuzz list); do
+            cargo +nightly fuzz run "$target" -- -runs=5000
+          done

@@ -1,0 +1,5 @@
+Found the following packages available for upgrade:
+ Name                Id                          Version        Source
+ -------------------------------------------------------------------------------
+ 7zip                7zip.7zip                   24.08        winget
+ Git                 Git.Git                     2.45.2       winget

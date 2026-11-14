@@ -1,0 +1,43 @@
+[package]
+name = "freshen-fuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[[bin]]
+name = "system_distro_parse"
+path = "fuzz_targets/system_distro_parse.rs"
+
+[[bin]]
+name = "system_arch_parse"
+path = "fuzz_targets/system_arch_parse.rs"
+
+[[bin]]
+name = "docker_df_parse"
+path = "fuzz_targets/docker_df_parse.rs"
+
+[[bin]]
+name = "containers_compose_projects"
+path = "fuzz_targets/containers_compose_projects.rs"
+
+[[bin]]
+name = "winget_packages"
+path = "fuzz_targets/winget_packages.rs"
+
+[[bin]]
+name = "apt_simulated_upgrade"
+path = "fuzz_targets/apt_simulated_upgrade.rs"
+
+[dependencies]
+freshen-lib = { path = "../crates/freshen-lib" }
+libfuzzer-sys = "0.4"
+
+[profile.release]
+# Fuzz targets benefit from optimizations; keep debug info minimal so the
+# binaries and corpus stay small.
+debug = 0

@@ -1,0 +1,5 @@
+Found the following packages available for upgrade:
+ Name                                Id                                          Version      Source
+ -------------------------------------------------------------------------------------------------------------------------------
+ PowerToys                           Microsoft.PowerToys         0.80.0       winget
+ VLC                                 VideoLAN.VLC                3.0.20       winget

@@ -1,0 +1,4 @@
+[
+  {"Name": "monitoring", "Status": "paused", "ConfigFiles": "/srv/monitoring/compose.yml,/srv/monitoring/override.yml", "WorkingDirectory": "/srv/monitoring"},
+  {"Name": "worker", "Status": "running", "ConfigFiles": "/srv/worker/compose.yml", "Labels": [], "WorkingDirectory": "/srv/worker"}
+]

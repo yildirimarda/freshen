@@ -1,0 +1,8 @@
+Reading package lists... Done
+Building dependency tree... Done
+Reading state information... Done
+The following packages will be upgraded:
+  mintupdate curl
+Inst mintupdate [5.8.4.3] (5.8.4.4 [amd64])
+Inst curl [7.81.0-1ubuntu1.17] (7.88.0-1ubuntu1.3 [amd64])
+2 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.
