@@ -1,0 +1,140 @@
+# Build an .rpm package from the freshen binary and publish it as a GitHub
+# Release asset on every git tag matching `v*`.
+#
+# The package installs freshen to %{_bindir}/freshen (mode 0755, owned by root)
+# for x86_64 and aarch64, and is built with rpmbuild on ubuntu-latest.
+#
+# Apply this proposal:
+#   git mv ci-proposals/release-rpm.yml .github/workflows/release-rpm.yml
+#
+# It needs no repository secrets beyond the default GITHUB_TOKEN
+# (contents: write).
+#
+# This workflow is triggered by the same `v*` tags as release-binaries and
+# runs concurrently with it. It waits for the release-binaries release to
+# appear for the tag, then uploads the .rpm packages (and a checksums file)
+# as additional assets on the same release. release-binaries owns the release
+# itself (including `make_latest: true`); this workflow only adds assets to it.
+# Apply release-binaries first, or the .rpm jobs wait and eventually fail.
+
+name: release-rpm
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag to release (for example v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-rpm-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-rpm:
+    name: build freshen .rpm for ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain
+
+      - name: Add the Linux target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install rpmbuild and the aarch64 cross linker
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq rpm
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            sudo apt-get install -y -qq gcc-aarch64-linux-gnu
+          fi
+
+      - name: Build freshen in release mode
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - id: stage
+        name: Stage the .rpm package
+        env:
+          VERSION: ${{ github.inputs.tag || github.ref_name }}
+        run: |
+          VERSION="${VERSION#v}"
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-gnu) RPM_ARCH=x86_64 ;;
+            aarch64-unknown-linux-gnu) RPM_ARCH=aarch64 ;;
+            *) echo "::error::unsupported target ${{ matrix.target}}" >&2; exit 1 ;;
+          esac
+          PKG_ROOT="dist/rpm-${{ matrix.target }}"
+          rm -rf "$PKG_ROOT" rpmbuild
+          mkdir -p "$PKG_ROOT" rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          install -m 0755 "target/${{ matrix.target }}/release/freshen" \
+            rpmbuild/SOURCES/freshen
+          cp packaging/freshen.spec rpmbuild/SPECS/freshen.spec
+          rpmbuild -bb rpmbuild/SPECS/freshen.spec \
+            --define "_topdir $(pwd)/rpmbuild" \
+            --define "_arch $RPM_ARCH" \
+            --define "_target_cpu $RPM_ARCH"
+          RPM="$(find rpmbuild/RPMS -name 'freshen-*.rpm' | head -n1)"
+          [ -n "$RPM" ] || { echo "::error::rpmbuild produced no .rpm" >&2; exit 1; }
+          mv "$RPM" "$PKG_ROOT/freshen-${VERSION}-${RPM_ARCH}.rpm"
+          echo "rpm=$PKG_ROOT/freshen-${VERSION}-${RPM_ARCH}.rpm" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: freshen-rpm-${{ matrix.target }}
+          path: dist/freshen-*.rpm
+
+  release:
+    name: upload the .rpm packages to the release
+    needs: build-rpm
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download every built .rpm
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Resolve the tag
+        id: tag
+        run: echo "tag=${{ github.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      # release-binaries creates the release for this tag; both workflows start
+      # on the same tag push and run concurrently, so wait for it to appear.
+      - name: Wait for the release-binaries release for this tag
+        run: |
+          tag="${{ steps.tag.outputs.tag }}"
+          ok=0
+          for i in $(seq 1 60); do
+            if gh release view "$tag" >/dev/null 2>&1; then
+              ok=1; break
+            fi
+            sleep 20
+          done
+          [ "$ok" = 1 ] || { echo "::error::release for $tag never appeared (is release-binaries applied?)" >&2; exit 1; }
+
+      - name: Write the combined checksums file for the .rpm packages
+        run: |
+          cd dist
+          sha256sum */freshen-*.rpm > checksums-rpm.txt
+          cat checksums-rpm.txt
+
+      - name: Upload the .rpm packages and checksums to the release
+        run: |
+          gh release upload "${{ steps.tag.outputs.tag }}" \
+            dist/*/freshen-*.rpm dist/checksums-rpm.txt
