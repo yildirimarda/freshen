@@ -412,7 +412,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] One-line install script with checksum verification
 - [x] Docs site (mkdocs) with quick start and the config reference
 - [x] Docs site: one page per step, generated from the step registry where possible
-- [ ] Docs site: platform notes and FAQ
+- [x] Docs site: platform notes and FAQ
 - [ ] Docs site: troubleshooting page
 - [ ] "Writing a step" contributor guide with a worked example and a step template
 - [ ] Add a terminal recording (asciinema/GIF) to the README

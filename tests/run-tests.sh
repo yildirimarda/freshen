@@ -374,7 +374,7 @@ PY
     else
       bad "site/index.html is missing"; fail=1
     fi
-    for page in quick-start config adr; do
+    for page in quick-start config adr platform-notes/macos platform-notes/linux platform-notes/windows faq; do
       if [[ -f "site/${page}/index.html" ]]; then
         ok "site/${page}/index.html built"
       else
