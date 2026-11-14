@@ -403,7 +403,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Sign and notarize the macOS binary and sign the Windows binary, proposed as a release workflow change
 - [x] Publish SBOM / provenance attestations for every release artifact
 - [x] Add a Homebrew tap formula
-- [ ] Add a Scoop bucket manifest
+- [x] Add a Scoop bucket manifest
 - [ ] Add a winget manifest and the pull request to `microsoft/winget-pkgs`
 - [ ] Add a `.deb` package, proposed under `ci-proposals/`
 - [ ] Add an `.rpm` package, proposed under `ci-proposals/`
