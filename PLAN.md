@@ -417,7 +417,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] "Writing a step" contributor guide with a worked example and a step template
 - [x] Add a terminal recording (asciinema/GIF) to the README
 - [x] Add issue templates (bug report with `--doctor` output, new step request)
-- [ ] Add a security policy
+- [x] Add a security policy
 - [ ] State in the README and docs that freshen collects no telemetry and sends no data itself (only the tools it runs and the optional self-update check use the network), and make the self-update check easy to disable
 
 ## Milestone 12: Quality
