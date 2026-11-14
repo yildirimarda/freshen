@@ -607,6 +607,56 @@ fn a_cask_that_needs_an_administrator_password_is_skipped_without_a_terminal() {
 }
 
 #[test]
+fn a_non_interactive_run_skips_administrator_casks_end_to_end() {
+    let tools = StubTools::new(&["brew"]);
+    tools.set_responses(
+        "brew",
+        &homebrew_responses(&[
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::stdout("jq\n"),
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::new(),
+            StubOutput::stdout("firefox\n1password\n"),
+            StubOutput::new(),
+            StubOutput::stdout(CASK_INFO_WITH_ADMINISTRATOR),
+            StubOutput::new(),
+            StubOutput::stdout("==> Would autoremove 1 unneeded formula:\nold-dependency\n"),
+            StubOutput::new(),
+            StubOutput::stdout("Would remove: /tmp/old (1.2MB)\n"),
+            StubOutput::new(),
+        ]),
+    );
+
+    let output = run(&tools, &["--only", HOMEBREW_STEPS, "--non-interactive"]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let mut expected = brew_transcript()
+        .into_iter()
+        .map(String::from)
+        .collect::<Vec<String>>();
+    if let Some(pos) = expected
+        .iter()
+        .position(|s| s == "brew info --cask --json=v2 firefox")
+    {
+        expected[pos] = "brew info --cask --json=v2 firefox 1password".to_string();
+    }
+    if let Some(pos) = expected.iter().position(|s| s == "brew upgrade --cask") {
+        expected[pos] = "brew upgrade --cask firefox".to_string();
+    }
+    assert_eq!(tools.step_calls(), expected);
+
+    let text = stdout(&output);
+    assert!(text.contains("skipping cask `1password`"), "output: {text}");
+    assert!(
+        text.contains("needs an administrator password"),
+        "output: {text}"
+    );
+}
+
+#[test]
 fn skipped_casks_appear_in_the_json_and_markdown_reports() {
     let tools = StubTools::new(&["brew"]);
     tools.set_responses(
