@@ -1,0 +1,106 @@
+name: New step request
+description: Request a new package manager or tool step for freshen
+title: "[step request] "
+labels: ["enhancement", "step request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Want freshen to keep a new tool up to date? Tell us about it here. The
+        more detail you can give about how the tool is installed, checked and
+        upgraded, the easier it is to add a step for it.
+
+  - type: input
+    id: tool-name
+    attributes:
+      label: Tool or package manager name
+      description: The name of the tool you want a step for.
+      placeholder: "docker, npm, flatpak, asdf, ..."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platforms
+    attributes:
+      label: Platform(s)
+      description: Which operating systems does the tool run on?
+      multiple: true
+      options:
+        - macOS
+        - Linux
+        - Windows
+    validations:
+      required: true
+
+  - type: input
+    id: detect-command
+    attributes:
+      label: Detection command
+      description: A command that tells whether the tool is installed (for example `brew --version`, `mise --version`, `docker --version`). Leave blank if you are not sure.
+      placeholder: "which <tool> || <tool> --version"
+    validations:
+      required: false
+
+  - type: input
+    id: check-command
+    attributes:
+      label: Read-only check command
+      description: A command that lists available updates without changing anything (for example `brew outdated`, `mise outdated`, `choco outdated`). Leave blank if you are not sure.
+      placeholder: "<tool> outdated"
+    validations:
+      required: false
+
+  - type: input
+    id: upgrade-command
+    attributes:
+      label: Upgrade command
+      description: A command that upgrades the tool (for example `brew upgrade <tool>`, `mise upgrade <tool>`, `choco upgrade <tool> --yes`). Leave blank if you are not sure.
+      placeholder: "<tool> upgrade <tool>"
+    validations:
+      required: false
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why freshen should manage it
+      description: What problem does adding this step solve? Which of your machines would benefit from it?
+    validations:
+      required: true
+
+  - type: input
+    id: install-method
+    attributes:
+      label: How it is installed
+      description: How do you normally install the tool? (Homebrew, apt, winget, Scoop, standalone installer, ...)
+      placeholder: "Installed via Homebrew as the `docker` cask"
+    validations:
+      required: false
+
+  - type: input
+    id: documentation
+    attributes:
+      label: Documentation or homepage
+      description: A link to the tool's documentation or homepage so a maintainer can verify the commands.
+      placeholder: "https://example.com/"
+    validations:
+      required: false
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional notes
+      description: |
+        - Any flags the upgrade command needs (`--greedy`, `--silent`, `--accept-license`, ...)
+        - Whether the tool updates itself (and freshen should wait for it instead of quitting it)
+        - Whether it needs administrator rights
+        - Anything else a maintainer should know
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have searched existing issues and step requests and this is not a duplicate.
+          required: true

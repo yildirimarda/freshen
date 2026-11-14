@@ -1,0 +1,126 @@
+name: Bug report
+description: File a bug about freshen
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please fill in as much as you can. A run of
+        `freshen --doctor` is especially valuable because it lists every
+        environment problem freshen detected.
+
+  - type: input
+    id: freshen-version
+    attributes:
+      label: freshen version
+      description: Run `freshen --version` and paste the result here.
+      placeholder: "freshen 0.4.0 (built ...)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      description: Which OS and version are you running freshen on?
+      multiple: false
+      options:
+        - macOS
+        - Linux
+        - Windows
+    validations:
+      required: true
+
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version
+      description: For example macOS 15.4, Ubuntu 24.04, Windows 11 24H2.
+      placeholder: "macOS 15.4 (Apple Silicon)"
+    validations:
+      required: true
+
+  - type: input
+    id: terminal-app
+    attributes:
+      label: Terminal application
+      description: The app that runs freshen (Terminal, iTerm2, Ghostty, Windows Terminal, PowerShell, cmd.exe, ...). Leave blank if unsure.
+      placeholder: "iTerm2"
+    validations:
+      required: false
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command you ran
+      description: The exact `freshen` invocation, including flags such as `--only`, `--skip`, `--cleanup` or `--container-runtime`.
+      placeholder: "freshen --only brew --cleanup"
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor-output
+    attributes:
+      label: Output of `freshen --doctor`
+      description: |
+        Run `freshen --doctor` and paste the complete output here. Redact any
+        paths or hostnames you do not want to share. If `--doctor` errors out,
+        paste that error instead.
+      render: shell
+      placeholder: |
+        $ freshen --doctor
+        freshen doctor: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: A clear and concise description of the bug, including any error messages. Paste command output (not screenshots) where useful.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-expected
+    attributes:
+      label: What you expected to happen
+      description: What you expected freshen to do instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to reproduce
+      description: |
+        1. Run `freshen --doctor` and paste the output (above).
+        2. Run the failing command (above).
+        3. ...
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: |
+        - Which steps you use (Homebrew, uv, mise, containers, Mac App Store, ...)
+        - Whether you use a config file (`~/.config/freshen/config.toml` or
+          `%APPDATA%\freshen\config.toml`) and its contents (redact secrets).
+        - Anything else relevant (recent upgrades, proxy, VPN, WSL, container
+          runtime, ...).
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have searched existing issues and this is not a duplicate.
+          required: true
+        - label: I am running the latest released version of freshen.
+          required: true
