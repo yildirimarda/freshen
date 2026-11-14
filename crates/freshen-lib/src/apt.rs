@@ -422,6 +422,7 @@ mod tests {
     use super::parse_apt_simulated_upgrade;
     #[cfg(target_os = "linux")]
     use super::{restart_needed_at, temp_marker_path};
+    use proptest::prelude::*;
 
     #[test]
     fn parses_simulated_upgrade_lines() {
@@ -454,6 +455,21 @@ mod tests {
              0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n",
         );
         assert!(items.is_empty());
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn parse_apt_simulated_upgrade_never_crashes_on_arbitrary_output(output in any::<String>()) {
+            for item in parse_apt_simulated_upgrade(&output) {
+                assert!(!item.name().is_empty());
+                if let Some(current) = item.current() {
+                    assert!(output.contains(current));
+                }
+                if let Some(latest) = item.latest() {
+                    assert!(output.contains(latest));
+                }
+            }
+        }
     }
 
     #[cfg(target_os = "linux")]

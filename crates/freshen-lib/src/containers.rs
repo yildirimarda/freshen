@@ -3469,6 +3469,7 @@ mod tests {
     use crate::step::{Detection, Step, StepId};
     #[cfg(windows)]
     use crate::wsl::WSL;
+    use proptest::prelude::*;
     use std::collections::{HashMap, HashSet};
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
@@ -3728,6 +3729,30 @@ mod tests {
                 StandaloneContainer::new("jkl", "only-two-fields"),
             ]
         );
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn parse_compose_projects_never_crashes_on_arbitrary_output(json in any::<String>()) {
+            for project in parse_compose_projects(&json) {
+                assert!(!project.name().is_empty());
+                assert!(!project.config_files().is_empty());
+            }
+        }
+
+        #[test]
+        fn parse_standalone_containers_never_crashes_on_arbitrary_output(output in any::<String>()) {
+            let containers = parse_standalone_containers(&output);
+            assert!(containers.len() <= output.lines().count());
+            for container in &containers {
+                assert!(!container.id().is_empty());
+                assert!(!container.name().is_empty());
+                if let Some(digest) = container.digest() {
+                    assert!(!digest.is_empty());
+                    assert!(output.contains(digest));
+                }
+            }
+        }
     }
 
     #[test]

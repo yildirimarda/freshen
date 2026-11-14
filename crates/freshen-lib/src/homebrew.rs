@@ -2721,6 +2721,7 @@ mod tests {
     use crate::registry::Registry;
     use crate::step::{CheckReport, Detection, Operation, SkipReason, Step, StepId};
     use crate::system::Arch;
+    use proptest::prelude::*;
     use std::path::Path;
     #[cfg(unix)]
     use std::path::PathBuf;
@@ -2836,6 +2837,30 @@ mod tests {
         assert_eq!(item.name(), "user/tap/tool");
         assert_eq!(item.current(), Some("0.9.0"));
         assert_eq!(item.latest(), Some("1.0.0"));
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn parse_outdated_never_crashes_on_arbitrary_output(line in any::<String>()) {
+            let trimmed = line.trim();
+            let item = parse_outdated(&line);
+
+            // The item name is always a prefix of the trimmed line.
+            assert!(trimmed.starts_with(item.name()));
+            // Any version the parser reports was taken from the line itself.
+            if let Some(current) = item.current() {
+                assert!(trimmed.contains(current));
+            }
+            if let Some(latest) = item.latest() {
+                assert!(trimmed.contains(latest));
+            }
+        }
+
+        #[test]
+        fn cask_metadata_never_crashes_on_arbitrary_output(json in any::<String>()) {
+            // Invalid or unexpected JSON must degrade gracefully, never panic.
+            let _ = cask_metadata(&json);
+        }
     }
 
     #[test]
