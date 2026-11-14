@@ -7,6 +7,7 @@
 //! user has not granted permission, the error is ignored and the run finishes
 //! as usual.
 
+use crate::check::{CheckStatus, CheckSummary};
 use crate::runner::RunSummary;
 
 #[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
@@ -23,17 +24,31 @@ pub(crate) const TITLE: &str = "freshen";
 /// other platform it does nothing. A failure to send is ignored so a run is
 /// never aborted because of a notification.
 pub(crate) fn send(summary: &RunSummary) {
-    send_macos(summary);
-    send_linux(summary);
-    send_windows(summary);
+    let body = body(summary);
+    send_macos(&body);
+    send_linux(&body);
+    send_windows(&body);
+}
+
+/// Sends a desktop notification when a `--check` run found pending updates.
+///
+/// Does nothing when the check found no updates. A failure to send is ignored
+/// so a run is never aborted because of a notification.
+pub(crate) fn send_check(summary: &CheckSummary) {
+    if !summary.has_updates() {
+        return;
+    }
+    let body = body_for_check(summary);
+    send_macos(&body);
+    send_linux(&body);
+    send_windows(&body);
 }
 
 #[cfg(target_os = "macos")]
-fn send_macos(summary: &RunSummary) {
-    let body = body(summary);
+fn send_macos(body: &str) {
     let script = format!(
         "display notification {body} with title {title}",
-        body = quoted(&body),
+        body = quoted(body),
         title = quoted(TITLE),
     );
     // Fire and forget: a notification must never block the run or delay its
@@ -48,14 +63,13 @@ fn send_macos(summary: &RunSummary) {
 }
 
 #[cfg(target_os = "linux")]
-fn send_linux(summary: &RunSummary) {
-    let body = body(summary);
+fn send_linux(body: &str) {
     // Fire and forget: a notification must never block the run or delay its
     // exit. Errors (for example `notify-send` not being installed or the
     // desktop session not supporting notifications) are ignored.
     let _ = std::process::Command::new("notify-send")
         .arg(TITLE)
-        .arg(&body)
+        .arg(body)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -63,13 +77,13 @@ fn send_linux(summary: &RunSummary) {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn send_macos(_summary: &RunSummary) {
+fn send_macos(_body: &str) {
     // Desktop notifications are a macOS feature; every other platform is
     // silent here (see `send_linux` for Linux).
 }
 
 #[cfg(not(target_os = "linux"))]
-fn send_linux(_summary: &RunSummary) {
+fn send_linux(_body: &str) {
     // Desktop notifications are a Linux feature; every other platform is
     // silent here (see `send_macos` for macOS).
 }
@@ -80,9 +94,8 @@ fn send_linux(_summary: &RunSummary) {
 /// Fire and forget: a notification must never block the run or delay its exit,
 /// and a failure to send is ignored.
 #[cfg(windows)]
-fn send_windows(summary: &RunSummary) {
-    let body = body(summary);
-    let script = windows::toast_script(TITLE, &body);
+fn send_windows(body: &str) {
+    let script = windows::toast_script(TITLE, body);
     let Some(powershell) = crate::shell::windows::powershell() else {
         return;
     };
@@ -98,7 +111,7 @@ fn send_windows(summary: &RunSummary) {
 }
 
 #[cfg(not(windows))]
-fn send_windows(_summary: &RunSummary) {
+fn send_windows(_body: &str) {
     // Windows toast notifications are a Windows feature; every other platform
     // is silent here.
 }
@@ -163,6 +176,29 @@ pub(crate) fn body(summary: &RunSummary) -> String {
     text
 }
 
+/// The body of a `--check` notification: the pending updates as a single line.
+///
+/// Lists each outdated step with how many items it reported, so a scheduled
+/// run can tell the user what needs upgrading without opening a terminal.
+/// Kept platform-neutral so it can be tested on every operating system.
+#[cfg(any(test, target_os = "macos", target_os = "linux", target_os = "windows"))]
+#[must_use]
+pub(crate) fn body_for_check(summary: &CheckSummary) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for result in summary.steps() {
+        if result.status() == CheckStatus::Outdated {
+            let count = result.report().pending();
+            parts.push(format!("{} ({} update(s))", result.name(), count));
+        }
+    }
+    format!(
+        "{} update(s) pending across {} step(s): {}",
+        summary.pending(),
+        summary.outdated_steps(),
+        parts.join(", ")
+    )
+}
+
 /// Quotes `text` as an AppleScript string literal.
 #[cfg(target_os = "macos")]
 fn quoted(text: &str) -> String {
@@ -171,11 +207,13 @@ fn quoted(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{body, TITLE};
+    use super::{body, body_for_check, TITLE};
+    use crate::check::{CheckResult, CheckSummary};
     use crate::options::RunOptions;
     use crate::platform::Platform;
     use crate::runner::{RunSummary, Runner};
     use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
+    use std::time::Duration;
 
     /// A step that reports itself as installed and then runs (or fails) on cue.
     struct ProbeStep {
@@ -235,6 +273,18 @@ mod tests {
         Runner::with_options(steps.iter().copied(), RunOptions::new()).run()
     }
 
+    fn check_step(count: usize) -> CheckResult {
+        CheckResult::outdated(
+            &ProbeStep::ok(),
+            CheckReport::from_items((0..count).map(|i| OutdatedItem::new(format!("pkg-{i}")))),
+            Duration::ZERO,
+        )
+    }
+
+    fn check_summary(results: Vec<CheckResult>) -> CheckSummary {
+        CheckSummary::from_results(results)
+    }
+
     #[test]
     fn the_title_is_freshen() {
         assert_eq!(TITLE, "freshen");
@@ -281,5 +331,24 @@ mod tests {
 
         let text = body(&summary);
         assert!(text.contains(r#"Probe: weird "name" \ fail"#));
+    }
+
+    #[test]
+    fn check_body_reports_pending_updates_across_outdated_steps() {
+        let summary = check_summary(vec![check_step(2), check_step(1)]);
+
+        let text = body_for_check(&summary);
+        assert!(text.contains("3 update(s) pending across 2 step(s)"));
+        assert!(text.contains("Probe (2 update(s))"));
+        assert!(text.contains("Probe (1 update(s))"));
+    }
+
+    #[test]
+    fn check_body_reports_zero_when_no_step_is_outdated() {
+        let up_to_date = CheckResult::up_to_date(&ProbeStep::ok(), Duration::ZERO);
+        let summary = check_summary(vec![up_to_date]);
+
+        let text = body_for_check(&summary);
+        assert_eq!(text, "0 update(s) pending across 0 step(s): ");
     }
 }
