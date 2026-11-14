@@ -313,7 +313,19 @@ fi
 #     start and the config reference in the nav, `mkdocs build` succeeds, and
 #     the expected pages render to HTML.
 if [[ -f mkdocs.yml ]]; then
-  if /work/.venv/bin/python3 - <<'PY' >/dev/null 2>&1
+  # Locate a Python with PyYAML and the mkdocs binary. The dev container
+  # provisions them under /work/.venv; CI may have them on PATH instead.
+  if [[ -x /work/.venv/bin/python3 ]] && /work/.venv/bin/python3 -c 'import yaml' >/dev/null 2>&1; then
+    PYTHON=/work/.venv/bin/python3
+  else
+    PYTHON=python3
+  fi
+  if [[ -x /work/.venv/bin/mkdocs ]]; then
+    MKDOCS=/work/.venv/bin/mkdocs
+  else
+    MKDOCS=mkdocs
+  fi
+  if "$PYTHON" - <<'PY' >/dev/null 2>&1
 import sys
 try:
     import yaml
@@ -345,7 +357,7 @@ PY
   else
     bad "mkdocs.yml is not valid or missing the quick start / config reference"; fail=1
   fi
-  if /work/.venv/bin/mkdocs build --clean --strict >/dev/null 2>&1; then
+  if "$MKDOCS" build --clean --strict >/dev/null 2>&1; then
     ok "mkdocs build succeeds"
     if [[ -f "site/index.html" ]]; then
       ok "site/index.html built"
