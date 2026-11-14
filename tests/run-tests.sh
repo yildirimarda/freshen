@@ -289,4 +289,24 @@ else
   bad "flake.nix is missing"; fail=1
 fi
 
+# 16. The one-line install script (install.sh) is valid shell and verifies the
+#     SHA-256 checksum of the downloaded binary before installing it. The
+#     functional test serves a fake release from a local HTTP server (no
+#     network) and covers a matching checksum, a mismatched checksum and a
+#     missing asset.
+if [[ -f install.sh ]]; then
+  if bash -n install.sh 2>/dev/null || sh -n install.sh 2>/dev/null; then
+    ok "install.sh (valid shell syntax)"
+  else
+    bad "install.sh is not valid shell"; fail=1
+  fi
+  if bash tests/install.sh >/dev/null 2>&1; then
+    ok "install.sh functional test (checksum verification)"
+  else
+    bad "install.sh functional test failed"; fail=1
+  fi
+else
+  bad "install.sh is missing"; fail=1
+fi
+
 exit "$fail"

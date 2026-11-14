@@ -55,6 +55,22 @@ Supported terminal emulators: Apple Terminal, iTerm2, Ghostty, kitty, WezTerm, A
 
 Session managers checked before an upgrade: zellij, tmux, OpenSSH, GNU screen, byobu, dtach, abduco, mosh.
 
+## Installation
+
+freshen is distributed as prebuilt binaries for macOS, Linux and Windows, with a SHA-256 checksums file attached to every GitHub Release. The quickest way to install is the one-line installer: it detects your operating system and architecture, downloads the matching prebuilt binary, verifies its SHA-256 checksum against the release's `checksums.txt` **before** installing anything, and installs `freshen` to `/usr/local/bin` (override with `FRESHEN_BIN_DIR`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yildirimarda/freshen/main/install.sh | sh
+```
+
+Install a specific release with `FRESHEN_VERSION` (defaults to `latest`):
+
+```bash
+FRESHEN_VERSION=0.1.0 sh install.sh
+```
+
+You can also install with Homebrew (`brew install yildirimarda/homebrew-tap/freshen`), Scoop, winget, Chocolatey, the AUR PKGBUILD, the Nix flake, or `cargo binstall freshen`.
+
 ## Requirements
 
 - macOS, Linux or Windows; a prebuilt `freshen` binary or Rust 1.81+ to build from source

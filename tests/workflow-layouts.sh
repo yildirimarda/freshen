@@ -44,6 +44,13 @@ MD
     cp "$root/flake.nix" "$dir/flake.nix"
   fi
 
+  if [[ -f "$root/install.sh" ]]; then
+    cp "$root/install.sh" "$dir/install.sh"
+  fi
+  if [[ -f "$root/tests/install.sh" ]]; then
+    cp "$root/tests/install.sh" "$dir/tests/install.sh"
+  fi
+
   for name in rust ci real-tools release-signing release-binaries release-crates-io; do
     src="$root/ci-proposals/$name.yml"
     [[ -f "$src" ]] || src="$root/.github/workflows/$name.yml"
