@@ -1,0 +1,59 @@
+# Publish freshen-lib and freshen to crates.io on every git tag matching `v*`.
+#
+# The library is published first: `freshen` depends on it, and crates.io
+# rejects a crate that depends on a crate that is not yet published.
+#
+# Apply this proposal:
+#   git mv ci-proposals/release-crates-io.yml .github/workflows/release-crates-io.yml
+#
+# It needs one repository secret that only a human can create
+# (see HUMAN-TASKS.md, "Accounts and credentials for Milestone 11"):
+#   CARGO_REGISTRY_TOKEN — a crates.io API token with the `publish` scope
+#   (Settings -> Secrets and variables -> Actions -> New repository secret).
+#
+# Each git tag publishes exactly once: crates.io does not allow republishing
+# the same version, so re-running for an already-published tag fails until
+# that version is yanked.
+
+name: release-crates-io
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag to publish (for example v0.1.0)"
+        required: true
+
+concurrency:
+  group: release-crates-io-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: publish freshen-lib and freshen to crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain
+
+      - name: Verify the tag matches the workspace version
+        run: |
+          tag="${{ github.inputs.tag || github.ref_name }}"
+          tag="${tag#v}"
+          version="$(cargo pkgid -p freshen | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)"
+          [ -n "$version" ] || { echo "could not read the workspace version" >&2; exit 1; }
+          [ "$tag" = "$version" ] || { echo "tag $tag does not match workspace version $version" >&2; exit 1; }
+
+      - name: Publish freshen-lib to crates.io
+        run: cargo publish -p freshen-lib --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish freshen to crates.io
+        run: cargo publish -p freshen --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
