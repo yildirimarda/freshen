@@ -1,0 +1,56 @@
+site_name: freshen
+site_description: One command to keep a developer machine current
+site_url: https://yildirimarda.github.io/freshen/
+repo_url: https://github.com/yildirimarda/freshen
+edit_uri: blob/main/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - content.code.annotate
+    - content.tabs.link
+    - search.suggest
+    - search.highlight
+    - content.tooltips
+
+nav:
+  - Home: index.md
+  - Quick start: quick-start.md
+  - Configuration reference: config.md
+  - Architecture decision records:
+      - Overview: adr/README.md
+      - '0000: Template': adr/0000-template.md
+      - '0001: Implement freshen in Rust': adr/0001-implement-freshen-in-rust.md
+      - '0002: Choose the core dependencies': adr/0002-choose-core-dependencies.md
+  - Roadmap: https://github.com/yildirimarda/freshen/blob/main/PLAN.md
+  - Contributing: https://github.com/yildirimarda/freshen/blob/main/CONTRIBUTING.md
+
+markdown_extensions:
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.snippets:
+      base_path: docs
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - admonition
+  - attr_list
+  - md_in_html
+
+plugins:
+  - search
