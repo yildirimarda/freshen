@@ -423,7 +423,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 ## Milestone 12: Quality
 
 - [x] Add a recorded-transcript fixture harness for parser tests, with fixtures stored per tool and version, covered by a test for the harness itself
-- [ ] Add recorded-transcript fixtures for the Homebrew JSON parsers, covering several Homebrew versions
+- [x] Add recorded-transcript fixtures for the Homebrew JSON parsers, covering several Homebrew versions
 - [ ] Add recorded-transcript fixtures for the `docker compose ls` parser, covering several compose versions
 - [ ] Add recorded-transcript fixtures for the winget parser, covering several winget versions
 - [ ] Add recorded-transcript fixtures for the apt/dpkg parsers, covering several distributions
