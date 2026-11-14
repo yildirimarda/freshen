@@ -320,6 +320,16 @@ if [[ -f mkdocs.yml ]]; then
   else
     PYTHON=python3
   fi
+  # mkdocs is not part of the runner image: install it on demand (with the
+  # plugins mkdocs.yml uses) when neither the venv nor PATH provides it.
+  if [[ ! -x /work/.venv/bin/mkdocs ]] && ! command -v mkdocs >/dev/null 2>&1; then
+    if ! "$PYTHON" -m pip install --quiet --disable-pip-version-check \
+        mkdocs==1.6.1 mkdocs-material==9.8.1 pymdown-extensions==13.1 2>/dev/null; then
+      "$PYTHON" -m pip install --user --quiet --disable-pip-version-check \
+        mkdocs==1.6.1 mkdocs-material==9.8.1 pymdown-extensions==13.1
+      export PATH="$HOME/.local/bin:$PATH"
+    fi
+  fi
   if [[ -x /work/.venv/bin/mkdocs ]]; then
     MKDOCS=/work/.venv/bin/mkdocs
   else
