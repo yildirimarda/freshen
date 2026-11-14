@@ -309,4 +309,62 @@ else
   bad "install.sh is missing"; fail=1
 fi
 
+# 17. The mkdocs docs site builds: mkdocs.yml is valid YAML with the quick
+#     start and the config reference in the nav, `mkdocs build` succeeds, and
+#     the expected pages render to HTML.
+if [[ -f mkdocs.yml ]]; then
+  if /work/.venv/bin/python3 - <<'PY' >/dev/null 2>&1
+import sys
+try:
+    import yaml
+    with open("mkdocs.yml") as f:
+        cfg = yaml.safe_load(f)
+    assert isinstance(cfg, dict)
+    assert "site_name" in cfg
+    nav = cfg.get("nav", [])
+    names = []
+    for entry in nav:
+        if isinstance(entry, dict):
+            for value in entry.values():
+                if isinstance(value, str):
+                    names.append(value)
+                elif isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, str):
+                            names.append(item)
+        elif isinstance(entry, str):
+            names.append(entry)
+    assert "index.md" in names, "index.md not in nav"
+    assert "quick-start.md" in names, "quick-start.md not in nav"
+    assert "config.md" in names, "config.md not in nav"
+except Exception:
+    sys.exit(1)
+PY
+  then
+    ok "mkdocs.yml (valid YAML, quick start and config reference in nav)"
+  else
+    bad "mkdocs.yml is not valid or missing the quick start / config reference"; fail=1
+  fi
+  if /work/.venv/bin/mkdocs build --clean --strict >/dev/null 2>&1; then
+    ok "mkdocs build succeeds"
+    if [[ -f "site/index.html" ]]; then
+      ok "site/index.html built"
+    else
+      bad "site/index.html is missing"; fail=1
+    fi
+    for page in quick-start config adr; do
+      if [[ -f "site/${page}/index.html" ]]; then
+        ok "site/${page}/index.html built"
+      else
+        bad "site/${page}/index.html is missing"; fail=1
+      fi
+    done
+  else
+    bad "mkdocs build failed"; fail=1
+  fi
+  rm -rf site
+else
+  bad "mkdocs.yml is missing"; fail=1
+fi
+
 exit "$fail"

@@ -410,7 +410,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add an AUR PKGBUILD
 - [x] Add a Nix flake
 - [x] One-line install script with checksum verification
-- [ ] Docs site (mkdocs) with quick start and the config reference
+- [x] Docs site (mkdocs) with quick start and the config reference
 - [ ] Docs site: one page per step, generated from the step registry where possible
 - [ ] Docs site: platform notes and FAQ
 - [ ] Docs site: troubleshooting page

@@ -51,6 +51,13 @@ MD
     cp "$root/tests/install.sh" "$dir/tests/install.sh"
   fi
 
+  if [[ -f "$root/mkdocs.yml" ]]; then
+    cp "$root/mkdocs.yml" "$dir/mkdocs.yml"
+  fi
+  if [[ -d "$root/docs" ]]; then
+    cp -r "$root/docs" "$dir/docs"
+  fi
+
   for name in rust ci real-tools release-signing release-binaries release-crates-io; do
     src="$root/ci-proposals/$name.yml"
     [[ -f "$src" ]] || src="$root/.github/workflows/$name.yml"
