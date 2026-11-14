@@ -58,7 +58,7 @@ MD
     cp -r "$root/docs" "$dir/docs"
   fi
 
-  for name in rust ci coverage real-tools release-signing release-binaries release-crates-io; do
+  for name in rust ci coverage real-tools linux-containers-real-tools release-signing release-binaries release-crates-io; do
     src="$root/ci-proposals/$name.yml"
     [[ -f "$src" ]] || src="$root/.github/workflows/$name.yml"
     if [[ "$layout" == proposals ]]; then

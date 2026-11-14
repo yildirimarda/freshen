@@ -153,6 +153,33 @@ else
   bad "no real-tools workflow in ci-proposals/ or .github/workflows/"
 fi
 
+# 8b. The container real-tools workflow runs freshen's read-only modes against
+#     the real package manager (apt on Ubuntu, dnf on Fedora, pacman on Arch)
+#     inside throwaway container images and validates every JSON report with
+#     tests/real-tools-check.py, failing on parser drift.
+if real_tools_file="$(workflow_path linux-containers-real-tools)"; then
+  ok "linux-containers-real-tools workflow found at $real_tools_file"
+  if grep -qF 'container:' "$real_tools_file"; then
+    ok "$real_tools_file runs in throwaway container images"
+  else
+    bad "$real_tools_file does not run in containers"; fail=1
+  fi
+  for container in ubuntu:24.04 fedora:latest archlinux:latest; do
+    grep -qF "$container" "$real_tools_file" || { echo "  matrix does not include $container"; fail=1; }
+  done
+  grep -qF -- '--check' "$real_tools_file" || { echo "  does not run freshen --check"; fail=1; }
+  grep -qF -- '--dry-run' "$real_tools_file" || { echo "  does not run freshen --dry-run"; fail=1; }
+  grep -qF -- '--json' "$real_tools_file" || { echo "  does not request JSON reports"; fail=1; }
+  grep -qF -- '--only' "$real_tools_file" || { echo "  does not select a package manager step"; fail=1; }
+  for pm in apt dnf pacman; do
+    grep -qF -e "package-manager: $pm" "$real_tools_file" || { echo "  matrix does not exercise the $pm package manager"; fail=1; }
+  done
+  grep -qF 'tests/real-tools-check.py check' "$real_tools_file" || { echo "  does not validate the check report"; fail=1; }
+  grep -qF 'tests/real-tools-check.py dry-run' "$real_tools_file" || { echo "  does not validate the dry-run report"; fail=1; }
+else
+  bad "no linux-containers-real-tools workflow in ci-proposals/ or .github/workflows/"; fail=1
+fi
+
 # 9. CI matrix: lint, unit tests and the stub-based integration tests must run
 #    on macOS, Ubuntu and Windows, so platform-specific process, signal and
 #    lock behaviour is exercised instead of only the Linux code path.
