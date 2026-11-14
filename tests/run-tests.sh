@@ -389,4 +389,20 @@ else
   bad "mkdocs.yml is missing"; fail=1
 fi
 
+# 18. The coverage workflow enforces a minimum line-coverage threshold with
+#     cargo llvm-cov, accepted either as a proposal or after a human applies it.
+if cov_file="$(workflow_path coverage)"; then
+  cov_ok=1
+  grep -q 'cargo llvm-cov' "$cov_file" || { echo "  no cargo llvm-cov step"; cov_ok=0; }
+  grep -q 'lcov' "$cov_file" || { echo "  no LCOV report"; cov_ok=0; }
+  grep -qE 'threshold|90%' "$cov_file" || { echo "  no minimum coverage threshold"; cov_ok=0; }
+  if (( cov_ok )); then
+    ok "$cov_file enforces a minimum line-coverage threshold with cargo llvm-cov"
+  else
+    bad "$cov_file does not enforce a coverage threshold"
+  fi
+else
+  bad "no coverage workflow in ci-proposals/ or .github/workflows/"
+fi
+
 exit "$fail"
