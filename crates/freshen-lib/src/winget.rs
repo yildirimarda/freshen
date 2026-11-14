@@ -371,6 +371,7 @@ mod tests {
     use crate::policy::{ItemFilters, NameFilter};
     use crate::skipped_items;
     use crate::step::{SkipReason, Step, StepError};
+    use proptest::prelude::*;
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
@@ -831,9 +832,31 @@ mod tests {
         let items = parse_winget_upgrade(
             "Found the following packages available for upgrade:\n\
              Name Id Version Source\n\
-             ----------------------\n",
+              ----------------------\n",
         );
         assert!(items.is_empty());
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn parse_winget_packages_never_crashes_on_arbitrary_output(output in any::<String>()) {
+            for package in parse_winget_packages(&output) {
+                assert!(!package.name.is_empty());
+                assert!(!package.id.is_empty());
+                assert!(!package.version.is_empty());
+            }
+        }
+
+        #[test]
+        fn parse_winget_upgrade_never_crashes_on_arbitrary_output(output in any::<String>()) {
+            for item in parse_winget_upgrade(&output) {
+                assert!(!item.name().is_empty());
+                if let Some(latest) = item.latest() {
+                    assert!(!latest.is_empty());
+                    assert!(output.contains(latest));
+                }
+            }
+        }
     }
 
     #[test]
