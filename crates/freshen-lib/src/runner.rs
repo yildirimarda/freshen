@@ -1213,7 +1213,9 @@ impl<'a> Runner<'a> {
             Ok(slots) => slots,
             Err(poisoned) => poisoned.into_inner(),
         };
-        CheckSummary::from_results(results.into_iter().flatten().collect())
+        let summary = CheckSummary::from_results(results.into_iter().flatten().collect());
+        crate::notifications::send_check(&summary);
+        summary
     }
 }
 
