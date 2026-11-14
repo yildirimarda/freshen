@@ -1,0 +1,121 @@
+{
+  "casks": [
+    {
+      "token": "zoom",
+      "artifacts": [
+        {
+          "pkg": [
+            "Zoom.pkg"
+          ]
+        }
+      ],
+      "uninstall": [
+        {
+          "signal": [
+            "KILL",
+            "us.zoom.xos"
+          ]
+        }
+      ]
+    },
+    {
+      "token": "menu-bar",
+      "artifacts": [
+        {
+          "uninstall": [
+            {
+              "quit": "com.example.menubar",
+              "launchctl": "com.example.helper"
+            }
+          ]
+        },
+        {
+          "app": [
+            "Menu Bar.app"
+          ]
+        }
+      ]
+    },
+    {
+      "token": "pkg-tool",
+      "artifacts": [
+        {
+          "uninstall": [
+            {
+              "quit": {
+                "bundle": "com.example.pkgtool"
+              }
+            }
+          ]
+        },
+        {
+          "pkg": [
+            "Tool.pkg"
+          ]
+        }
+      ]
+    },
+    {
+      "token": "multi",
+      "artifacts": [
+        {
+          "uninstall": [
+            {
+              "quit": [
+                "com.example.one",
+                "com.example.two"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "token": "top-level",
+      "uninstall": [
+        {
+          "quit": "com.example.toplevel"
+        }
+      ],
+      "artifacts": [
+        {
+          "pkg": [
+            "Top.pkg"
+          ]
+        }
+      ]
+    },
+    {
+      "token": "agent-only",
+      "artifacts": [
+        {
+          "uninstall": [
+            {
+              "launchctl": "com.example.agent"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "token": "agents",
+      "uninstall": [
+        {
+          "launchctl": "com.example.three"
+        }
+      ],
+      "artifacts": [
+        {
+          "uninstall": [
+            {
+              "launchctl": [
+                "com.example.one",
+                "com.example.two"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
