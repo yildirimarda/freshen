@@ -247,4 +247,27 @@ else
   bad "no release-crates-io workflow in ci-proposals/ or .github/workflows/"
 fi
 
+# 14. The AUR PKGBUILD exists, passes a bash syntax check, and declares the
+#     fields makepkg needs plus build() and package() functions.
+if [[ -f aur/freshen/PKGBUILD ]]; then
+  if bash -n aur/freshen/PKGBUILD; then
+    ok "aur/freshen/PKGBUILD (valid bash syntax)"
+  else
+    bad "aur/freshen/PKGBUILD is not valid bash"; fail=1
+  fi
+  pkgbuild_ok=1
+  for field in pkgname= pkgver= pkgdesc= arch= license= source=; do
+    grep -q "^${field}" aur/freshen/PKGBUILD || { pkgbuild_ok=0; echo "  missing $field"; }
+  done
+  grep -q '^build()' aur/freshen/PKGBUILD || { pkgbuild_ok=0; echo "  missing build()"; }
+  grep -q '^package()' aur/freshen/PKGBUILD || { pkgbuild_ok=0; echo "  missing package()"; }
+  if (( pkgbuild_ok )); then
+    ok "aur/freshen/PKGBUILD (pkgname, pkgver, pkgdesc, arch, license, source, build(), package())"
+  else
+    bad "aur/freshen/PKGBUILD is missing required fields"; fail=1
+  fi
+else
+  bad "aur/freshen/PKGBUILD is missing"; fail=1
+fi
+
 exit "$fail"

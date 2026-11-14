@@ -407,7 +407,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add a winget manifest and the pull request to `microsoft/winget-pkgs`
 - [x] Add a `.deb` package, proposed under `ci-proposals/`
 - [x] Add an `.rpm` package, proposed under `ci-proposals/`
-- [ ] Add an AUR PKGBUILD
+- [x] Add an AUR PKGBUILD
 - [ ] Add a Nix flake
 - [ ] One-line install script with checksum verification
 - [ ] Docs site (mkdocs) with quick start and the config reference
