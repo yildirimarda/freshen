@@ -194,7 +194,7 @@ impl Step for CustomStep {
                 store,
                 &key,
                 &command,
-                options.assume_yes(),
+                options.assume_yes() || options.non_interactive(),
                 options.trust_config(),
             ) {
                 Ok(true) => {}

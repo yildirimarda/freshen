@@ -218,6 +218,7 @@ pub struct RunOptions {
     output_level: OutputLevel,
     assume_yes: bool,
     unattended: bool,
+    non_interactive: bool,
     force_kill: bool,
     cleanup: bool,
     install_macos_updates: bool,
@@ -303,6 +304,19 @@ impl RunOptions {
     #[must_use]
     pub fn with_unattended(mut self, unattended: bool) -> Self {
         self.unattended = unattended;
+        self
+    }
+
+    /// Sets `--non-interactive`: never prompt and pick the safe default for
+    /// every decision, as when the run is piped or scheduled without a
+    /// terminal.
+    ///
+    /// Like `--unattended`, this suppresses every interactive prompt. Unlike
+    /// `--yes`, it also refuses to run untrusted hooks and custom steps and
+    /// skips upgrades that would need a password it cannot read.
+    #[must_use]
+    pub fn with_non_interactive(mut self, non_interactive: bool) -> Self {
+        self.non_interactive = non_interactive;
         self
     }
 
@@ -647,6 +661,15 @@ impl RunOptions {
     #[must_use]
     pub fn unattended(&self) -> bool {
         self.unattended
+    }
+
+    /// Returns `true` when `--non-interactive` is set.
+    ///
+    /// A non-interactive run never prompts and picks the safe default for every
+    /// decision, so it is safe to run when no one can answer a prompt.
+    #[must_use]
+    pub fn non_interactive(&self) -> bool {
+        self.non_interactive
     }
 
     /// Returns `true` when `--force-kill` is set.
@@ -1044,6 +1067,7 @@ mod tests {
         assert!(!options.is_dry_run());
         assert!(!options.assume_yes());
         assert!(!options.unattended());
+        assert!(!options.non_interactive());
         assert!(!options.force_kill());
         assert!(!options.cleanup_enabled());
         assert!(!options.install_macos_updates());
@@ -1105,6 +1129,7 @@ mod tests {
             .with_dry_run(true)
             .with_assume_yes(true)
             .with_unattended(true)
+            .with_non_interactive(true)
             .with_force_kill(true)
             .with_cleanup(true)
             .with_install_macos_updates(true)
@@ -1120,6 +1145,7 @@ mod tests {
         assert!(options.is_dry_run());
         assert!(options.assume_yes());
         assert!(options.unattended());
+        assert!(options.non_interactive());
         assert!(options.force_kill());
         assert!(options.cleanup_enabled());
         assert!(options.install_macos_updates());
@@ -1158,6 +1184,25 @@ mod tests {
             .with_unattended(true);
         assert!(both_on.assume_yes());
         assert!(both_on.unattended());
+    }
+
+    #[test]
+    fn non_interactive_is_a_separate_opt_in_from_assume_yes_and_unattended() {
+        let both_off = RunOptions::new();
+        assert!(!both_off.non_interactive());
+
+        let non_interactive_only = RunOptions::new().with_non_interactive(true);
+        assert!(non_interactive_only.non_interactive());
+        assert!(!non_interactive_only.assume_yes());
+        assert!(!non_interactive_only.unattended());
+
+        let all_on = RunOptions::new()
+            .with_assume_yes(true)
+            .with_unattended(true)
+            .with_non_interactive(true);
+        assert!(all_on.assume_yes());
+        assert!(all_on.unattended());
+        assert!(all_on.non_interactive());
     }
 
     #[test]

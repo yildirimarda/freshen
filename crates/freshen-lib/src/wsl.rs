@@ -119,7 +119,7 @@ impl Step for WslStep {
             for distro in &running {
                 human!("   - {distro}");
             }
-            if !options.assume_yes() {
+            if !options.assume_yes() && !options.non_interactive() {
                 match confirm_proceed()? {
                     true => {}
                     false => {
