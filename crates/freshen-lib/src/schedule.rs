@@ -6,12 +6,13 @@
 //! writes a per-user systemd service and timer unit to
 //! `~/.config/systemd/user/` and enables the timer with `systemctl --user`.
 //! On Windows, [`install`] registers a Task Scheduler task with `schtasks` that
-//! runs `freshen --check` on an hourly interval. [`remove`] unloads/deletes
-//! (macOS), stops/disables and deletes (Linux), or deletes (Windows) the
-//! scheduled unit.
+//! runs `freshen --unattended` on an hourly interval, so a scheduled run
+//! performs upgrades without any interactive prompt. [`remove`]
+//! unloads/deletes (macOS), stops/disables and deletes (Linux), or deletes
+//! (Windows) the scheduled unit.
 //!
-//! The scheduled unit runs `freshen --check` so a scheduled run reports
-//! available updates without changing anything. Scheduling is supported on
+//! The scheduled unit runs `freshen --unattended` so a scheduled run performs
+//! unattended upgrades. Scheduling is supported on
 //! macOS, Linux and Windows: on every other platform [`install`] and
 //! [`remove`] report that it is not supported.
 
@@ -125,7 +126,7 @@ pub(crate) fn plist_path(home: &Path) -> PathBuf {
     launch_agents_dir(home).join(PLIST_FILE_NAME)
 }
 
-/// The XML property list that runs `freshen --check` every `every_hours`
+/// The XML property list that runs `freshen --unattended` every `every_hours`
 /// hours.
 #[cfg(any(test, target_os = "macos"))]
 #[must_use]
@@ -141,7 +142,7 @@ pub(crate) fn plist_xml(binary: &Path, every_hours: u64) -> String {
     <key>ProgramArguments</key>
     <array>
         <string>{}</string>
-        <string>--check</string>
+        <string>--unattended</string>
     </array>
     <key>StartInterval</key>
     <integer>{seconds}</integer>
@@ -175,7 +176,7 @@ pub(crate) fn service_path(home: &Path) -> PathBuf {
     systemd_user_dir(home).join(SERVICE_FILE_NAME)
 }
 
-/// The systemd service unit that runs `freshen --check`.
+/// The systemd service unit that runs `freshen --unattended`.
 #[cfg(any(test, target_os = "linux"))]
 #[must_use]
 pub(crate) fn service_unit(binary: &Path) -> String {
@@ -185,7 +186,7 @@ Description=freshen scheduled update check
 
 [Service]
 Type=oneshot
-ExecStart={} --check
+ExecStart={} --unattended
 "#,
         binary.display()
     )
@@ -376,14 +377,14 @@ fn remove_linux() -> Result<(), ScheduleError> {
 
 /// Registers the scheduled Task Scheduler task with `schtasks`.
 ///
-/// The task runs `freshen --check` every `every_hours` hours as the current
+/// The task runs `freshen --unattended` every `every_hours` hours as the current
 /// user. `/f` overwrites an existing task so installing twice is idempotent.
 #[cfg(windows)]
 fn install_windows(every_hours: u64) -> Result<(), ScheduleError> {
     let binary = std::env::current_exe().map_err(|source| ScheduleError::TaskCreateFailed {
         source: std::io::Error::other(source),
     })?;
-    let task = format!("{} --check", binary.display());
+    let task = format!("{} --unattended", binary.display());
     crate::process::CommandSpec::new("schtasks")
         .args([
             "/create",
@@ -432,12 +433,12 @@ mod tests {
     }
 
     #[test]
-    fn plist_xml_names_the_agent_and_runs_check_every_interval() {
+    fn plist_xml_names_the_agent_and_runs_unattended_every_interval() {
         let binary = PathBuf::from("/usr/local/bin/freshen");
         let xml = plist_xml(&binary, 6);
         assert!(xml.contains("<string>com.freshen.schedule</string>"));
         assert!(xml.contains("/usr/local/bin/freshen"));
-        assert!(xml.contains("--check"));
+        assert!(xml.contains("--unattended"));
         assert!(xml.contains("<integer>21600</integer>"));
         assert!(xml.contains("<key>RunAtLoad</key>"));
         assert!(xml.contains("<false/>"));
@@ -481,10 +482,10 @@ mod tests {
     }
 
     #[test]
-    fn service_unit_runs_freshen_check() {
+    fn service_unit_runs_freshen_unattended() {
         let binary = PathBuf::from("/usr/bin/freshen");
         let unit = service_unit(&binary);
-        assert!(unit.contains("/usr/bin/freshen --check"));
+        assert!(unit.contains("/usr/bin/freshen --unattended"));
         assert!(unit.contains("Type=oneshot"));
         assert!(unit.contains("Description=freshen scheduled update check"));
     }

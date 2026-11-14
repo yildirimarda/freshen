@@ -216,6 +216,7 @@ pub struct RunOptions {
     doctor: bool,
     output_level: OutputLevel,
     assume_yes: bool,
+    unattended: bool,
     force_kill: bool,
     cleanup: bool,
     install_macos_updates: bool,
@@ -288,6 +289,18 @@ impl RunOptions {
     #[must_use]
     pub fn with_assume_yes(mut self, assume_yes: bool) -> Self {
         self.assume_yes = assume_yes;
+        self
+    }
+
+    /// Sets `--unattended`: run without any interactive prompt, as a scheduled
+    /// (cron / launchd / Task Scheduler) run would.
+    ///
+    /// This is separate from `--yes`: `--yes` is for an interactive run whose
+    /// user simply wants to skip prompts, while `--unattended` marks the run as
+    /// unattended so no prompt is ever shown and no confirmation is awaited.
+    #[must_use]
+    pub fn with_unattended(mut self, unattended: bool) -> Self {
+        self.unattended = unattended;
         self
     }
 
@@ -616,6 +629,15 @@ impl RunOptions {
     #[must_use]
     pub fn assume_yes(&self) -> bool {
         self.assume_yes
+    }
+
+    /// Returns `true` when `--unattended` is set.
+    ///
+    /// An unattended run never shows an interactive prompt and never waits for
+    /// confirmation, so it is safe to run from a scheduler with no terminal.
+    #[must_use]
+    pub fn unattended(&self) -> bool {
+        self.unattended
     }
 
     /// Returns `true` when `--force-kill` is set.
@@ -1006,6 +1028,7 @@ mod tests {
 
         assert!(!options.is_dry_run());
         assert!(!options.assume_yes());
+        assert!(!options.unattended());
         assert!(!options.force_kill());
         assert!(!options.cleanup_enabled());
         assert!(!options.install_macos_updates());
@@ -1066,6 +1089,7 @@ mod tests {
         let options = RunOptions::new()
             .with_dry_run(true)
             .with_assume_yes(true)
+            .with_unattended(true)
             .with_force_kill(true)
             .with_cleanup(true)
             .with_install_macos_updates(true)
@@ -1080,6 +1104,7 @@ mod tests {
 
         assert!(options.is_dry_run());
         assert!(options.assume_yes());
+        assert!(options.unattended());
         assert!(options.force_kill());
         assert!(options.cleanup_enabled());
         assert!(options.install_macos_updates());
@@ -1097,6 +1122,27 @@ mod tests {
             options.global_timeout(),
             Some(std::time::Duration::from_secs(600))
         );
+    }
+
+    #[test]
+    fn unattended_is_a_separate_opt_in_from_assume_yes() {
+        let both_off = RunOptions::new();
+        assert!(!both_off.assume_yes());
+        assert!(!both_off.unattended());
+
+        let yes_only = RunOptions::new().with_assume_yes(true);
+        assert!(yes_only.assume_yes());
+        assert!(!yes_only.unattended());
+
+        let unattended_only = RunOptions::new().with_unattended(true);
+        assert!(!unattended_only.assume_yes());
+        assert!(unattended_only.unattended());
+
+        let both_on = RunOptions::new()
+            .with_assume_yes(true)
+            .with_unattended(true);
+        assert!(both_on.assume_yes());
+        assert!(both_on.unattended());
     }
 
     #[test]
