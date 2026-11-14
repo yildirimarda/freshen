@@ -398,7 +398,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add GitHub Releases with prebuilt macOS binaries (arm64, x86_64) and checksums, using cargo-dist or an equivalent workflow, proposed under `ci-proposals/`
 - [x] Add prebuilt Linux (x86_64, aarch64) and Windows (x86_64) binaries to the release workflow, with checksums for every artifact
 - [x] Add Windows aarch64 and fully static Linux (musl) targets to the release workflow, with checksums for every artifact
-- [ ] Publish to crates.io, proposed as a release workflow change
+- [x] Publish to crates.io, proposed as a release workflow change
 - [ ] Support `cargo binstall` for the published crate
 - [ ] Sign and notarize the macOS binary and sign the Windows binary, proposed as a release workflow change
 - [ ] Publish SBOM / provenance attestations for every release artifact
