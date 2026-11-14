@@ -29,6 +29,91 @@ nav:
   - Home: index.md
   - Quick start: quick-start.md
   - Configuration reference: config.md
+  - Steps:
+      - 'antidote': steps/antidote.md
+      - 'apk': steps/apk.md
+      - 'apt': steps/apt.md
+      - 'asdf': steps/asdf.md
+      - 'aur': steps/aur.md
+      - 'AWS CLI': steps/aws.md
+      - 'az': steps/az.md
+      - 'bootc': steps/bootc.md
+      - 'Homebrew autoremove': steps/brew-autoremove.md
+      - 'Homebrew bundle cleanup': steps/brew-bundle-cleanup.md
+      - 'Homebrew casks': steps/brew-casks.md
+      - 'Homebrew cleanup': steps/brew-cleanup.md
+      - 'Homebrew doctor': steps/brew-doctor.md
+      - 'Homebrew formulae': steps/brew-formulae.md
+      - 'Homebrew app reopen': steps/brew-reopen.md
+      - 'Homebrew services': steps/brew-services.md
+      - 'Homebrew': steps/brew.md
+      - 'bun': steps/bun.md
+      - 'cargo-update': steps/cargo-update.md
+      - 'Chocolatey': steps/chocolatey.md
+      - 'Colima/lima start': steps/colima-start.md
+      - 'Colima/lima stop': steps/colima-stop.md
+      - 'composer': steps/composer.md
+      - 'conda': steps/conda.md
+      - 'Cursor': steps/cursor.md
+      - 'dnf': steps/dnf.md
+      - 'Docker images': steps/docker.md
+      - '.NET global tools': steps/dotnet-tools.md
+      - 'Elixir': steps/elixir.md
+      - 'emerge': steps/emerge.md
+      - 'firmware updates': steps/firmware.md
+      - 'Fisher': steps/fisher.md
+      - 'flatpak': steps/flatpak.md
+      - 'fnm': steps/fnm.md
+      - 'gcloud': steps/gcloud.md
+      - 'gem': steps/gem.md
+      - 'GitHub CLI': steps/gh.md
+      - 'git lfs': steps/git-lfs.md
+      - 'Go': steps/go.md
+      - 'helm releases': steps/helm-releases.md
+      - 'helm': steps/helm.md
+      - 'home-manager': steps/home-manager.md
+      - 'jenv': steps/jenv.md
+      - 'kubectl plugins': steps/kubectl.md
+      - 'macOS system updates': steps/macos-updates.md
+      - 'mamba': steps/mamba.md
+      - 'Mac App Store': steps/mas.md
+      - 'Microsoft Store': steps/microsoft-store.md
+      - 'mise': steps/mise.md
+      - 'nix-collect-garbage': steps/nix-collect-garbage.md
+      - 'nix profile': steps/nix-profile.md
+      - 'nix': steps/nix.md
+      - 'npm': steps/npm.md
+      - 'lazy.nvim': steps/nvim-lazy.md
+      - 'Mason': steps/nvim-mason.md
+      - 'packer': steps/nvim-packer.md
+      - 'Treesitter': steps/nvim-treesitter.md
+      - 'nvm': steps/nvm.md
+      - 'oh-my-zsh': steps/oh-my-zsh.md
+      - 'pacman': steps/pacman.md
+      - 'pip': steps/pip.md
+      - 'pipx': steps/pipx.md
+      - 'pnpm': steps/pnpm.md
+      - 'pre-commit': steps/pre-commit.md
+      - 'pyenv': steps/pyenv.md
+      - 'rbenv': steps/rbenv.md
+      - 'rpm-ostree': steps/rpm-ostree.md
+      - 'rustup': steps/rustup.md
+      - 'scoop': steps/scoop.md
+      - 'SDKMAN': steps/sdkman.md
+      - 'snap': steps/snap.md
+      - 'termux': steps/termux.md
+      - 'tfenv': steps/tfenv.md
+      - 'tmux plugin manager': steps/tpm.md
+      - 'uv': steps/uv.md
+      - 'volta': steps/volta.md
+      - 'VS Code': steps/vscode.md
+      - 'VSCodium': steps/vscodium.md
+      - 'Windows Update': steps/windows-update.md
+      - 'winget': steps/winget.md
+      - 'WSL': steps/wsl.md
+      - 'yarn': steps/yarn.md
+      - 'zinit': steps/zinit.md
+      - 'zypper': steps/zypper.md
   - Architecture decision records:
       - Overview: adr/README.md
       - '0000: Template': adr/0000-template.md
