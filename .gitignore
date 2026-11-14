@@ -12,3 +12,6 @@ fuzz/target/
 __pycache__/
 *.pyc
 site/
+lcov.info
+coverage/
+target/llvm-cov-target/

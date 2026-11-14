@@ -1,0 +1,74 @@
+# Enforce a minimum test coverage threshold in CI with `cargo llvm-cov`.
+#
+# Runs `cargo llvm-cov` (line coverage) against the whole workspace on
+# `ubuntu-latest` and fails the job when coverage falls below the threshold,
+# so a change that introduces a large untested area cannot merge unnoticed.
+# The job is not part of the merge-required set by default; a human applying
+# this proposal can move it into `.github/workflows/` and add it to the PR's
+# required checks if desired.
+#
+# Apply this proposal:
+#   git mv ci-proposals/coverage.yml .github/workflows/coverage.yml
+#
+# It needs no repository secrets beyond the default GITHUB_TOKEN (none used).
+
+name: coverage
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    name: coverage (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins the exact channel (with rustfmt + clippy) and
+      # the release targets, so rustup picks them up from the checkout.
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain
+
+      # cargo-llvm-cov drives llvm's source-based coverage instrumentation and
+      # emits an LCOV report. Pinned to a version so the check is reproducible.
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked --version 0.9.1
+
+      # Build and run every test target with coverage instrumentation, then
+      # write the LCOV report to `lcov.info`. The report is a build artifact:
+      # it is gitignored and never committed.
+      - name: Generate test coverage
+        run: cargo llvm-cov --all-features --lcov --output-path lcov.info
+
+      # Enforce the minimum line-coverage threshold. LCOV emits one `DA:line,count`
+      # record per instrumented line; a line is covered when its count is > 0.
+      # The job exits non-zero when line coverage drops below 90%.
+      - name: Enforce minimum line coverage
+        run: |
+          min=90
+          read found hit < <(
+            awk -F',' '
+              /^DA:/ { found++; if ($2 + 0 > 0) hit++ }
+              END { print found, hit }
+            ' lcov.info
+          )
+          if [[ -z "$found" || "$found" -eq 0 ]]; then
+            echo "::error::no coverage data in lcov.info"
+            exit 1
+          fi
+          pct="$(awk -v found="$found" -v hit="$hit" 'BEGIN{printf "%.1f", 100 * hit / found}')"
+          echo "line coverage: ${pct}% (threshold ${min}%)"
+          # Fail the job when coverage is below the threshold.
+          if awk -v pct="$pct" -v min="$min" 'BEGIN{exit !(pct + 0 < min + 0)}'; then
+            echo "::error::line coverage ${pct}% is below the ${min}% threshold"
+            exit 1
+          fi
