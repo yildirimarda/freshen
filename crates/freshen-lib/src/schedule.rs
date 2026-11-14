@@ -389,12 +389,12 @@ fn install_windows(every_hours: u64) -> Result<(), ScheduleError> {
             "/create",
             "/tn",
             TASK_NAME,
-            "/tr",
-            &task,
             "/sc",
             "hourly",
             "/mo",
             &every_hours.to_string(),
+            "/tr",
+            &task,
             "/f",
         ])
         .run()
