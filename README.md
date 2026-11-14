@@ -108,6 +108,7 @@ freshen --only brew,uv --skip brew-casks   # select steps
 freshen --snapshot-retention 5             # keep only the five newest snapshots
 freshen --step-timeout 600 --timeout 3600  # stop hung steps or a long run
 freshen --skip-metered-check  # run even on a phone hotspot
+freshen --skip-self-update    # do not check whether freshen itself has an update available
 freshen --min-free-disk-gib 5 --battery-threshold 30   # custom preflight thresholds
 freshen --package-manager-wait 0                      # abort instead of waiting for another package manager
 freshen --install-macos-updates                       # install the macOS system updates (macOS only)
@@ -118,6 +119,7 @@ freshen --install-macos-updates                       # install the macOS system
 | `QUIT_TIMEOUT` | `20` | Seconds to wait for an app to quit |
 | `UPDATE_TIMEOUT` | `60` | Seconds to wait for an app that is updating itself to finish its update |
 | `FRESHEN_SKIP_PREFLIGHT` | unset | Set to `1` to disable every preflight and package-manager check |
+| `FRESHEN_SKIP_UPDATE_CHECK` | unset | Set to `1` to skip the self-update check that asks whether a newer version of freshen is available |
 | `FRESHEN_LOCK_DIR` | platform state directory | Override where the single-run lock file lives |
 | `NO_COLOR` | unset | Set to any non-empty value to disable ANSI colour in the spinner and other styled output (see <https://no-color.org/>) |
 
@@ -152,6 +154,29 @@ same proxy and certificate variables. Export them in your shell or service manag
 The commands whose output freshen parses are the one exception: they run with
 `LC_ALL=C` and `LANG=C` so that a translated table cannot break a parser (see
 [Details worth knowing](#details-worth-knowing)).
+
+## Telemetry and network
+
+freshen collects no telemetry and sends no data about you or your machine to
+anyone. The only things that use the network are:
+
+* the tools freshen runs on your behalf — `brew`, `uv`, `mise`, `docker`,
+  `winget` and the rest contact their own package registries, and
+* the optional self-update check: once per run freshen asks `brew outdated
+  --formula freshen` whether a newer version of freshen is available and prints
+  a hint when there is one. The check is best effort and never blocks the run.
+
+Disable the self-update check with `--skip-self-update` or with
+`FRESHEN_SKIP_UPDATE_CHECK=1`:
+
+```bash
+freshen --skip-self-update
+FRESHEN_SKIP_UPDATE_CHECK=1 freshen
+```
+
+The preflight check and every update step honour `HTTP_PROXY`,
+`HTTPS_PROXY`, `NO_PROXY` and custom CA bundles — see
+[Proxies and custom certificates](#proxies-and-custom-certificates).
 
 ## Configuration
 

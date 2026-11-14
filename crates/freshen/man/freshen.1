@@ -178,6 +178,10 @@ Skip the preflight check for a metered connection or hotspot.
 .B --skip-package-manager-check [true|false]
 Skip the check for another package manager process.
 .TP
+.B --skip-self-update [true|false]
+Skip the check whether a newer version of freshen itself is available.
+The check can also be disabled with FRESHEN_SKIP_UPDATE_CHECK=1.
+.TP
 .B --package-manager-wait SECONDS
 Seconds to wait for another package manager to finish before aborting
 (default 30).

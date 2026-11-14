@@ -256,6 +256,7 @@ pub struct RunOptions {
     hooks: HookSection,
     pre_run: Option<Vec<String>>,
     post_run: Option<Vec<String>>,
+    skip_self_update: bool,
 }
 
 impl RunOptions {
@@ -630,10 +631,25 @@ impl RunOptions {
         self
     }
 
+    /// Sets `--skip-self-update`: do not check whether a newer version of
+    /// freshen itself is available.
+    #[must_use]
+    pub fn with_skip_self_update(mut self, skip_self_update: bool) -> Self {
+        self.skip_self_update = skip_self_update;
+        self
+    }
+
     /// Returns `true` when `--dry-run` is set.
     #[must_use]
     pub fn is_dry_run(&self) -> bool {
         self.dry_run
+    }
+
+    /// Returns `true` when `--skip-self-update` is set, in which case freshen
+    /// does not check whether a newer version of itself is available.
+    #[must_use]
+    pub fn skip_self_update(&self) -> bool {
+        self.skip_self_update
     }
 
     /// Returns `true` when `--doctor` is set.

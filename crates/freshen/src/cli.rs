@@ -310,6 +310,15 @@ pub struct Cli {
     )]
     pub skip_package_manager_check: Option<bool>,
 
+    /// Skip the check whether a newer version of freshen itself is available.
+    #[arg(
+        long,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        action = ArgAction::Set
+    )]
+    pub skip_self_update: Option<bool>,
+
     /// Seconds to wait for another package manager to finish before aborting
     /// (default 30).
     #[arg(long, value_name = "SECONDS")]
@@ -462,6 +471,7 @@ impl Cli {
             .with_jobs(self.jobs.or(config.run.jobs).unwrap_or(DEFAULT_JOBS))
             .with_preflight(preflight)
             .with_package_manager(package_manager)
+            .with_skip_self_update(self.skip_self_update.unwrap_or(false))
             .with_user_activity(UserActivityConfig {
                 enabled: config.user_activity.enabled.unwrap_or(true),
                 idle_minutes: config
@@ -578,6 +588,7 @@ mod tests {
         assert_eq!(cli.skip_battery_check, None);
         assert_eq!(cli.skip_metered_check, None);
         assert_eq!(cli.skip_package_manager_check, None);
+        assert_eq!(cli.skip_self_update, None);
         assert!(!options.is_dry_run());
         assert!(!options.assume_yes());
         assert!(!options.unattended());
@@ -619,6 +630,7 @@ mod tests {
             options.package_manager().wait(),
             std::time::Duration::from_secs(30)
         );
+        assert!(!options.skip_self_update());
         assert!(options.chocolatey_except().is_empty());
         assert!(!options.trust_config());
     }
@@ -670,6 +682,7 @@ mod tests {
             "--skip-battery-check",
             "--skip-metered-check",
             "--skip-package-manager-check",
+            "--skip-self-update",
             "--package-manager-wait",
             "5",
             "--min-free-disk-gib",
@@ -733,6 +746,7 @@ mod tests {
             options.package_manager().wait(),
             std::time::Duration::from_secs(5)
         );
+        assert!(options.skip_self_update());
         assert_eq!(options.chocolatey_except(), ["git", "python"]);
         assert!(options.trust_config());
     }
@@ -822,6 +836,17 @@ mod tests {
         assert!(options(&cli, &Config::default())
             .preflight()
             .is_enabled(PreflightCheck::Network));
+    }
+
+    #[test]
+    fn self_update_check_can_be_skipped_and_enabled_again() {
+        let skipped = parse(&["freshen", "--skip-self-update"]);
+        assert_eq!(skipped.skip_self_update, Some(true));
+        assert!(options(&skipped, &Config::default()).skip_self_update());
+
+        let enabled = parse(&["freshen", "--skip-self-update=false"]);
+        assert_eq!(enabled.skip_self_update, Some(false));
+        assert!(!options(&enabled, &Config::default()).skip_self_update());
     }
 
     #[test]
@@ -1052,6 +1077,7 @@ mod tests {
             "--skip-battery-check",
             "--skip-metered-check",
             "--skip-package-manager-check",
+            "--skip-self-update",
             "--package-manager-wait",
             "--min-free-disk-gib",
             "--battery-threshold",

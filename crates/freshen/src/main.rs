@@ -329,9 +329,12 @@ fn main() -> ExitCode {
 
     // Tell the user when freshen itself has an update available. The check is
     // best effort: a missing package manager or a failed query just skips the
-    // hint and never blocks the run.
-    if let Some(hint) = freshen_lib::self_update::update_available_hint() {
-        freshen_lib::output::print_progress(&hint);
+    // hint and never blocks the run. `--skip-self-update` (or
+    // `FRESHEN_SKIP_UPDATE_CHECK=1`) disables it entirely.
+    if !options.skip_self_update() {
+        if let Some(hint) = freshen_lib::self_update::update_available_hint() {
+            freshen_lib::output::print_progress(&hint);
+        }
     }
 
     let summary =
