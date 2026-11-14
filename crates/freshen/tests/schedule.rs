@@ -1,11 +1,11 @@
 //! End-to-end checks for the `schedule install` / `schedule remove`
-//! subcommands on macOS and Linux.
+//! subcommands on macOS, Linux and Windows.
 //!
-//! Scheduling is supported on macOS (launchd agent) and Linux (systemd user
-//! timer): the run cases are gated per platform, and every other platform
-//! checks that `schedule` reports that scheduling is not supported. The run
-//! cases never touch the real system -- they run the binary against stub
-//! executables on `PATH`.
+//! Scheduling is supported on macOS (launchd agent), Linux (systemd user
+//! timer) and Windows (Task Scheduler task): the run cases are gated per
+//! platform, and every other platform checks that `schedule` reports that
+//! scheduling is not supported. The run cases never touch the real system --
+//! they run the binary against stub executables on `PATH`.
 
 #![cfg(feature = "test-harness")]
 
@@ -279,7 +279,99 @@ fn schedule_remove_stops_and_deletes_the_timer() {
     assert!(!timer.is_file(), "timer unit was not removed: {timer:?}");
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(target_os = "windows")]
+const TASK_NAME: &str = "FreshenSchedule";
+
+/// The `schtasks` create call that registers the scheduled task.
+#[cfg(target_os = "windows")]
+fn expect_register_call(calls: &[String], every_hours: u64) {
+    let expected = format!("schtasks /create /tn {TASK_NAME} /sc hourly /mo {every_hours}");
+    assert!(
+        calls.iter().any(|call| call.starts_with(&expected)),
+        "expected a schtasks create call starting with {expected:?}, got {calls:?}"
+    );
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.contains("/tr ") && call.contains(" --check")),
+        "expected a schtasks create call that runs freshen --check, got {calls:?}"
+    );
+    assert!(
+        calls.iter().any(|call| call.contains(" /f")),
+        "expected a schtasks create call that overwrites with /f, got {calls:?}"
+    );
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn schedule_install_registers_the_task() {
+    let tools = StubTools::new(&["schtasks"]);
+
+    let output = tools
+        .command()
+        .args(["schedule", "install"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+
+    let calls = tools.calls();
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.starts_with("schtasks /create")),
+        "expected a schtasks create call, got {calls:?}"
+    );
+    expect_register_call(&calls, 24);
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn schedule_install_runs_every_configured_interval() {
+    let tools = StubTools::new(&["schtasks"]);
+
+    let output = tools
+        .command()
+        .args(["schedule", "install", "--every", "6"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+
+    let calls = tools.calls();
+    expect_register_call(&calls, 6);
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn schedule_remove_deletes_the_task() {
+    let tools = StubTools::new(&["schtasks"]);
+
+    let install_output = tools
+        .command()
+        .args(["schedule", "install"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+    assert!(install_output.status.success());
+
+    let output = tools
+        .command()
+        .args(["schedule", "remove"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+
+    let calls = tools.calls();
+    assert!(
+        calls
+            .iter()
+            .any(|call| *call == format!("schtasks /delete /tn {TASK_NAME} /f")),
+        "expected a schtasks delete call, got {calls:?}"
+    );
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 #[test]
 fn schedule_reports_not_supported_on_other_platforms() {
     let tools = StubTools::new(&[]);

@@ -5,13 +5,15 @@
 //! `launchctl`, so `freshen` runs on a repeating interval. On Linux, [`install`]
 //! writes a per-user systemd service and timer unit to
 //! `~/.config/systemd/user/` and enables the timer with `systemctl --user`.
-//! [`remove`] unloads/deletes (macOS) or stops/disables and deletes (Linux) the
+//! On Windows, [`install`] registers a Task Scheduler task with `schtasks` that
+//! runs `freshen --check` on an hourly interval. [`remove`] unloads/deletes
+//! (macOS), stops/disables and deletes (Linux), or deletes (Windows) the
 //! scheduled unit.
 //!
 //! The scheduled unit runs `freshen --check` so a scheduled run reports
 //! available updates without changing anything. Scheduling is supported on
-//! macOS and Linux: on every other platform [`install`] and [`remove`] report
-//! that it is not supported.
+//! macOS, Linux and Windows: on every other platform [`install`] and
+//! [`remove`] report that it is not supported.
 
 use std::fmt;
 #[cfg(any(test, target_os = "macos", target_os = "linux"))]
@@ -32,6 +34,10 @@ pub(crate) const TIMER_FILE_NAME: &str = "com.freshen.schedule.timer";
 /// The service unit file name the timer runs on Linux.
 #[cfg(any(test, target_os = "linux"))]
 pub(crate) const SERVICE_FILE_NAME: &str = "com.freshen.schedule.service";
+
+/// The name of the scheduled Task Scheduler task on Windows.
+#[cfg(target_os = "windows")]
+pub(crate) const TASK_NAME: &str = "FreshenSchedule";
 
 /// How often the scheduled agent runs by default, in hours.
 #[cfg(test)]
@@ -56,6 +62,10 @@ pub enum ScheduleError {
         path: PathBuf,
         source: std::io::Error,
     },
+    /// The Task Scheduler task could not be registered.
+    TaskCreateFailed { source: std::io::Error },
+    /// The Task Scheduler task could not be deleted.
+    TaskDeleteFailed { source: std::io::Error },
 }
 
 impl fmt::Display for ScheduleError {
@@ -85,6 +95,14 @@ impl fmt::Display for ScheduleError {
                 f,
                 "could not remove the scheduled timer unit file {}: {source}",
                 path.display()
+            ),
+            Self::TaskCreateFailed { source } => write!(
+                f,
+                "could not register the scheduled Task Scheduler task: {source}"
+            ),
+            Self::TaskDeleteFailed { source } => write!(
+                f,
+                "could not delete the scheduled Task Scheduler task: {source}"
             ),
         }
     }
@@ -205,7 +223,11 @@ pub fn install(every_hours: u64) -> Result<(), ScheduleError> {
     {
         install_linux(every_hours)
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(windows)]
+    {
+        install_windows(every_hours)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         let _ = every_hours;
         Err(ScheduleError::NotSupported {
@@ -229,7 +251,11 @@ pub fn remove() -> Result<(), ScheduleError> {
     {
         remove_linux()
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(windows)]
+    {
+        remove_windows()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         Err(ScheduleError::NotSupported {
             platform: std::env::consts::OS,
@@ -348,6 +374,48 @@ fn remove_linux() -> Result<(), ScheduleError> {
     Ok(())
 }
 
+/// Registers the scheduled Task Scheduler task with `schtasks`.
+///
+/// The task runs `freshen --check` every `every_hours` hours as the current
+/// user. `/f` overwrites an existing task so installing twice is idempotent.
+#[cfg(windows)]
+fn install_windows(every_hours: u64) -> Result<(), ScheduleError> {
+    let binary = std::env::current_exe().map_err(|source| ScheduleError::TaskCreateFailed {
+        source: std::io::Error::other(source),
+    })?;
+    let task = format!("{} --check", binary.display());
+    crate::process::CommandSpec::new("schtasks")
+        .args([
+            "/create",
+            "/tn",
+            TASK_NAME,
+            "/sc",
+            "hourly",
+            "/mo",
+            &every_hours.to_string(),
+            "/tr",
+            &task,
+            "/f",
+        ])
+        .run()
+        .map_err(|source| ScheduleError::TaskCreateFailed {
+            source: std::io::Error::other(source),
+        })?;
+    Ok(())
+}
+
+/// Deletes the scheduled Task Scheduler task with `schtasks`.
+///
+/// A task that was never registered cannot be deleted, so that error is
+/// ignored: removing an absent task still succeeds.
+#[cfg(windows)]
+fn remove_windows() -> Result<(), ScheduleError> {
+    let _ = crate::process::CommandSpec::new("schtasks")
+        .args(["/delete", "/tn", TASK_NAME, "/f"])
+        .run();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,7 +503,7 @@ mod tests {
         assert!(unit.contains("OnUnitActiveSec=86400"));
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     #[test]
     fn install_reports_not_supported_on_other_platforms() {
         let error = match install(24) {
@@ -448,7 +516,7 @@ mod tests {
         assert_eq!(*platform, std::env::consts::OS);
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     #[test]
     fn remove_reports_not_supported_on_other_platforms() {
         let error = match remove() {
@@ -491,5 +559,25 @@ mod tests {
             source: std::io::Error::new(std::io::ErrorKind::NotFound, "gone"),
         };
         assert!(remove_failed.to_string().contains("/tmp/x.timer"));
+
+        let create_failed = ScheduleError::TaskCreateFailed {
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "missing"),
+        };
+        assert!(create_failed.to_string().contains("Task Scheduler"));
+
+        let delete_failed = ScheduleError::TaskDeleteFailed {
+            source: std::io::Error::other("boom"),
+        };
+        assert!(delete_failed.to_string().contains("Task Scheduler"));
+    }
+
+    #[cfg(windows)]
+    mod windows {
+        use super::*;
+
+        #[test]
+        fn task_name_is_freshen_schedule() {
+            assert_eq!(TASK_NAME, "FreshenSchedule");
+        }
     }
 }

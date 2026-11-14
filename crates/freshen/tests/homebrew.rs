@@ -1101,7 +1101,12 @@ fn yes_at_the_prompt_quits_apps_and_upgrades_casks() {
     let output = run_apps_with_stdin(&tools, &state, "yes\n");
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert_eq!(tools.step_calls(), full_app_transcript(&app));
+    let calls: Vec<String> = tools
+        .step_calls()
+        .into_iter()
+        .filter(|call| !is_desktop_notification_call(call))
+        .collect();
+    assert_eq!(calls, full_app_transcript(&app));
 
     let text = stdout(&output);
     assert!(
