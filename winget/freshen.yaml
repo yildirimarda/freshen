@@ -1,0 +1,32 @@
+# Winget manifest for freshen, staged for submission to microsoft/winget-pkgs.
+#
+# The manifest lives here so it can be reviewed with the rest of the release
+# packaging (bucket/freshen.json for Scoop, Formula/freshen.rb for Homebrew).
+# Once the v0.1.0 GitHub Release exists (see ci-proposals/release-binaries.yml),
+# copy this file into a fork of microsoft/winget-pkgs at
+#   manifests/y/yildirimarda/freshen/0.1.0/freshen.yaml
+# and open a pull request there. Replace the placeholder Sha256 below with the
+# hash of freshen-0.1.0-x86_64-pc-windows-msvc.zip from the release's
+# checksums.txt before submitting; winget-pkgs rejects placeholder hashes.
+#
+# See https://learn.microsoft.com/windows/package-manager/winget/create-paket-manifest
+# and https://github.com/microsoft/winget-pkgs for the manifest schema and the
+# submission process.
+
+PackageIdentifier: yildirimarda.freshen
+PackageVersion: 0.1.0
+PackageName: freshen
+Publisher: yildirimarda
+License: MIT
+LicenseUrl: https://raw.githubusercontent.com/yildirimarda/freshen/main/LICENSE
+ShortDescription: One command to keep a developer machine current
+Homepage: https://github.com/yildirimarda/freshen
+Repository: https://github.com/yildirimarda/freshen
+Installers:
+  - Arch: x64
+    Url: https://github.com/yildirimarda/freshen/releases/download/v0.1.0/freshen-0.1.0-x86_64-pc-windows-msvc.zip
+    Sha256: 0000000000000000000000000000000000000000000000000000000000000000
+    InstallerType: zip
+    Scope: machine
+    InstallerSwitches:
+      Custom: ""
