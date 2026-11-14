@@ -199,3 +199,63 @@ fn update_available_hint_is_skipped_on_unparsable_output() {
         "hint was printed although the version could not be parsed: {text}"
     );
 }
+
+#[cfg(not(windows))]
+#[test]
+fn update_available_hint_is_skipped_with_skip_self_update() {
+    let tools = StubTools::new(&["brew"]);
+    // `brew outdated --formula freshen` reports that freshen is outdated.
+    tools.set_responses(
+        "brew",
+        &[StubOutput::stdout("freshen 0.1.0 < 0.2.0\n").with_status(0)],
+    );
+
+    let output = tools
+        .command()
+        .env_remove("FRESHEN_SKIP_UPDATE_CHECK")
+        .args(["--skip-self-update", "--dry-run", "--only", "brew"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        !text.contains("is installed and"),
+        "hint was printed although --skip-self-update was given: {text}"
+    );
+    let calls = tools.step_calls();
+    assert!(
+        !calls.iter().any(|call| call.contains("brew outdated")),
+        "hint check was run although --skip-self-update was given: {calls:?}"
+    );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn update_available_hint_is_skipped_with_freshen_skip_update_check_env() {
+    let tools = StubTools::new(&["brew"]);
+    // `brew outdated --formula freshen` reports that freshen is outdated.
+    tools.set_responses(
+        "brew",
+        &[StubOutput::stdout("freshen 0.1.0 < 0.2.0\n").with_status(0)],
+    );
+
+    // The harness sets FRESHEN_SKIP_UPDATE_CHECK=1 by default; leave it set.
+    let output = tools
+        .command()
+        .args(["--dry-run", "--only", "brew"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        !text.contains("is installed and"),
+        "hint was printed although FRESHEN_SKIP_UPDATE_CHECK is set: {text}"
+    );
+    let calls = tools.step_calls();
+    assert!(
+        !calls.iter().any(|call| call.contains("brew outdated")),
+        "hint check was run although FRESHEN_SKIP_UPDATE_CHECK is set: {calls:?}"
+    );
+}
