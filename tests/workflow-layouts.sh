@@ -35,6 +35,11 @@ MD
     fi
   done
 
+  if [[ -f "$root/aur/freshen/PKGBUILD" ]]; then
+    mkdir -p "$dir/aur/freshen"
+    cp "$root/aur/freshen/PKGBUILD" "$dir/aur/freshen/PKGBUILD"
+  fi
+
   for name in rust ci real-tools release-signing release-binaries release-crates-io; do
     src="$root/ci-proposals/$name.yml"
     [[ -f "$src" ]] || src="$root/.github/workflows/$name.yml"
