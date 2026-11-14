@@ -54,7 +54,7 @@ impl std::error::Error for CliError {}
     name = "freshen",
     version,
     about,
-    after_help = "Configuration file (optional):\n  ~/.config/freshen/config.toml (macOS, Linux)\n  %APPDATA%\\freshen\\config.toml (Windows)\n\nExit codes:\n  0    success\n  1    a step failed or timed out (also used for startup errors)\n  2    updates are pending (--check)\n  3    a preflight or package-manager check failed\n  130  the run was interrupted"
+    after_help = "Configuration file (optional):\n  ~/.config/freshen/config.toml (macOS, Linux)\n  %APPDATA%\\freshen\\config.toml (Windows)\n\nExit codes:\n  0    success\n  1    a step failed or timed out (also used for startup errors)\n  2    updates are pending (--check)\n  3    a preflight or package-manager check failed\n  130  the run was interrupted\n\nPerformance budget:\n  --check completes within 30 seconds on a typical machine; use\n  --check-timeout <SECONDS> to change or disable (0) the budget."
 )]
 pub struct Cli {
     /// Show what would run without changing anything.
@@ -260,6 +260,12 @@ pub struct Cli {
     #[arg(long, value_name = "SECONDS")]
     pub timeout: Option<u64>,
 
+    /// Stop a `--check` run after this many seconds (the performance budget;
+    /// default 30, so `--check` completes within 30 seconds on a typical
+    /// machine). `0` disables the budget.
+    #[arg(long, value_name = "SECONDS")]
+    pub check_timeout: Option<u64>,
+
     /// How many read-only checks `--check` may query at the same time
     /// (default 4).
     #[arg(long, value_name = "N")]
@@ -463,6 +469,15 @@ impl Cli {
             .with_trust_config(self.trust_config)
             .with_step_timeout(timeout(self.step_timeout.or(config.timeouts.step_seconds)))
             .with_global_timeout(timeout(self.timeout.or(config.timeouts.total_seconds)))
+            .with_check_timeout(match (self.check_timeout, config.timeouts.check_seconds) {
+                // The command line wins over the configuration file; `0`
+                // disables the budget.
+                (Some(0), _) | (_, Some(0)) => None,
+                (Some(seconds), _) | (None, Some(seconds)) => timeout(Some(seconds)),
+                // Documented default: `--check` completes within
+                // `DEFAULT_CHECK_TIMEOUT` on a typical machine.
+                (None, None) => Some(freshen_lib::options::DEFAULT_CHECK_TIMEOUT),
+            })
             .with_snapshot_retention(
                 self.snapshot_retention
                     .or(config.run.snapshot_retention)
@@ -612,6 +627,10 @@ mod tests {
         );
         assert_eq!(options.step_timeout(), None);
         assert_eq!(options.global_timeout(), None);
+        assert_eq!(
+            options.check_timeout(),
+            Some(freshen_lib::options::DEFAULT_CHECK_TIMEOUT)
+        );
         assert_eq!(options.jobs(), freshen_lib::DEFAULT_JOBS);
         assert!(options.selection().is_empty());
         for check in freshen_lib::PreflightCheck::ALL {
@@ -675,6 +694,8 @@ mod tests {
             "120",
             "--timeout",
             "3600",
+            "--check-timeout",
+            "60",
             "--jobs",
             "6",
             "--skip-network-check",
@@ -729,6 +750,10 @@ mod tests {
         assert_eq!(
             options.global_timeout(),
             Some(std::time::Duration::from_secs(3600))
+        );
+        assert_eq!(
+            options.check_timeout(),
+            Some(std::time::Duration::from_secs(60))
         );
         assert_eq!(options.jobs(), 6);
         assert_eq!(options.selection().only(), ["brew"]);
@@ -1072,6 +1097,7 @@ mod tests {
             "--snapshot-retention",
             "--step-timeout",
             "--timeout",
+            "--check-timeout",
             "--skip-network-check",
             "--skip-disk-check",
             "--skip-battery-check",

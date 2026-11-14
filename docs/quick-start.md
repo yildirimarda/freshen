@@ -150,6 +150,7 @@ freshen --json                # print the report as JSON
 freshen --markdown            # print the report as Markdown
 freshen --step-timeout 600    # bound each step (0 disables)
 freshen --timeout 3600        # bound the whole run (0 disables)
+freshen --check-timeout 30    # --check performance budget (0 disables)
 freshen --skip-metered-check  # run even on a phone hotspot
 freshen --min-free-disk-gib 5 # custom free-disk-space threshold
 freshen --snapshot-retention 5  # keep only the five newest snapshots

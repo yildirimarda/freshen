@@ -26,6 +26,10 @@ use crate::user_activity::UserActivityConfig;
 /// Default number of steps `--check` queries at the same time.
 pub const DEFAULT_JOBS: usize = 4;
 
+/// Default performance budget for `--check`: on a typical machine a read-only
+/// check completes within this many seconds. `0` disables the budget.
+pub const DEFAULT_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// The flag that named a step id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SelectionFlag {
@@ -235,6 +239,7 @@ pub struct RunOptions {
     package_manager: PackageManagerConfig,
     step_timeout: Option<Duration>,
     global_timeout: Option<Duration>,
+    check_timeout: Option<Duration>,
     snapshot_retention: Option<usize>,
     jobs: Option<usize>,
     step_overrides: BTreeMap<String, bool>,
@@ -264,7 +269,10 @@ impl RunOptions {
     /// and never force-kill.
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            check_timeout: Some(DEFAULT_CHECK_TIMEOUT),
+            ..Default::default()
+        }
     }
 
     /// Sets `--dry-run`: detect each step but never run or clean it up.
@@ -446,6 +454,15 @@ impl RunOptions {
     #[must_use]
     pub fn with_global_timeout(mut self, timeout: Option<Duration>) -> Self {
         self.global_timeout = timeout;
+        self
+    }
+
+    /// Sets the performance budget for `--check`: the maximum time a read-only
+    /// check run may take. `None` disables the budget; use
+    /// [`DEFAULT_CHECK_TIMEOUT`] for the documented default.
+    #[must_use]
+    pub fn with_check_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.check_timeout = timeout;
         self
     }
 
@@ -825,6 +842,13 @@ impl RunOptions {
         self.global_timeout
     }
 
+    /// Maximum time a `--check` run may take, when the performance budget is
+    /// configured. `None` disables the budget.
+    #[must_use]
+    pub fn check_timeout(&self) -> Option<Duration> {
+        self.check_timeout
+    }
+
     /// Number of pre-upgrade snapshot files to keep.
     #[must_use]
     pub fn snapshot_retention(&self) -> usize {
@@ -1098,6 +1122,7 @@ mod tests {
         assert!(options.selection().is_empty());
         assert_eq!(options.step_timeout(), None);
         assert_eq!(options.global_timeout(), None);
+        assert_eq!(options.check_timeout(), Some(super::DEFAULT_CHECK_TIMEOUT));
         assert_eq!(
             options.snapshot_retention(),
             crate::snapshot::DEFAULT_SNAPSHOT_RETENTION
@@ -1155,6 +1180,7 @@ mod tests {
             .with_install_aws_cli_updates(true)
             .with_step_timeout(Some(std::time::Duration::from_secs(60)))
             .with_global_timeout(Some(std::time::Duration::from_secs(600)))
+            .with_check_timeout(Some(std::time::Duration::from_secs(120)))
             .with_snapshot_retention(4)
             .with_jobs(3);
 
@@ -1178,6 +1204,10 @@ mod tests {
         assert_eq!(
             options.global_timeout(),
             Some(std::time::Duration::from_secs(600))
+        );
+        assert_eq!(
+            options.check_timeout(),
+            Some(std::time::Duration::from_secs(120))
         );
     }
 

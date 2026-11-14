@@ -217,7 +217,8 @@ pub struct PackageManagerSection {
     pub wait_seconds: Option<u64>,
 }
 
-/// The `[timeouts]` section: how long a step and the whole run may take.
+/// The `[timeouts]` section: how long a step, the whole run and a `--check`
+/// run may take. `0` disables a timeout.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TimeoutSection {
@@ -226,6 +227,11 @@ pub struct TimeoutSection {
 
     /// Seconds the whole run may take; `0` disables the timeout (default: `0`).
     pub total_seconds: Option<u64>,
+
+    /// Seconds a `--check` run may take (the performance budget); `0` disables
+    /// it (default: `30`, so `--check` completes within 30 seconds on a
+    /// typical machine).
+    pub check_seconds: Option<u64>,
 }
 
 /// The `[run]` section: how the run itself behaves.
@@ -543,6 +549,11 @@ impl Config {
             self.timeouts.total_seconds,
             default.timeouts.total_seconds,
             "timeouts.total_seconds"
+        );
+        option!(
+            self.timeouts.check_seconds,
+            default.timeouts.check_seconds,
+            "timeouts.check_seconds"
         );
 
         // [run]
@@ -890,6 +901,11 @@ impl Config {
             "TOTAL_SECONDS" => {
                 if let Some(v) = parse_u64(value) {
                     self.timeouts.total_seconds = Some(v);
+                }
+            }
+            "CHECK_SECONDS" => {
+                if let Some(v) = parse_u64(value) {
+                    self.timeouts.check_seconds = Some(v);
                 }
             }
             _ => {}

@@ -1166,9 +1166,11 @@ impl<'a> Runner<'a> {
     }
 
     /// Detects every step and asks each installed one what is outdated,
-    /// without running or cleaning up anything. The configured step and global
-    /// timeouts bound detection and the read-only query too, so a hung query
-    /// cannot hang the report.
+    /// without running or cleaning up anything. The configured step, global and
+    /// `--check` performance-budget timeouts bound detection and the read-only
+    /// query too, so a hung query cannot hang the report. The performance
+    /// budget (`--check-timeout`, default [`DEFAULT_CHECK_TIMEOUT`]) is the
+    /// documented time a `--check` run completes within on a typical machine.
     ///
     /// Up to [`RunOptions::jobs`] queries run at the same time. Results keep
     /// the run order regardless of which query finishes first, so the printed
@@ -1180,10 +1182,21 @@ impl<'a> Runner<'a> {
         }
 
         let run_started = Instant::now();
+        let check_deadline = self
+            .options
+            .check_timeout()
+            .map(|limit| Deadline::after(run_started, limit));
         let global_deadline = self
             .options
             .global_timeout()
             .map(|limit| Deadline::after(run_started, limit));
+        // The check run is bounded by whichever deadline expires first: the
+        // performance budget or the explicit global timeout.
+        let global_deadline = match (check_deadline, global_deadline) {
+            (Some(a), Some(b)) => Some(if a.at() <= b.at() { a } else { b }),
+            (Some(a), None) | (None, Some(a)) => Some(a),
+            (None, None) => None,
+        };
         let step_timeout = self.options.step_timeout();
         let jobs = self.options.jobs().min(self.steps.len());
         let next = AtomicUsize::new(0);
@@ -2532,6 +2545,37 @@ mod tests {
         assert_eq!(summary.timed_out_count(), 2);
         assert_eq!(summary.failed_count(), 0);
         assert_eq!(remaining_calls.check.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_check_that_exceeds_the_check_timeout_budget_is_timed_out_not_failed() {
+        let step = FakeStep::new("brew", "Homebrew").check_sleep(Duration::from_millis(200));
+        let options = RunOptions::new().with_check_timeout(Some(Duration::from_millis(20)));
+
+        let summary = Runner::with_options([&step as &dyn Step], options).check();
+
+        let result = &summary.steps()[0];
+        assert_eq!(result.status(), CheckStatus::TimedOut);
+        assert_eq!(result.error(), None);
+        assert_eq!(summary.timed_out_count(), 1);
+        assert_eq!(summary.failed_count(), 0);
+        assert!(summary.has_failures());
+        assert_exit_code(summary.exit_code(), ExitCode::FAILURE);
+        assert!(summary.to_string().contains("Homebrew: timed out"));
+    }
+
+    #[test]
+    fn a_check_within_the_check_timeout_budget_completes() {
+        let step = FakeStep::new("brew", "Homebrew").check_sleep(Duration::from_millis(5));
+        let options = RunOptions::new().with_check_timeout(Some(Duration::from_millis(50)));
+
+        let summary = Runner::with_options([&step as &dyn Step], options).check();
+
+        assert_eq!(summary.steps()[0].status(), CheckStatus::UpToDate);
+        assert_eq!(summary.timed_out_count(), 0);
+        assert_eq!(summary.failed_count(), 0);
+        assert!(!summary.has_failures());
+        assert_exit_code(summary.exit_code(), ExitCode::SUCCESS);
     }
 
     #[test]
