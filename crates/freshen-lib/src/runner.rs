@@ -1508,7 +1508,13 @@ fn require_hook_trust(
 ) -> Option<StepResult> {
     let store = options.trust_store()?;
     let key = format!("hook:{}:{kind}", step.id());
-    match ensure_trusted(store, &key, command, options.assume_yes(), options.trust_config()) {
+    match ensure_trusted(
+        store,
+        &key,
+        command,
+        options.assume_yes() || options.non_interactive(),
+        options.trust_config(),
+    ) {
         Ok(true) => None,
         Ok(false) => Some(StepResult::failed(
             step,

@@ -318,7 +318,9 @@ impl Step for MacAppStoreStep {
             human!("mas: upgrade (Mac App Store apps)");
             let output = self.client.upgrade();
             if !output.is_success() {
-                if needs_administrator(output.text()) && !terminal_is_interactive() {
+                if needs_administrator(output.text())
+                    && (!terminal_is_interactive() || options.non_interactive())
+                {
                     human!(
                         "mas: upgrade skipped: needs administrator rights, \
                          but this run has no terminal to type the password into. \
@@ -362,7 +364,9 @@ impl Step for MacAppStoreStep {
             human!("mas: upgrade {} (Mac App Store app)", id);
             let output = self.client.upgrade_ids(&[id]);
             if !output.is_success() {
-                if needs_administrator(output.text()) && !terminal_is_interactive() {
+                if needs_administrator(output.text())
+                    && (!terminal_is_interactive() || options.non_interactive())
+                {
                     human!(
                         "mas: upgrade skipped: needs administrator rights, \
                          but this run has no terminal to type the password into. \

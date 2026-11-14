@@ -132,6 +132,15 @@ pub struct Cli {
     #[arg(long)]
     pub unattended: bool,
 
+    /// Never prompt and pick the safe default for every decision, as when the
+    /// run is piped or scheduled without a terminal.
+    ///
+    /// Like `--unattended`, this suppresses every interactive prompt. Unlike
+    /// `--yes`, it also refuses to run untrusted hooks and custom steps and
+    /// skips upgrades that would need a password it cannot read.
+    #[arg(long)]
+    pub non_interactive: bool,
+
     /// Force-kill applications that do not quit gracefully.
     #[arg(long)]
     pub force_kill: bool,
@@ -423,6 +432,7 @@ impl Cli {
             })
             .with_assume_yes(self.yes)
             .with_unattended(self.unattended)
+            .with_non_interactive(self.non_interactive)
             .with_force_kill(self.force_kill)
             .with_cleanup(self.cleanup)
             .with_prune_report(self.prune_report)
@@ -571,6 +581,7 @@ mod tests {
         assert!(!options.is_dry_run());
         assert!(!options.assume_yes());
         assert!(!options.unattended());
+        assert!(!options.non_interactive());
         assert!(!options.force_kill());
         assert!(!options.cleanup_enabled());
         assert_eq!(options.output_level(), OutputLevel::Normal);
@@ -628,6 +639,7 @@ mod tests {
             "casks",
             "--yes",
             "--unattended",
+            "--non-interactive",
             "--verbose",
             "--force-kill",
             "--cleanup",
@@ -681,6 +693,7 @@ mod tests {
         assert!(options.is_dry_run());
         assert!(options.assume_yes());
         assert!(options.unattended());
+        assert!(options.non_interactive());
         assert!(options.force_kill());
         assert_eq!(options.output_level(), OutputLevel::Verbose);
         assert!(options.cleanup_enabled());
@@ -1018,6 +1031,7 @@ mod tests {
             "--profile",
             "--yes",
             "--unattended",
+            "--non-interactive",
             "--force-kill",
             "--cleanup",
             "--install-macos-updates",
