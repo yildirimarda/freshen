@@ -292,10 +292,10 @@ fn exit_code(error: &ProcessError) -> Option<i32> {
 /// A winget package as reported by `winget upgrade`, including its package id
 /// so an individual package can be upgraded with `winget upgrade --id`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct WingetPackage {
-    name: String,
-    id: String,
-    version: String,
+pub struct WingetPackage {
+    pub name: String,
+    pub id: String,
+    pub version: String,
 }
 
 /// Parses the output of `winget upgrade` into packages with name, id and
@@ -305,7 +305,7 @@ struct WingetPackage {
 /// may contain spaces. The last three whitespace-separated tokens are
 /// `Source`, `Version` and `Id`; everything before `Id` is the package name.
 /// The announcement, the column titles and the separator line are skipped.
-fn parse_winget_packages(output: &str) -> Vec<WingetPackage> {
+pub fn parse_winget_packages(output: &str) -> Vec<WingetPackage> {
     output
         .lines()
         .filter_map(|line| {
@@ -354,7 +354,7 @@ fn parse_winget_packages(output: &str) -> Vec<WingetPackage> {
 ///
 /// `winget` does not report the currently installed version, so only the
 /// available version is recorded.
-fn parse_winget_upgrade(output: &str) -> Vec<OutdatedItem> {
+pub fn parse_winget_upgrade(output: &str) -> Vec<OutdatedItem> {
     parse_winget_packages(output)
         .into_iter()
         .map(|package| OutdatedItem::new(package.name).with_latest(package.version))
