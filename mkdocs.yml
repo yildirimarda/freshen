@@ -34,6 +34,7 @@ nav:
       - Linux: platform-notes/linux.md
       - Windows: platform-notes/windows.md
   - FAQ: faq.md
+  - Troubleshooting: troubleshooting.md
   - Steps:
       - 'antidote': steps/antidote.md
       - 'apk': steps/apk.md

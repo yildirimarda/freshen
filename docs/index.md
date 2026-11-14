@@ -13,6 +13,7 @@ freshen
 | [Quick start](quick-start.md) | Install freshen, run it for the first time, and understand the output |
 | [Configuration reference](config.md) | The `config.toml` file: where it lives, every key, validation errors, environment variable overrides |
 | [FAQ](faq.md) | Frequently asked questions about installation, steps, check/update/cleanup, exit codes and configuration |
+| [Troubleshooting](troubleshooting.md) | Common problems, exit codes, step statuses, preflight failures and how to fix them |
 
 ## What freshen does
 
