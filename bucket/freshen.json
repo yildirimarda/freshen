@@ -1,0 +1,13 @@
+{
+  "version": "0.1.0",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/yildirimarda/freshen/releases/download/v0.1.0/freshen-0.1.0-x86_64-pc-windows-msvc.zip",
+      "bin": "freshen.exe",
+      "hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "homepage": "https://github.com/yildirimarda/freshen",
+  "license": "MIT",
+  "description": "One command to keep a developer machine current"
+}
