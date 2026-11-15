@@ -20,6 +20,7 @@ use crate::process::{CommandSpec, ProcessError};
 use crate::registry::Registry;
 use crate::skipped_items;
 use crate::step::{CheckReport, Detection, OutdatedItem, SkipReason, Step, StepError, StepId};
+use serde_json::Value;
 
 /// The winget package manager step.
 pub const WINGET: StepId = "winget";
@@ -111,7 +112,7 @@ impl WingetStep {
     /// reported as plainly outdated.
     fn check_with_options(&self, options: &RunOptions) -> Result<CheckReport, StepError> {
         let output = CommandSpec::new("winget")
-            .args(["upgrade"])
+            .args(["upgrade", "--output", "json"])
             .neutral_locale()
             .run()
             .map_err(|error| StepError::check_from_process(WINGET, &error))?;
@@ -230,7 +231,7 @@ impl WingetStep {
         not_applicable: &mut bool,
     ) {
         let output = match CommandSpec::new("winget")
-            .args(["upgrade"])
+            .args(["upgrade", "--output", "json"])
             .neutral_locale()
             .run()
         {
@@ -298,51 +299,34 @@ pub struct WingetPackage {
     pub version: String,
 }
 
-/// Parses the output of `winget upgrade` into packages with name, id and
-/// version.
+/// Parses the output of `winget upgrade --output json` into packages with
+/// name, id and version.
 ///
-/// Each row of the upgrade table is `Name Id Version Source`, where `Name`
-/// may contain spaces. The last three whitespace-separated tokens are
-/// `Source`, `Version` and `Id`; everything before `Id` is the package name.
-/// The announcement, the column titles and the separator line are skipped.
+/// Winget translates its table with the Windows UI language, and no locale
+/// variable can change that, so the table cannot be parsed reliably. JSON
+/// output keeps the field names in English (`PackageIdentifier`,
+/// `PackageName`, `AvailableVersion`) on every machine, so it can be parsed
+/// no matter which UI language the machine is set to.
+///
+/// Missing or malformed output yields no packages rather than a failure.
 pub fn parse_winget_packages(output: &str) -> Vec<WingetPackage> {
-    output
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            if line.is_empty() {
-                return None;
-            }
-            // Skip the "Found the following packages available for upgrade:"
-            // announcement and the "nothing to upgrade" message.
-            if line.starts_with("Found the following packages")
-                || line.starts_with("No applicable package upgrades found")
-            {
-                return None;
-            }
-            let tokens: Vec<&str> = line.split_whitespace().collect();
-            if tokens.len() < 4 {
-                return None;
-            }
-            // Skip the column titles: `Name Id Version Source`.
-            if tokens == ["Name", "Id", "Version", "Source"] {
-                return None;
-            }
-            // Skip the separator line: runs of dashes separated by spaces.
-            if tokens
-                .iter()
-                .all(|token| token.bytes().all(|byte| byte == b'-'))
-            {
-                return None;
-            }
-            let version = tokens.get(tokens.len() - 2).copied().unwrap_or("");
-            let id = tokens.get(tokens.len() - 3).copied().unwrap_or("");
-            let name = tokens[..tokens.len() - 3].join(" ");
+    let Ok(value) = serde_json::from_str::<Value>(output) else {
+        return Vec::new();
+    };
+    let Some(packages) = value.get("PackageUpdates").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    packages
+        .iter()
+        .filter_map(|package| {
+            let name = package.get("PackageName").and_then(Value::as_str)?;
+            let id = package.get("PackageIdentifier").and_then(Value::as_str)?;
+            let version = package.get("AvailableVersion").and_then(Value::as_str)?;
             if name.is_empty() || id.is_empty() || version.is_empty() {
                 return None;
             }
             Some(WingetPackage {
-                name,
+                name: name.to_owned(),
                 id: id.to_owned(),
                 version: version.to_owned(),
             })
@@ -782,14 +766,17 @@ mod tests {
     }
 
     #[test]
-    fn parses_the_upgrade_table() {
+    fn parses_the_winget_json_output() {
         let items = parse_winget_upgrade(
-            "Found the following packages available for upgrade:\n\
-             Name                Id                          Version        Source\n\
-             --------------------------------------------------------------------------------\n\
-             7zip                7zip.7zip                   24.08        winget\n\
-             Git                 Git.Git                     2.45.2       winget\n\
-             Microsoft Visual C++ Redistributable  Microsoft.VC++.Redist  14.42.34512  winget\n",
+            "{\n\
+              \"Workflows\": [],\n\
+              \"Errors\": [],\n\
+              \"PackageUpdates\": [\n\
+                { \"PackageIdentifier\": \"7zip.7zip\", \"PackageName\": \"7zip\", \"AvailableVersion\": \"24.08\" },\n\
+                { \"PackageIdentifier\": \"Git.Git\", \"PackageName\": \"Git\", \"AvailableVersion\": \"2.45.2\" },\n\
+                { \"PackageIdentifier\": \"Microsoft.VC++.Redist\", \"PackageName\": \"Microsoft Visual C++ Redistributable\", \"AvailableVersion\": \"14.42.34512\" }\n\
+              ]\n\
+            }\n",
         );
 
         assert_eq!(items.len(), 3);
@@ -805,11 +792,12 @@ mod tests {
     #[test]
     fn parses_packages_with_ids_and_versions() {
         let packages = parse_winget_packages(
-            "Found the following packages available for upgrade:\n\
-             Name Id Version Source\n\
-             ----------------------\n\
-             7zip 7zip.7zip 24.08 winget\n\
-             Git Git.Git 2.45.2 winget\n",
+            "{\n\
+              \"PackageUpdates\": [\n\
+                { \"PackageIdentifier\": \"7zip.7zip\", \"PackageName\": \"7zip\", \"AvailableVersion\": \"24.08\" },\n\
+                { \"PackageIdentifier\": \"Git.Git\", \"PackageName\": \"Git\", \"AvailableVersion\": \"2.45.2\" }\n\
+              ]\n\
+            }",
         );
 
         assert_eq!(packages.len(), 2);
@@ -823,17 +811,20 @@ mod tests {
 
     #[test]
     fn reports_nothing_when_no_upgrades_are_available() {
-        let items = parse_winget_upgrade("No applicable package upgrades found.\n");
+        let items =
+            parse_winget_upgrade("{\"Workflows\":[],\"Errors\":[],\"PackageUpdates\":[]}\n");
         assert!(items.is_empty());
     }
 
     #[test]
-    fn skips_the_header_and_separator_lines() {
-        let items = parse_winget_upgrade(
-            "Found the following packages available for upgrade:\n\
-             Name Id Version Source\n\
-              ----------------------\n",
-        );
+    fn ignores_output_without_package_updates() {
+        let items = parse_winget_upgrade("{\"Workflows\":[],\"Errors\":[]}\n");
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn ignores_malformed_json() {
+        let items = parse_winget_upgrade("not winget output at all\n");
         assert!(items.is_empty());
     }
 
@@ -868,13 +859,17 @@ mod tests {
     #[test]
     fn check_excludes_packages_from_report() {
         let dir = stub_winget_with_upgrade_output(
-            "Found the following packages available for upgrade:\n\
-             Name Id Version Source\n\
-             ----------------------\n\
-             7zip 7zip.7zip 24.08 winget\n\
-             Git Git.Git 2.45.2 winget\n\
-             Microsoft Visual C++ Redistributable Microsoft.VC++.Redist 14.42.34512 winget\n",
+            "{\n\
+              \"Workflows\": [],\n\
+              \"Errors\": [],\n\
+              \"PackageUpdates\": [\n\
+                { \"PackageIdentifier\": \"7zip.7zip\", \"PackageName\": \"7zip\", \"AvailableVersion\": \"24.08\" },\n\
+                { \"PackageIdentifier\": \"Git.Git\", \"PackageName\": \"Git\", \"AvailableVersion\": \"2.45.2\" },\n\
+                { \"PackageIdentifier\": \"Microsoft.VC++.Redist\", \"PackageName\": \"Microsoft Visual C++ Redistributable\", \"AvailableVersion\": \"14.42.34512\" }\n\
+              ]\n\
+            }\n",
         );
+
         let _guard = crate::process::PATH_GUARD
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -910,12 +905,17 @@ mod tests {
     #[test]
     fn check_holds_back_packages_outside_the_include_list() {
         let dir = stub_winget_with_upgrade_output(
-            "Found the following packages available for upgrade:\n\
-             Name Id Version Source\n\
-             ----------------------\n\
-             7zip 7zip.7zip 24.08 winget\n\
-             Git Git.Git 2.45.2 winget\n",
+            "{\n\
+              \"Workflows\": [],\n\
+              \"Errors\": [],\n\
+              \"PackageUpdates\": [\n\
+                { \"PackageIdentifier\": \"7zip.7zip\", \"PackageName\": \"7zip\", \"AvailableVersion\": \"24.08\" },\n\
+                { \"PackageIdentifier\": \"Git.Git\", \"PackageName\": \"Git\", \"AvailableVersion\": \"2.45.2\" },\n\
+                { \"PackageIdentifier\": \"Microsoft.VC++.Redist\", \"PackageName\": \"Microsoft Visual C++ Redistributable\", \"AvailableVersion\": \"14.42.34512\" }\n\
+              ]\n\
+            }\n",
         );
+
         let _guard = crate::process::PATH_GUARD
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -944,12 +944,17 @@ mod tests {
     #[test]
     fn exclude_list_wins_over_include_list() {
         let dir = stub_winget_with_upgrade_output(
-            "Found the following packages available for upgrade:\n\
-             Name Id Version Source\n\
-             ----------------------\n\
-             7zip 7zip.7zip 24.08 winget\n\
-             Git Git.Git 2.45.2 winget\n",
+            "{\n\
+              \"Workflows\": [],\n\
+              \"Errors\": [],\n\
+              \"PackageUpdates\": [\n\
+                { \"PackageIdentifier\": \"7zip.7zip\", \"PackageName\": \"7zip\", \"AvailableVersion\": \"24.08\" },\n\
+                { \"PackageIdentifier\": \"Git.Git\", \"PackageName\": \"Git\", \"AvailableVersion\": \"2.45.2\" },\n\
+                { \"PackageIdentifier\": \"Microsoft.VC++.Redist\", \"PackageName\": \"Microsoft Visual C++ Redistributable\", \"AvailableVersion\": \"14.42.34512\" }\n\
+              ]\n\
+            }\n",
         );
+
         let _guard = crate::process::PATH_GUARD
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1093,10 +1098,7 @@ mod tests {
                       if [ \"$3\" = --id ]; then\n\
                         exit 0\n\
                       else\n\
-                        printf 'Name Id Version Source\\n'\n\
-                        printf '------ -- -- ------- ------\\n'\n\
-                        printf '7zip 7zip.7zip 24.08 winget\\n'\n\
-                        printf 'Git Git.Git 2.45.2 winget\\n'\n\
+                        printf '{\"Workflows\":[],\"Errors\":[],\"PackageUpdates\":[{\"PackageIdentifier\":\"7zip.7zip\",\"PackageName\":\"7zip\",\"AvailableVersion\":\"24.08\"},{\"PackageIdentifier\":\"Git.Git\",\"PackageName\":\"Git\",\"AvailableVersion\":\"2.45.2\"}]}\\n'\n\
                         exit 0\n\
                       fi ;;\n                   *) exit 0 ;;\n                 esac\n";
             let stub = dir.join("winget");
@@ -1112,9 +1114,7 @@ mod tests {
                  >>\"%FRESHEN_WINGET_LOG%\" echo winget %*\r\n\
                  if \"%~2\"==\"source\" (exit /b 0) else (\n\
                     if \"%~3\"==\"--id\" (exit /b 0) else (\n\
-                      echo Name Id Version Source\r\n\
-                      echo 7zip 7zip.7zip 24.08 winget\r\n\
-                      echo Git Git.Git 2.45.2 winget\r\n\
+                      echo {\"Workflows\":[],\"Errors\":[],\"PackageUpdates\":[{\"PackageIdentifier\":\"7zip.7zip\",\"PackageName\":\"7zip\",\"AvailableVersion\":\"24.08\"},{\"PackageIdentifier\":\"Git.Git\",\"PackageName\":\"Git\",\"AvailableVersion\":\"2.45.2\"}]}\r\n\
                       exit /b 0\n                   )\n                 )\r\n";
             let stub = dir.join("winget.cmd");
             std::fs::write(&stub, script)
