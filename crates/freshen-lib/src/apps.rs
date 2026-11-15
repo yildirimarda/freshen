@@ -2511,7 +2511,9 @@ mod tests {
 
     #[test]
     fn a_timeout_without_force_kill_leaves_the_app_running() {
-        let system = FakeSystem::new().with_app("/Applications/Firefox.app", "com.firefox", &[10]);
+        let system = FakeSystem::new()
+            .with_app("/Applications/Firefox.app", "com.firefox", &[10])
+            .with_close_stops(false);
         let scan = find_running_apps(
             &system,
             &installed(&["/Applications/Firefox.app"]),
@@ -2652,6 +2654,7 @@ mod tests {
     fn a_failed_apple_script_quit_reports_the_error_message() {
         let system = FakeSystem::new()
             .with_app("/Applications/Firefox.app", "com.firefox", &[10])
+            .with_close_stops(false)
             .fails_with("execution error: Application isn't running. (-600)");
         let scan = find_running_apps(
             &system,
