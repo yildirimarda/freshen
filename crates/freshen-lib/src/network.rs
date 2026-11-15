@@ -38,9 +38,12 @@ pub(crate) struct Endpoint {
 
 /// The well-known hosts tried by the preflight check.
 ///
-/// The IP address avoids a DNS lookup on the direct path; the host name gives
-/// the proxy a name to resolve and gives TLS a stable identity to validate.
-pub(crate) fn default_endpoints() -> [Endpoint; 2] {
+/// Each host is tried over both IPv4 and IPv6 so an IPv6-only or IPv6-filtered
+/// network is not reported as unreachable just because the IPv4 addresses
+/// cannot be reached. The IP address avoids a DNS lookup on the direct path;
+/// the host name gives the proxy a name to resolve and gives TLS a stable
+/// identity to validate.
+pub(crate) fn default_endpoints() -> [Endpoint; 4] {
     [
         Endpoint {
             host: "one.one.one.one",
@@ -48,9 +51,19 @@ pub(crate) fn default_endpoints() -> [Endpoint; 2] {
             address: SocketAddr::from(([1, 1, 1, 1], 443)),
         },
         Endpoint {
+            host: "one.one.one.one",
+            port: 443,
+            address: SocketAddr::from(([0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111], 443)),
+        },
+        Endpoint {
             host: "dns.google",
             port: 443,
             address: SocketAddr::from(([8, 8, 8, 8], 443)),
+        },
+        Endpoint {
+            host: "dns.google",
+            port: 443,
+            address: SocketAddr::from(([0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888], 443)),
         },
     ]
 }
@@ -686,8 +699,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        certificates_from_file, check_with, no_proxy_matches, parse_proxy, root_store, Endpoint,
-        Environment, NetworkCheckError,
+        certificates_from_file, check_with, default_endpoints, no_proxy_matches, parse_proxy,
+        root_store, Endpoint, Environment, NetworkCheckError,
     };
     use base64::Engine as _;
     use rustls::{ServerConfig, ServerConnection, StreamOwned};
@@ -804,7 +817,17 @@ pT8yRnSiD29WLvz412hxX/k=
     }
 
     fn tls_server() -> (SocketAddr, thread::JoinHandle<()>) {
-        let listener = TcpListener::bind("127.0.0.1:0")
+        tls_server_at(
+            "127.0.0.1:0"
+                .parse()
+                .unwrap_or_else(|error| panic!("failed to parse test address: {error}")),
+        )
+    }
+
+    /// A TLS test server listening on `address`, which may be an IPv6 loopback
+    /// address so injected IPv6 endpoints can be exercised.
+    fn tls_server_at(address: SocketAddr) -> (SocketAddr, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind(address)
             .unwrap_or_else(|error| panic!("failed to bind TLS test server: {error}"));
         let address = listener
             .local_addr()
@@ -1267,6 +1290,85 @@ pT8yRnSiD29WLvz412hxX/k=
 
         assert_eq!(error, NetworkCheckError::Unreachable);
         assert_eq!(error.to_string(), "network is unreachable");
+    }
+
+    #[test]
+    fn default_endpoints_cover_ipv4_and_ipv6() {
+        let endpoints = default_endpoints();
+
+        assert!(endpoints.iter().any(|endpoint| endpoint.address.is_ipv4()));
+        assert!(endpoints.iter().any(|endpoint| endpoint.address.is_ipv6()));
+    }
+
+    #[test]
+    fn an_ipv6_endpoint_is_reachable() {
+        let (address, server) = tls_server_at(
+            "[::1]:0"
+                .parse()
+                .unwrap_or_else(|error| panic!("test address should parse: {error}")),
+        );
+        let bundle = ca_bundle();
+        let environment = environment(&[(
+            "SSL_CERT_FILE",
+            bundle
+                .to_str()
+                .unwrap_or_else(|| panic!("test CA path is not UTF-8")),
+        )]);
+
+        assert!(check_with(
+            &environment,
+            &[endpoint("localhost", address)],
+            Duration::from_secs(2)
+        )
+        .is_ok());
+        server
+            .join()
+            .unwrap_or_else(|_| panic!("TLS test server panicked"));
+        let _ = std::fs::remove_file(bundle);
+    }
+
+    #[test]
+    fn an_unreachable_ipv6_endpoint_is_reported() {
+        let endpoint = endpoint(
+            "localhost",
+            "[::1]:1"
+                .parse()
+                .unwrap_or_else(|error| panic!("test address should parse: {error}")),
+        );
+
+        let error = check_failure(&environment(&[]), &[endpoint], Duration::from_millis(500));
+
+        assert_eq!(error, NetworkCheckError::Unreachable);
+        assert_eq!(error.to_string(), "network is unreachable");
+    }
+
+    #[test]
+    fn ipv6_is_probed_when_ipv4_is_unreachable() {
+        let (address, server) = tls_server_at(
+            "[::1]:0"
+                .parse()
+                .unwrap_or_else(|error| panic!("test address should parse: {error}")),
+        );
+        let bundle = ca_bundle();
+        let environment = environment(&[(
+            "SSL_CERT_FILE",
+            bundle
+                .to_str()
+                .unwrap_or_else(|| panic!("test CA path is not UTF-8")),
+        )]);
+        let ipv4_unreachable = endpoint("localhost", SocketAddr::from(([127, 0, 0, 1], 1)));
+        let ipv6_reachable = endpoint("localhost", address);
+
+        assert!(check_with(
+            &environment,
+            &[ipv4_unreachable, ipv6_reachable],
+            Duration::from_secs(2)
+        )
+        .is_ok());
+        server
+            .join()
+            .unwrap_or_else(|_| panic!("TLS test server panicked"));
+        let _ = std::fs::remove_file(bundle);
     }
 
     #[test]
