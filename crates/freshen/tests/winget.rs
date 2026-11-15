@@ -43,7 +43,7 @@ fn run(tools: &StubTools, upgrade_exit: i32) -> Output {
 /// check, the source refresh and the upgrade itself.
 const WINGET_CALLS: &[&str] = &[
     "winget --version",
-    "winget --disable-interactivity upgrade",
+    "winget --disable-interactivity upgrade --output json",
     "winget --disable-interactivity source update",
     "winget --disable-interactivity upgrade --all --silent --accept-package-agreements --accept-source-agreements",
 ];
@@ -112,7 +112,9 @@ fn winget_holds_back_excluded_packages() {
     let tools = StubTools::new(&["winget"]);
 
     let package_list =
-        "Name Id Version Source\n------ -- -- ------- ------\n7zip 7zip.7zip 24.08 winget\nGit Git.Git 2.45.2 winget\n";
+        "{\"Workflows\":[],\"Errors\":[],\"PackageUpdates\":[\
+        {\"PackageIdentifier\":\"7zip.7zip\",\"PackageName\":\"7zip\",\"AvailableVersion\":\"24.08\"},\
+        {\"PackageIdentifier\":\"Git.Git\",\"PackageName\":\"Git\",\"AvailableVersion\":\"2.45.2\"}]}\n";
 
     tools.set_responses(
         "winget",
