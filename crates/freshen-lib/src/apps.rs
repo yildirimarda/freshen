@@ -1960,10 +1960,9 @@ mod tests {
         pids_from_processes, process_list_command, quit_apps, quit_choice, quit_command,
         quit_windows_app, reopen_apps, restore_window_command, running_updater,
         self_updater_from_bundle, terminate_command, window_positions_command,
-        window_sizes_command,
-        window_state_from_script, AppKind, AppSystem, QuitChoice, QuitOutcome, QuitPolicy,
-        RunningApp, Relaunch, Reopen, SelfUpdater, SessionState, UpdateState, WindowState,
-        SESSION_STATE_TIMEOUT,
+        window_sizes_command, window_state_from_script, AppKind, AppSystem, QuitChoice,
+        QuitOutcome, QuitPolicy, Relaunch, Reopen, RunningApp, SelfUpdater, SessionState,
+        UpdateState, WindowState, SESSION_STATE_TIMEOUT,
     };
     use crate::policy::AppLists;
 
