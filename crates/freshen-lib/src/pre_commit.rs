@@ -106,7 +106,9 @@ mod tests {
     use crate::step::Step;
     use std::env;
     use std::fs;
-    use std::path::{Path, PathBuf};
+    #[cfg(unix)]
+    use std::path::Path;
+    use std::path::PathBuf;
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir =
