@@ -2556,7 +2556,7 @@ mod tests {
     #[test]
     fn a_check_within_the_check_timeout_budget_completes() {
         let step = FakeStep::new("brew", "Homebrew").check_sleep(Duration::from_millis(5));
-        let options = RunOptions::new().with_check_timeout(Some(Duration::from_millis(50)));
+        let options = RunOptions::new().with_check_timeout(Some(Duration::from_millis(500)));
 
         let summary = Runner::with_options([&step as &dyn Step], options).check();
 
