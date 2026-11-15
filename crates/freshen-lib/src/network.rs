@@ -227,6 +227,13 @@ fn first_value(lookup: &impl Fn(&str) -> Option<String>, keys: &[&str]) -> Optio
     })
 }
 
+/// The delimiter that separates the directories listed in `SSL_CERT_DIR`:
+/// `:` on Unix and `;` on Windows, matching OpenSSL and `rustls-native-certs`.
+#[cfg(unix)]
+const SSL_CERT_DIR_DELIMITER: char = ':';
+#[cfg(windows)]
+const SSL_CERT_DIR_DELIMITER: char = ';';
+
 fn ca_bundle_paths(lookup: &impl Fn(&str) -> Option<String>) -> Vec<PathBuf> {
     const KEYS: &[&str] = &[
         "SSL_CERT_FILE",
@@ -246,9 +253,27 @@ fn ca_bundle_paths(lookup: &impl Fn(&str) -> Option<String>) -> Vec<PathBuf> {
         if value.is_empty() {
             continue;
         }
-        let path = PathBuf::from(value);
-        if !paths.contains(&path) {
-            paths.push(path);
+        // `SSL_CERT_DIR` may list several directories separated by the
+        // platform path list delimiter; each directory is collected
+        // separately instead of being treated as a single path. Entries
+        // that do not exist are skipped, matching OpenSSL and
+        // `rustls-native-certs`, so one absent directory does not fail
+        // the whole network check.
+        let parts = if *key == "SSL_CERT_DIR" {
+            value
+                .split(SSL_CERT_DIR_DELIMITER)
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .filter(|part| Path::new(part).exists())
+                .collect::<Vec<_>>()
+        } else {
+            vec![value]
+        };
+        for part in parts {
+            let path = PathBuf::from(part);
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
         }
     }
     paths
@@ -508,8 +533,11 @@ fn root_store(environment: &Environment) -> Result<RootCertStore, String> {
 
 fn add_bundle(roots: &mut RootCertStore, path: &Path) -> Result<(), String> {
     if path.is_dir() {
-        let entries = fs::read_dir(path)
-            .map_err(|error| format!("cannot read CA directory {}: {error}", path.display()))?;
+        let Ok(entries) = fs::read_dir(path) else {
+            // An unreadable directory entry in the list is skipped, matching
+            // OpenSSL and `rustls-native-certs`.
+            return Ok(());
+        };
         let mut added = false;
         for entry in entries.flatten() {
             let file = entry.path();
@@ -523,10 +551,10 @@ fn add_bundle(roots: &mut RootCertStore, path: &Path) -> Result<(), String> {
             }
         }
         if !added {
-            return Err(format!(
-                "no certificates found in CA directory {}",
-                path.display()
-            ));
+            // An empty (or certificate-free) directory is skipped, matching
+            // OpenSSL and `rustls-native-certs`; a missing trust store is
+            // reported by the caller once every source has been tried.
+            return Ok(());
         }
         return Ok(());
     }
@@ -777,7 +805,7 @@ mod tests {
     use super::{
         certificates_from_file, check_with, default_endpoints, no_proxy_matches,
         parse_network_endpoint, parse_proxy, root_store, Endpoint, Environment, NetworkCheckError,
-        NETWORK_ENDPOINT_ENV,
+        NETWORK_ENDPOINT_ENV, SSL_CERT_DIR_DELIMITER,
     };
     use base64::Engine as _;
     use rustls::{ServerConfig, ServerConnection, StreamOwned};
@@ -1362,6 +1390,69 @@ pT8yRnSiD29WLvz412hxX/k=
             "the custom CA certificate should be part of the trust store"
         );
         let _ = std::fs::remove_file(bundle);
+    }
+
+    #[test]
+    fn ssl_cert_dir_points_to_a_directory_of_certificates() {
+        let directory = temp_path("ca-dir", "dir");
+        std::fs::create_dir_all(&directory)
+            .unwrap_or_else(|error| panic!("failed to create test CA directory: {error}"));
+        let cert = directory.join("ca.pem");
+        std::fs::write(&cert, CA_CERTIFICATE)
+            .unwrap_or_else(|error| panic!("failed to write test CA certificate: {error}"));
+
+        let environment = environment(&[(
+            "SSL_CERT_DIR",
+            directory
+                .to_str()
+                .unwrap_or_else(|| panic!("test CA directory path is not UTF-8")),
+        )]);
+
+        let roots = root_store(&environment)
+            .unwrap_or_else(|error| panic!("the trust store should be built: {error}"));
+        assert!(
+            roots.subjects().iter().any(|subject| subject
+                .as_ref()
+                .windows(CA_SUBJECT.len())
+                .any(|part| part == CA_SUBJECT)),
+            "the CA certificate from the directory should be part of the trust store"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn ssl_cert_dir_is_split_on_the_platform_delimiter() {
+        let directory = temp_path("ca-dir", "dir");
+        std::fs::create_dir_all(&directory)
+            .unwrap_or_else(|error| panic!("failed to create test CA directory: {error}"));
+        let cert = directory.join("ca.pem");
+        std::fs::write(&cert, CA_CERTIFICATE)
+            .unwrap_or_else(|error| panic!("failed to write test CA certificate: {error}"));
+
+        // A directory that does not exist, so any certificate must come from
+        // the real directory after the list is split.
+        let other = temp_path("other-dir", "dir");
+        let _ = std::fs::remove_dir_all(&other);
+
+        let list = format!(
+            "{}{}{}",
+            other.display(),
+            SSL_CERT_DIR_DELIMITER,
+            directory.display()
+        );
+        let environment = environment(&[("SSL_CERT_DIR", &list)]);
+
+        let roots = root_store(&environment)
+            .unwrap_or_else(|error| panic!("the trust store should be built: {error}"));
+        assert!(
+            roots.subjects().iter().any(|subject| subject
+                .as_ref()
+                .windows(CA_SUBJECT.len())
+                .any(|part| part == CA_SUBJECT)),
+            "the CA certificate should be loaded from one of the directories in the SSL_CERT_DIR list"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+        let _ = std::fs::remove_dir_all(&other);
     }
 
     #[test]
