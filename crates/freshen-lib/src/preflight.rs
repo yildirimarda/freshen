@@ -597,6 +597,23 @@ fn is_hotspot_ssid(ssid: &str) -> bool {
         .any(|keyword| ssid.contains(keyword))
 }
 
+/// Parses macOS metered-connection state from the output of `route -n get
+/// default` and `networksetup -getairportnetwork <interface>`. A cellular
+/// interface (`pdp_ip*`) is metered; otherwise the current Wi-Fi network name
+/// from `networksetup` is checked against known hotspot SSIDs, which is how a
+/// user marks a connection as metered on macOS.
+#[cfg(any(target_os = "macos", test))]
+fn macos_metered_from_outputs(route_output: &str, wifi_output: &str) -> Option<bool> {
+    let interface = route_output
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("interface:").map(str::trim))?;
+    if interface.starts_with("pdp_ip") {
+        return Some(true);
+    }
+    let ssid = wifi_output.split_once("Current Wi-Fi Network:")?.1.trim();
+    Some(is_hotspot_ssid(ssid))
+}
+
 #[cfg(target_os = "macos")]
 fn macos_metered() -> Option<bool> {
     let mut command = Command::new("route");
@@ -623,8 +640,7 @@ fn macos_metered() -> Option<bool> {
         return None;
     }
     let wifi = String::from_utf8_lossy(&wifi.stdout);
-    let ssid = wifi.split_once("Current Wi-Fi Network:")?.1.trim();
-    Some(is_hotspot_ssid(ssid))
+    macos_metered_from_outputs(&route, &wifi)
 }
 
 #[cfg(any(windows, test))]
@@ -665,9 +681,9 @@ fn windows_metered() -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::{
-        format_gib, is_hotspot_ssid, parse_nmcli_metered, parse_pmset_battery,
-        parse_windows_battery, parse_windows_network_cost, reachable, BatteryStatus,
-        PreflightCheck, PreflightConfig, PreflightProbe, PreflightReport,
+        format_gib, is_hotspot_ssid, macos_metered_from_outputs, parse_nmcli_metered,
+        parse_pmset_battery, parse_windows_battery, parse_windows_network_cost, reachable,
+        BatteryStatus, PreflightCheck, PreflightConfig, PreflightProbe, PreflightReport,
     };
     use std::net::{SocketAddr, TcpListener};
     use std::time::Duration;
@@ -1016,6 +1032,67 @@ mod tests {
         assert!(is_hotspot_ssid("AndroidAP"));
         assert!(is_hotspot_ssid("My Personal Hotspot"));
         assert!(!is_hotspot_ssid("Home Wi-Fi"));
+    }
+
+    #[test]
+    fn macos_metered_detects_cellular_interface() {
+        assert_eq!(
+            macos_metered_from_outputs("interface: pdp_ip0\n", ""),
+            Some(true)
+        );
+        assert_eq!(
+            macos_metered_from_outputs("interface: pdp_ip1\n", ""),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn macos_metered_detects_user_marked_hotspot_network() {
+        assert_eq!(
+            macos_metered_from_outputs(
+                "interface: en0\n",
+                "Current Wi-Fi Network: Arda's iPhone\n"
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            macos_metered_from_outputs("interface: en0\n", "Current Wi-Fi Network: AndroidAP\n"),
+            Some(true)
+        );
+        assert_eq!(
+            macos_metered_from_outputs(
+                "interface: en0\n",
+                "Current Wi-Fi Network: My Personal Hotspot\n"
+            ),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn macos_metered_reports_ordinary_wifi_as_unmetered() {
+        assert_eq!(
+            macos_metered_from_outputs("interface: en0\n", "Current Wi-Fi Network: Home Wi-Fi\n"),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn macos_metered_returns_none_when_not_associated() {
+        assert_eq!(
+            macos_metered_from_outputs(
+                "interface: en0\n",
+                "You are not associated with any network.\n"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn macos_metered_returns_none_when_no_default_interface() {
+        assert_eq!(
+            macos_metered_from_outputs("no interface line\n", "Current Wi-Fi Network: en0\n"),
+            None
+        );
     }
 
     #[test]
