@@ -501,9 +501,6 @@ mod tests {
     #[test]
     fn run_with_options_no_locations_means_no_stopping() {
         let (dir, log) = stub_scoop_always_ok();
-        let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
-        std::env::set_var("FRESHEN_SCOOP_LOG", &log);
-
         let fake = FakeProcessSystem::new()
             .with_process(100, "/Users/Alice/scoop/apps/git/current/bin/git.exe")
             .with_current_pid(999);
@@ -514,13 +511,17 @@ mod tests {
             process_system: Some(Box::new(fake)),
         };
 
-        let result = crate::process::with_path(&dir, || step.run_with_options(&RunOptions::new()));
-
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_SCOOP_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_SCOOP_LOG");
-        }
+        let result = crate::process::with_path(&dir, || {
+            let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
+            std::env::set_var("FRESHEN_SCOOP_LOG", &log);
+            let result = step.run_with_options(&RunOptions::new());
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_SCOOP_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_SCOOP_LOG");
+            }
+            result
+        });
         let _ = std::fs::remove_dir_all(&dir);
 
         assert!(result.is_ok());
@@ -736,16 +737,17 @@ mod tests {
                 .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
         }
 
-        let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
-        std::env::set_var("FRESHEN_SCOOP_LOG", &log);
-
-        let result = crate::process::with_path(&dir, || ScoopStep::new().run());
-
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_SCOOP_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_SCOOP_LOG");
-        }
+        let result = crate::process::with_path(&dir, || {
+            let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
+            std::env::set_var("FRESHEN_SCOOP_LOG", &log);
+            let result = ScoopStep::new().run();
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_SCOOP_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_SCOOP_LOG");
+            }
+            result
+        });
 
         assert!(result.is_ok(), "scoop run should succeed");
 
@@ -808,16 +810,17 @@ mod tests {
                 .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
         }
 
-        let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
-        std::env::set_var("FRESHEN_SCOOP_LOG", &log);
-
-        let result = crate::process::with_path(&dir, || ScoopStep::new().run());
-
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_SCOOP_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_SCOOP_LOG");
-        }
+        let result = crate::process::with_path(&dir, || {
+            let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
+            std::env::set_var("FRESHEN_SCOOP_LOG", &log);
+            let result = ScoopStep::new().run();
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_SCOOP_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_SCOOP_LOG");
+            }
+            result
+        });
 
         let calls = std::fs::read_to_string(&log).unwrap_or_default();
         let _ = std::fs::remove_dir_all(&dir);
@@ -887,19 +890,21 @@ mod tests {
     #[test]
     fn run_with_cleanup_runs_scoop_cleanup_star() {
         let (dir, log) = stub_scoop_logging_calls();
-        let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
-        std::env::set_var("FRESHEN_SCOOP_LOG", &log);
 
         let result = crate::process::with_path(&dir, || {
-            let options = RunOptions::new().with_cleanup(true);
-            ScoopStep::new().run_with_options(&options)
+            let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
+            std::env::set_var("FRESHEN_SCOOP_LOG", &log);
+            let result = {
+                let options = RunOptions::new().with_cleanup(true);
+                ScoopStep::new().run_with_options(&options)
+            };
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_SCOOP_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_SCOOP_LOG");
+            }
+            result
         });
-
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_SCOOP_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_SCOOP_LOG");
-        }
 
         assert!(result.is_ok(), "scoop run with cleanup should succeed");
 
@@ -923,19 +928,21 @@ mod tests {
     #[test]
     fn run_without_cleanup_skips_scoop_cleanup_star() {
         let (dir, log) = stub_scoop_logging_calls();
-        let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
-        std::env::set_var("FRESHEN_SCOOP_LOG", &log);
 
         let result = crate::process::with_path(&dir, || {
-            let options = RunOptions::new();
-            ScoopStep::new().run_with_options(&options)
+            let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
+            std::env::set_var("FRESHEN_SCOOP_LOG", &log);
+            let result = {
+                let options = RunOptions::new();
+                ScoopStep::new().run_with_options(&options)
+            };
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_SCOOP_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_SCOOP_LOG");
+            }
+            result
         });
-
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_SCOOP_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_SCOOP_LOG");
-        }
 
         assert!(result.is_ok(), "scoop run without cleanup should succeed");
 
@@ -954,19 +961,21 @@ mod tests {
     #[test]
     fn run_with_cleanup_runs_scoop_cache_rm_star() {
         let (dir, log) = stub_scoop_logging_calls();
-        let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
-        std::env::set_var("FRESHEN_SCOOP_LOG", &log);
 
         let result = crate::process::with_path(&dir, || {
-            let options = RunOptions::new().with_cleanup(true);
-            ScoopStep::new().run_with_options(&options)
+            let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
+            std::env::set_var("FRESHEN_SCOOP_LOG", &log);
+            let result = {
+                let options = RunOptions::new().with_cleanup(true);
+                ScoopStep::new().run_with_options(&options)
+            };
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_SCOOP_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_SCOOP_LOG");
+            }
+            result
         });
-
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_SCOOP_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_SCOOP_LOG");
-        }
 
         assert!(result.is_ok(), "scoop run with cleanup should succeed");
 
@@ -990,19 +999,21 @@ mod tests {
     #[test]
     fn run_without_cleanup_skips_scoop_cache_rm_star() {
         let (dir, log) = stub_scoop_logging_calls();
-        let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
-        std::env::set_var("FRESHEN_SCOOP_LOG", &log);
 
         let result = crate::process::with_path(&dir, || {
-            let options = RunOptions::new();
-            ScoopStep::new().run_with_options(&options)
+            let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
+            std::env::set_var("FRESHEN_SCOOP_LOG", &log);
+            let result = {
+                let options = RunOptions::new();
+                ScoopStep::new().run_with_options(&options)
+            };
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_SCOOP_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_SCOOP_LOG");
+            }
+            result
         });
-
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_SCOOP_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_SCOOP_LOG");
-        }
 
         assert!(result.is_ok(), "scoop run without cleanup should succeed");
 

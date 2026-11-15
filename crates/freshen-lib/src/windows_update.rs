@@ -620,20 +620,20 @@ mod tests {
             "PSWindowsUpdate",
             r#"[{"Title":"Security Update","KB":"KB5012345","Version":"10.0.19041.1234"}]"#,
         );
-        let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
-        std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
 
         let report = crate::process::with_path(&dir, || {
-            WindowsUpdateStep::new()
+            let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
+            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
+            let report = WindowsUpdateStep::new()
                 .check_with_options(&RunOptions::new())
-                .unwrap_or_else(|error| panic!("check should succeed: {error}"))
+                .unwrap_or_else(|error| panic!("check should succeed: {error}"));
+            if let Some(previous_log) = previous_log {
+                std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
+            } else {
+                std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
+            }
+            report
         });
-
-        if let Some(previous_log) = previous_log {
-            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
-        } else {
-            std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(report.pending(), 1);
@@ -654,10 +654,9 @@ mod tests {
             "PSWindowsUpdate",
             r#"[{"Title":"Security Update","KB":"KB5012345","Version":"10.0.19041.1234"}]"#,
         );
-        let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
-        std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
-
         crate::process::with_path(&dir, || {
+            let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
+            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
             let step = WindowsUpdateStep::new();
             step.check_with_options(&RunOptions::new())
                 .unwrap_or_else(|error| panic!("check should succeed: {error}"));
@@ -665,6 +664,11 @@ mod tests {
                 .unwrap_or_else(|error| panic!("run should succeed: {error}"));
             step.check_with_options(&RunOptions::new())
                 .unwrap_or_else(|error| panic!("after-run check should succeed: {error}"));
+            if let Some(previous_log) = previous_log {
+                std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
+            } else {
+                std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
+            }
         });
 
         let log = std::fs::read_to_string(dir.join("calls.log")).unwrap_or_default();
@@ -676,32 +680,26 @@ mod tests {
             get_windows_update_calls, 1,
             "expected exactly one Get-WindowsUpdate call per run, log:\n{log}"
         );
-
-        if let Some(previous_log) = previous_log {
-            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
-        } else {
-            std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
-        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn detect_returns_installed_when_module_is_available() {
         let dir = stub_powershell("PSWindowsUpdate", "[]");
-        let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
-        std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
 
         let detection = crate::process::with_path(&dir, || {
-            WindowsUpdateStep::new()
+            let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
+            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
+            let detection = WindowsUpdateStep::new()
                 .detect()
-                .unwrap_or_else(|error| panic!("detect should succeed: {error}"))
+                .unwrap_or_else(|error| panic!("detect should succeed: {error}"));
+            if let Some(previous_log) = previous_log {
+                std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
+            } else {
+                std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
+            }
+            detection
         });
-
-        if let Some(previous_log) = previous_log {
-            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
-        } else {
-            std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(detection, Detection::Installed);
@@ -710,20 +708,20 @@ mod tests {
     #[test]
     fn detect_returns_not_installed_when_module_is_missing() {
         let dir = stub_powershell("", "[]");
-        let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
-        std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
 
         let detection = crate::process::with_path(&dir, || {
-            WindowsUpdateStep::new()
+            let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
+            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
+            let detection = WindowsUpdateStep::new()
                 .detect()
-                .unwrap_or_else(|error| panic!("detect should succeed: {error}"))
+                .unwrap_or_else(|error| panic!("detect should succeed: {error}"));
+            if let Some(previous_log) = previous_log {
+                std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
+            } else {
+                std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
+            }
+            detection
         });
-
-        if let Some(previous_log) = previous_log {
-            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
-        } else {
-            std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(detection, Detection::NotInstalled);
@@ -736,16 +734,17 @@ mod tests {
             "PSWindowsUpdate",
             r#"[{"Title":"Security Update","KB":"KB5012345","Version":"10.0.19041.1234"}]"#,
         );
-        let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
-        std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
-
-        let result = crate::process::with_path(&dir, || WindowsUpdateStep::new().run());
-
-        if let Some(previous_log) = previous_log {
-            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
-        } else {
-            std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
-        }
+        let result = crate::process::with_path(&dir, || {
+            let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
+            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
+            let result = WindowsUpdateStep::new().run();
+            if let Some(previous_log) = previous_log {
+                std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
+            } else {
+                std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
+            }
+            result
+        });
         let _ = std::fs::remove_dir_all(&dir);
 
         assert!(
@@ -765,25 +764,25 @@ mod tests {
   {"Title":"Update B","KB":"KB2","Version":"2.0"}
 ]"#,
         );
-        let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
-        std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
-
         let report = crate::process::with_path(&dir, || {
-            let options =
-                RunOptions::new()
+            let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
+            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
+            let report = {
+                let options = RunOptions::new()
                     .with_filters(crate::policy::ItemFilters::new().with_packages(
                         crate::policy::NameFilter::new().with_exclude(["Update B"]),
                     ));
-            WindowsUpdateStep::new()
-                .check_with_options(&options)
-                .unwrap_or_else(|error| panic!("check should succeed: {error}"))
+                WindowsUpdateStep::new()
+                    .check_with_options(&options)
+                    .unwrap_or_else(|error| panic!("check should succeed: {error}"))
+            };
+            if let Some(previous_log) = previous_log {
+                std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
+            } else {
+                std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
+            }
+            report
         });
-
-        if let Some(previous_log) = previous_log {
-            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
-        } else {
-            std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         report
@@ -879,20 +878,20 @@ mod tests {
     #[test]
     fn detect_falls_back_to_usocliter_when_pswindowsupdate_missing() {
         let dir = stub_usoclient("updates found: 2\n");
-        let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
-        std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
 
         let detection = crate::process::with_path(&dir, || {
-            WindowsUpdateStep::new()
+            let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
+            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
+            let detection = WindowsUpdateStep::new()
                 .detect()
-                .unwrap_or_else(|error| panic!("detect should succeed: {error}"))
+                .unwrap_or_else(|error| panic!("detect should succeed: {error}"));
+            if let Some(previous_log) = previous_log {
+                std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
+            } else {
+                std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
+            }
+            detection
         });
-
-        if let Some(previous_log) = previous_log {
-            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
-        } else {
-            std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(detection, Detection::Installed);
@@ -901,20 +900,20 @@ mod tests {
     #[test]
     fn check_reports_updates_via_usocliter_when_pswindowsupdate_missing() {
         let dir = stub_usoclient("updates found: 2\n");
-        let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
-        std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
 
         let report = crate::process::with_path(&dir, || {
-            WindowsUpdateStep::new()
+            let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
+            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
+            let report = WindowsUpdateStep::new()
                 .check_with_options(&RunOptions::new())
-                .unwrap_or_else(|error| panic!("check should succeed: {error}"))
+                .unwrap_or_else(|error| panic!("check should succeed: {error}"));
+            if let Some(previous_log) = previous_log {
+                std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
+            } else {
+                std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
+            }
+            report
         });
-
-        if let Some(previous_log) = previous_log {
-            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
-        } else {
-            std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(report.pending(), 1);
@@ -925,20 +924,20 @@ mod tests {
     #[test]
     fn check_reports_none_via_usocliter_when_no_updates() {
         let dir = stub_usoclient("No updates found.\n");
-        let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
-        std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
 
         let report = crate::process::with_path(&dir, || {
-            WindowsUpdateStep::new()
+            let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
+            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
+            let report = WindowsUpdateStep::new()
                 .check_with_options(&RunOptions::new())
-                .unwrap_or_else(|error| panic!("check should succeed: {error}"))
+                .unwrap_or_else(|error| panic!("check should succeed: {error}"));
+            if let Some(previous_log) = previous_log {
+                std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
+            } else {
+                std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
+            }
+            report
         });
-
-        if let Some(previous_log) = previous_log {
-            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
-        } else {
-            std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(report.pending(), 0);
@@ -950,10 +949,10 @@ mod tests {
     #[test]
     fn usocliter_is_used_once_per_run() {
         let dir = stub_usoclient("updates found: 1\n");
-        let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
-        std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
 
         crate::process::with_path(&dir, || {
+            let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
+            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
             let step = WindowsUpdateStep::new();
             step.check_with_options(&RunOptions::new())
                 .unwrap_or_else(|error| panic!("check should succeed: {error}"));
@@ -961,6 +960,11 @@ mod tests {
                 .unwrap_or_else(|error| panic!("run should succeed: {error}"));
             step.check_with_options(&RunOptions::new())
                 .unwrap_or_else(|error| panic!("after-run check should succeed: {error}"));
+            if let Some(previous_log) = previous_log {
+                std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
+            } else {
+                std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
+            }
         });
 
         let log = std::fs::read_to_string(dir.join("calls.log")).unwrap_or_default();
@@ -972,12 +976,6 @@ mod tests {
             usoclient_calls, 1,
             "expected exactly one usoclient call per run, log:\n{log}"
         );
-
-        if let Some(previous_log) = previous_log {
-            std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", previous_log);
-        } else {
-            std::env::remove_var("FRESHEN_WINDOWS_UPDATE_LOG");
-        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
