@@ -445,24 +445,16 @@ mod tests {
              Microsoft Teams Microsoft.Teams 2.0.0 msstore\n\
              WhatsApp WhatsApp.LLC 2.2345.12.0 msstore\n",
         );
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var("PATH").ok();
-        std::env::set_var("PATH", &dir);
 
-        let options = RunOptions::new().with_filters(
-            ItemFilters::new().with_packages(NameFilter::new().with_exclude(["WhatsApp"])),
-        );
-        let report = MicrosoftStoreStep
-            .check_with_options(&options)
-            .unwrap_or_else(|error| panic!("check should succeed: {error}"));
+        let report = crate::process::with_path(&dir, || {
+            let options = RunOptions::new().with_filters(
+                ItemFilters::new().with_packages(NameFilter::new().with_exclude(["WhatsApp"])),
+            );
+            MicrosoftStoreStep
+                .check_with_options(&options)
+                .unwrap_or_else(|error| panic!("check should succeed: {error}"))
+        });
 
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(report.pending(), 1);
@@ -482,24 +474,17 @@ mod tests {
              Microsoft Teams Microsoft.Teams 2.0.0 msstore\n\
              WhatsApp WhatsApp.LLC 2.2345.12.0 msstore\n",
         );
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var("PATH").ok();
-        std::env::set_var("PATH", &dir);
 
-        let options = RunOptions::new().with_filters(
-            ItemFilters::new().with_packages(NameFilter::new().with_include(["Microsoft Teams"])),
-        );
-        let report = MicrosoftStoreStep
-            .check_with_options(&options)
-            .unwrap_or_else(|error| panic!("check should succeed: {error}"));
+        let report = crate::process::with_path(&dir, || {
+            let options = RunOptions::new().with_filters(
+                ItemFilters::new()
+                    .with_packages(NameFilter::new().with_include(["Microsoft Teams"])),
+            );
+            MicrosoftStoreStep
+                .check_with_options(&options)
+                .unwrap_or_else(|error| panic!("check should succeed: {error}"))
+        });
 
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(report.pending(), 1);
@@ -516,28 +501,20 @@ mod tests {
              Microsoft Teams Microsoft.Teams 2.0.0 msstore\n\
              WhatsApp WhatsApp.LLC 2.2345.12.0 msstore\n",
         );
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var("PATH").ok();
-        std::env::set_var("PATH", &dir);
 
-        let options = RunOptions::new().with_filters(
-            ItemFilters::new().with_packages(
-                NameFilter::new()
-                    .with_include(["Microsoft Teams", "WhatsApp"])
-                    .with_exclude(["WhatsApp"]),
-            ),
-        );
-        let report = MicrosoftStoreStep
-            .check_with_options(&options)
-            .unwrap_or_else(|error| panic!("check should succeed: {error}"));
+        let report = crate::process::with_path(&dir, || {
+            let options = RunOptions::new().with_filters(
+                ItemFilters::new().with_packages(
+                    NameFilter::new()
+                        .with_include(["Microsoft Teams", "WhatsApp"])
+                        .with_exclude(["WhatsApp"]),
+                ),
+            );
+            MicrosoftStoreStep
+                .check_with_options(&options)
+                .unwrap_or_else(|error| panic!("check should succeed: {error}"))
+        });
 
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(report.pending(), 1);
@@ -586,27 +563,21 @@ mod tests {
                 .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
         }
 
-        let previous_path = std::env::var("PATH").ok();
         let previous_log = std::env::var("FRESHEN_WINGET_LOG").ok();
 
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::set_var("PATH", &dir);
-        std::env::set_var("FRESHEN_WINGET_LOG", &log);
-
-        let result = MicrosoftStoreStep.run();
-
-        if let Some(previous) = previous_path {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_WINGET_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_WINGET_LOG");
-        }
+        let result = crate::process::with_path(&dir, || {
+            // `FRESHEN_WINGET_LOG` is process-global, so it is mutated while
+            // holding `PATH_GUARD`, the same way `PATH` is; otherwise a parallel
+            // test would clobber the log variable this test's stub writes to.
+            std::env::set_var("FRESHEN_WINGET_LOG", &log);
+            let result = MicrosoftStoreStep.run();
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_WINGET_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_WINGET_LOG");
+            }
+            result
+        });
 
         assert!(result.is_ok(), "microsoft-store run should succeed");
 
@@ -684,30 +655,24 @@ mod tests {
                 .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
         }
 
-        let previous_path = std::env::var("PATH").ok();
         let previous_log = std::env::var("FRESHEN_WINGET_LOG").ok();
 
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::set_var("PATH", &dir);
-        std::env::set_var("FRESHEN_WINGET_LOG", &log);
-
-        let options = RunOptions::new().with_filters(
-            ItemFilters::new().with_packages(NameFilter::new().with_exclude(["WhatsApp"])),
-        );
-        let result = MicrosoftStoreStep.run_with_options(&options);
-
-        if let Some(previous) = previous_path {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_WINGET_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_WINGET_LOG");
-        }
+        let result = crate::process::with_path(&dir, || {
+            // `FRESHEN_WINGET_LOG` is process-global, so it is mutated while
+            // holding `PATH_GUARD`, the same way `PATH` is; otherwise a parallel
+            // test would clobber the log variable this test's stub writes to.
+            std::env::set_var("FRESHEN_WINGET_LOG", &log);
+            let options = RunOptions::new().with_filters(
+                ItemFilters::new().with_packages(NameFilter::new().with_exclude(["WhatsApp"])),
+            );
+            let result = MicrosoftStoreStep.run_with_options(&options);
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_WINGET_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_WINGET_LOG");
+            }
+            result
+        });
 
         assert!(result.is_ok(), "filtered run should succeed");
 
@@ -782,34 +747,29 @@ mod tests {
                 .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
         }
 
-        let previous_path = std::env::var("PATH").ok();
         let previous_log = std::env::var("FRESHEN_WINGET_LOG").ok();
         let previous_exit_code = std::env::var("FRESHEN_WINGET_EXIT_CODE").ok();
 
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::set_var("PATH", &dir);
-        std::env::set_var("FRESHEN_WINGET_LOG", &log);
-        std::env::set_var("FRESHEN_WINGET_EXIT_CODE", exit_code.to_string());
-
-        let result = MicrosoftStoreStep.run();
-
-        if let Some(previous) = previous_path {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_WINGET_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_WINGET_LOG");
-        }
-        if let Some(previous) = previous_exit_code {
-            std::env::set_var("FRESHEN_WINGET_EXIT_CODE", previous);
-        } else {
-            std::env::remove_var("FRESHEN_WINGET_EXIT_CODE");
-        }
+        let result = crate::process::with_path(&dir, || {
+            // `FRESHEN_WINGET_LOG` and `FRESHEN_WINGET_EXIT_CODE` are
+            // process-global, so they are mutated while holding `PATH_GUARD`,
+            // the same way `PATH` is; otherwise a parallel test would clobber
+            // the log variable this test's stub writes to.
+            std::env::set_var("FRESHEN_WINGET_LOG", &log);
+            std::env::set_var("FRESHEN_WINGET_EXIT_CODE", exit_code.to_string());
+            let result = MicrosoftStoreStep.run();
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_WINGET_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_WINGET_LOG");
+            }
+            if let Some(previous) = previous_exit_code {
+                std::env::set_var("FRESHEN_WINGET_EXIT_CODE", previous);
+            } else {
+                std::env::remove_var("FRESHEN_WINGET_EXIT_CODE");
+            }
+            result
+        });
 
         let calls = std::fs::read_to_string(&log).unwrap_or_default();
         let _ = std::fs::remove_dir_all(&dir);

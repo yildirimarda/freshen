@@ -605,13 +605,7 @@ mod tests {
     #[test]
     fn run_with_options_stops_process_before_upgrading() {
         let (dir, log) = stub_winget_always_ok();
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous_path = std::env::var("PATH").ok();
         let previous_log = std::env::var("FRESHEN_WINGET_LOG").ok();
-        std::env::set_var("PATH", &dir);
-        std::env::set_var("FRESHEN_WINGET_LOG", &log);
 
         let fake = FakeProcessSystem::new()
             .with_process(100, "/Program Files/Git/bin/git.exe")
@@ -626,22 +620,24 @@ mod tests {
             process_system: Some(Box::new(fake)),
         };
 
-        // Use a short stop timeout so the test does not wait 20 seconds when
-        // the fake process does not stop after the graceful quit.
-        std::env::set_var("DESKTOP_STOP_TIMEOUT", "1");
-        let result = step.run_with_options(&RunOptions::new());
-        std::env::remove_var("DESKTOP_STOP_TIMEOUT");
+        let result = crate::process::with_path(&dir, || {
+            // `FRESHEN_WINGET_LOG` is process-global, so it is mutated while
+            // holding `PATH_GUARD`, the same way `PATH` is; otherwise a parallel
+            // test would clobber the log variable this test's stub writes to.
+            std::env::set_var("FRESHEN_WINGET_LOG", &log);
+            // Use a short stop timeout so the test does not wait 20 seconds when
+            // the fake process does not stop after the graceful quit.
+            std::env::set_var("DESKTOP_STOP_TIMEOUT", "1");
+            let result = step.run_with_options(&RunOptions::new());
+            std::env::remove_var("DESKTOP_STOP_TIMEOUT");
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_WINGET_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_WINGET_LOG");
+            }
+            result
+        });
 
-        if let Some(previous) = previous_path {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_WINGET_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_WINGET_LOG");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert!(result.is_ok(), "run should succeed: {result:?}");
@@ -657,13 +653,7 @@ mod tests {
     #[test]
     fn run_with_options_no_locations_means_no_stopping() {
         let (dir, log) = stub_winget_always_ok();
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous_path = std::env::var("PATH").ok();
         let previous_log = std::env::var("FRESHEN_WINGET_LOG").ok();
-        std::env::set_var("PATH", &dir);
-        std::env::set_var("FRESHEN_WINGET_LOG", &log);
 
         let fake = FakeProcessSystem::new()
             .with_process(100, "/Program Files/Git/bin/git.exe")
@@ -675,18 +665,20 @@ mod tests {
             process_system: Some(Box::new(fake)),
         };
 
-        let result = step.run_with_options(&RunOptions::new());
+        let result = crate::process::with_path(&dir, || {
+            // `FRESHEN_WINGET_LOG` is process-global, so it is mutated while
+            // holding `PATH_GUARD`, the same way `PATH` is; otherwise a parallel
+            // test would clobber the log variable this test's stub writes to.
+            std::env::set_var("FRESHEN_WINGET_LOG", &log);
+            let result = step.run_with_options(&RunOptions::new());
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_WINGET_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_WINGET_LOG");
+            }
+            result
+        });
 
-        if let Some(previous) = previous_path {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_WINGET_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_WINGET_LOG");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert!(result.is_ok());
@@ -870,26 +862,21 @@ mod tests {
             }\n",
         );
 
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var("PATH").ok();
         let previous_log = std::env::var("FRESHEN_WINGET_LOG").ok();
-        std::env::set_var("PATH", &dir);
-        std::env::set_var("FRESHEN_WINGET_LOG", dir.join("calls.log"));
 
-        let options = RunOptions::new().with_filters(
-            ItemFilters::new().with_packages(NameFilter::new().with_exclude(["Git"])),
-        );
-        let report = WingetStep::new()
-            .check_with_options(&options)
-            .unwrap_or_else(|error| panic!("check should succeed: {error}"));
+        let report = crate::process::with_path(&dir, || {
+            // `FRESHEN_WINGET_LOG` is process-global, so it is mutated while
+            // holding `PATH_GUARD`, the same way `PATH` is; otherwise a parallel
+            // test would clobber the log variable this test's stub writes to.
+            std::env::set_var("FRESHEN_WINGET_LOG", dir.join("calls.log"));
+            let options = RunOptions::new().with_filters(
+                ItemFilters::new().with_packages(NameFilter::new().with_exclude(["Git"])),
+            );
+            WingetStep::new()
+                .check_with_options(&options)
+                .unwrap_or_else(|error| panic!("check should succeed: {error}"))
+        });
 
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
         if let Some(previous) = previous_log {
             std::env::set_var("FRESHEN_WINGET_LOG", previous);
         } else {
@@ -916,24 +903,15 @@ mod tests {
             }\n",
         );
 
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var("PATH").ok();
-        std::env::set_var("PATH", &dir);
+        let report = crate::process::with_path(&dir, || {
+            let options = RunOptions::new().with_filters(
+                ItemFilters::new().with_packages(NameFilter::new().with_include(["7zip"])),
+            );
+            WingetStep::new()
+                .check_with_options(&options)
+                .unwrap_or_else(|error| panic!("check should succeed: {error}"))
+        });
 
-        let options = RunOptions::new().with_filters(
-            ItemFilters::new().with_packages(NameFilter::new().with_include(["7zip"])),
-        );
-        let report = WingetStep::new()
-            .check_with_options(&options)
-            .unwrap_or_else(|error| panic!("check should succeed: {error}"));
-
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(report.pending(), 1);
@@ -955,28 +933,19 @@ mod tests {
             }\n",
         );
 
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var("PATH").ok();
-        std::env::set_var("PATH", &dir);
+        let report = crate::process::with_path(&dir, || {
+            let options = RunOptions::new().with_filters(
+                ItemFilters::new().with_packages(
+                    NameFilter::new()
+                        .with_include(["7zip", "Git"])
+                        .with_exclude(["Git"]),
+                ),
+            );
+            WingetStep::new()
+                .check_with_options(&options)
+                .unwrap_or_else(|error| panic!("check should succeed: {error}"))
+        });
 
-        let options = RunOptions::new().with_filters(
-            ItemFilters::new().with_packages(
-                NameFilter::new()
-                    .with_include(["7zip", "Git"])
-                    .with_exclude(["Git"]),
-            ),
-        );
-        let report = WingetStep::new()
-            .check_with_options(&options)
-            .unwrap_or_else(|error| panic!("check should succeed: {error}"));
-
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(report.pending(), 1);
@@ -1025,25 +994,16 @@ mod tests {
                 .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
         }
 
-        let previous_path = std::env::var("PATH").ok();
         let previous_log = std::env::var("FRESHEN_WINGET_LOG").ok();
 
-        // Serialize with the other tests that replace the global `PATH` (snap
-        // replaces it entirely) so this test's stub `winget` is not shadowed
-        // while `run()` spawns it twice.
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::set_var("PATH", &dir);
-        std::env::set_var("FRESHEN_WINGET_LOG", &log);
+        let result = crate::process::with_path(&dir, || {
+            // `FRESHEN_WINGET_LOG` is process-global, so it is mutated while
+            // holding `PATH_GUARD`, the same way `PATH` is; otherwise a parallel
+            // test would clobber the log variable this test's stub writes to.
+            std::env::set_var("FRESHEN_WINGET_LOG", &log);
+            WingetStep::new().run()
+        });
 
-        let result = WingetStep::new().run();
-
-        if let Some(previous) = previous_path {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
         if let Some(previous) = previous_log {
             std::env::set_var("FRESHEN_WINGET_LOG", previous);
         } else {
@@ -1121,25 +1081,19 @@ mod tests {
                 .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
         }
 
-        let previous_path = std::env::var("PATH").ok();
         let previous_log = std::env::var("FRESHEN_WINGET_LOG").ok();
 
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::set_var("PATH", &dir);
-        std::env::set_var("FRESHEN_WINGET_LOG", &log);
+        let result = crate::process::with_path(&dir, || {
+            // `FRESHEN_WINGET_LOG` is process-global, so it is mutated while
+            // holding `PATH_GUARD`, the same way `PATH` is; otherwise a parallel
+            // test would clobber the log variable this test's stub writes to.
+            std::env::set_var("FRESHEN_WINGET_LOG", &log);
+            let options = RunOptions::new().with_filters(
+                ItemFilters::new().with_packages(NameFilter::new().with_exclude(["Git"])),
+            );
+            WingetStep::new().run_with_options(&options)
+        });
 
-        let options = RunOptions::new().with_filters(
-            ItemFilters::new().with_packages(NameFilter::new().with_exclude(["Git"])),
-        );
-        let result = WingetStep::new().run_with_options(&options);
-
-        if let Some(previous) = previous_path {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
         if let Some(previous) = previous_log {
             std::env::set_var("FRESHEN_WINGET_LOG", previous);
         } else {
@@ -1222,36 +1176,29 @@ mod tests {
                 .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
         }
 
-        let previous_path = std::env::var("PATH").ok();
         let previous_log = std::env::var("FRESHEN_WINGET_LOG").ok();
         let previous_exit_code = std::env::var("FRESHEN_WINGET_EXIT_CODE").ok();
 
-        // Serialize with the other tests that replace the global `PATH`
-        // while `run()` spawns the stub twice.
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::set_var("PATH", &dir);
-        std::env::set_var("FRESHEN_WINGET_LOG", &log);
-        std::env::set_var("FRESHEN_WINGET_EXIT_CODE", exit_code.to_string());
-
-        let result = WingetStep::new().run();
-
-        if let Some(previous) = previous_path {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_WINGET_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_WINGET_LOG");
-        }
-        if let Some(previous) = previous_exit_code {
-            std::env::set_var("FRESHEN_WINGET_EXIT_CODE", previous);
-        } else {
-            std::env::remove_var("FRESHEN_WINGET_EXIT_CODE");
-        }
+        let result = crate::process::with_path(&dir, || {
+            // `FRESHEN_WINGET_LOG` and `FRESHEN_WINGET_EXIT_CODE` are
+            // process-global, so they are mutated while holding `PATH_GUARD`,
+            // the same way `PATH` is; otherwise a parallel test would clobber
+            // the log variable this test's stub writes to.
+            std::env::set_var("FRESHEN_WINGET_LOG", &log);
+            std::env::set_var("FRESHEN_WINGET_EXIT_CODE", exit_code.to_string());
+            let result = WingetStep::new().run();
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_WINGET_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_WINGET_LOG");
+            }
+            if let Some(previous) = previous_exit_code {
+                std::env::set_var("FRESHEN_WINGET_EXIT_CODE", previous);
+            } else {
+                std::env::remove_var("FRESHEN_WINGET_EXIT_CODE");
+            }
+            result
+        });
 
         let calls = std::fs::read_to_string(&log).unwrap_or_default();
         let _ = std::fs::remove_dir_all(&dir);

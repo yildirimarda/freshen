@@ -96,30 +96,10 @@ fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
 #[cfg(test)]
 mod tests {
     use super::GitLfsStep;
-    use crate::process::PATH_GUARD;
     use crate::step::Step;
     use std::env;
     use std::fs;
     use std::path::{Path, PathBuf};
-
-    /// Runs `f` with `PATH` replaced by `dir`, restoring the previous `PATH`
-    /// afterwards so the test does not depend on what happens to be installed
-    /// on the host machine.
-    fn with_path<F>(dir: &Path, f: F)
-    where
-        F: FnOnce(),
-    {
-        let _guard = PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = env::var_os("PATH");
-        env::set_var("PATH", dir);
-        f();
-        match previous {
-            Some(value) => env::set_var("PATH", value),
-            None => env::remove_var("PATH"),
-        }
-    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = env::temp_dir().join(format!(
@@ -152,7 +132,7 @@ mod tests {
     #[test]
     fn detect_reports_not_installed_when_git_lfs_is_absent() {
         let dir = temp_dir("absent");
-        with_path(&dir, || {
+        crate::process::with_path(&dir, || {
             assert!(!GitLfsStep::detect_git_lfs().is_installed());
         });
         let _ = fs::remove_dir_all(&dir);
@@ -176,7 +156,7 @@ mod tests {
              esac\n\
              exit 0\n",
         );
-        with_path(&dir, || {
+        crate::process::with_path(&dir, || {
             assert!(GitLfsStep::detect_git_lfs().is_installed());
         });
         let _ = fs::remove_dir_all(&dir);
@@ -187,7 +167,7 @@ mod tests {
     fn detect_reports_not_installed_when_git_lfs_version_fails() {
         let dir = temp_dir("fails");
         write_executable(&dir, "git", "#!/bin/sh\nexit 128\n");
-        with_path(&dir, || {
+        crate::process::with_path(&dir, || {
             assert!(!GitLfsStep::detect_git_lfs().is_installed());
         });
         let _ = fs::remove_dir_all(&dir);
