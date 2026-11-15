@@ -685,6 +685,18 @@ pub trait AppSystem: Send + Sync {
     /// Force-kills the given pids.
     fn force_kill(&self, pids: &[u32]);
 
+    /// Asks the process `pid` to close its main window.
+    ///
+    /// On Windows this posts `WM_CLOSE` (`CloseMainWindow`) to the process's
+    /// main window and returns `true` when the request was delivered. On other
+    /// platforms the default implementation returns `false`, so callers fall
+    /// back to another quit mechanism. The call is injected through the trait
+    /// so tests can record which pids were closed instead of invoking the real
+    /// Win32 call with made-up process ids.
+    fn close_main_window(&self, _pid: u32) -> bool {
+        false
+    }
+
     /// Reads how the app looks right now.
     ///
     /// The state says whether the app is hidden and where its window is, so
@@ -1213,7 +1225,7 @@ pub fn reopen_apps<S: AppSystem + ?Sized>(system: &S, apps: &[Reopen]) {
 /// icon.
 #[cfg(windows)]
 fn quit_one<S: AppSystem + ?Sized>(system: &S, app: &RunningApp, policy: &QuitPolicy) -> bool {
-    quit_windows_app(system, app, policy, &WinAppCloser::host())
+    quit_windows_app(system, app, policy)
 }
 
 #[cfg(not(windows))]
@@ -1228,24 +1240,32 @@ fn quit_one<S: AppSystem + ?Sized>(system: &S, app: &RunningApp, policy: &QuitPo
 /// Quits a Windows application gracefully: sends `CloseMainWindow` to each of
 /// its processes and waits for the policy's timeout for them to exit, then
 /// force-kills stragglers when the policy allows.
-#[cfg(windows)]
+///
+/// The close request goes through [`AppSystem::close_main_window`] so tests
+/// can inject a fake instead of calling the real Win32 `CloseMainWindow` with
+/// made-up process ids.
+#[cfg(any(test, windows))]
 fn quit_windows_app<S: AppSystem + ?Sized>(
     system: &S,
     app: &RunningApp,
     policy: &QuitPolicy,
-    closer: &WinAppCloser,
 ) -> bool {
     let pids = app.pids(system);
     let mut stopped = true;
     for pid in &pids {
-        stopped &= closer.close(*pid, policy);
+        stopped &= close_main_window_and_wait(
+            *pid,
+            |p| system.close_main_window(p),
+            |p| app.pids(system).contains(&p),
+            policy,
+        );
     }
     if !stopped && policy.force_kill {
         warn(&format!(
             "{} did not quit, force-closing with taskkill",
             app.name
         ));
-        closer.force_kill(&pids, policy);
+        system.force_kill(&pids);
         return true;
     }
     stopped
@@ -1387,190 +1407,6 @@ where
         running = is_running(pid);
     }
     !is_running(pid)
-}
-
-#[cfg(windows)]
-mod win32 {
-    #![allow(unsafe_code)]
-
-    use std::sync::atomic::{AtomicIsize, Ordering};
-
-    use windows_sys::Win32::Foundation::{CloseHandle, HWND, INVALID_HANDLE_VALUE, STILL_ACTIVE};
-    use windows_sys::Win32::System::Threading::{
-        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-    };
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindow, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, GW_OWNER,
-        WM_CLOSE,
-    };
-
-    /// Context carried by the `EnumWindows` callback to record a matching
-    /// main window handle.
-    struct Match {
-        pid: u32,
-        hwnd: AtomicIsize,
-    }
-
-    /// `EnumWindows` callback: records the first visible, ownerless window
-    /// whose process is `pid` and stops enumerating.
-    extern "system" fn enum_windows_proc(hwnd: HWND, param: isize) -> i32 {
-        let context = unsafe { &*(param as *const Match) };
-        if context.hwnd.load(Ordering::Relaxed) != 0 {
-            return 0;
-        }
-        let mut window_pid = 0;
-        unsafe { GetWindowThreadProcessId(hwnd, &mut window_pid) };
-        if window_pid != context.pid {
-            return 1;
-        }
-        if (unsafe { IsWindowVisible(hwnd) }) == 0 {
-            return 1;
-        }
-        if unsafe { GetWindow(hwnd, GW_OWNER) }.is_null() {
-            context.hwnd.store(hwnd as isize, Ordering::Relaxed);
-            return 0;
-        }
-        1
-    }
-
-    /// Posts `WM_CLOSE` (`CloseMainWindow`) to the main window of `pid`.
-    ///
-    /// Returns `true` when a main window was found and the close message was
-    /// posted.
-    pub(super) fn close_main_window(pid: u32) -> bool {
-        let context = Box::leak(Box::new(Match {
-            pid,
-            hwnd: AtomicIsize::new(0),
-        }));
-        let _ = unsafe { EnumWindows(Some(enum_windows_proc), context as *mut Match as isize) };
-        let hwnd = context.hwnd.load(Ordering::Relaxed);
-        let posted = if hwnd != 0 {
-            (unsafe { PostMessageW(hwnd as HWND, WM_CLOSE, 0, 0) }) != 0
-        } else {
-            false
-        };
-        drop(unsafe { Box::from_raw(context) });
-        posted
-    }
-
-    /// Returns `true` when `pid` is still running.
-    pub(super) fn is_process_running(pid: u32) -> bool {
-        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
-            return false;
-        }
-        let mut exit_code = 0;
-        let running = (unsafe { GetExitCodeProcess(handle, &mut exit_code) }) != 0
-            && exit_code == STILL_ACTIVE as u32;
-        let _ = unsafe { CloseHandle(handle) };
-        running
-    }
-}
-
-/// Builds the `taskkill /F /PID <pid>` command for `pid`.
-///
-/// `taskkill` is Windows' `kill -9`: it terminates a process (and, with `/T`,
-/// its process tree). The command construction is platform-neutral so it is
-/// tested on every operating system; only its execution is Windows-only.
-#[cfg(any(test, windows))]
-fn taskkill_command(pid: u32) -> CommandSpec {
-    CommandSpec::new("taskkill")
-        .arg("/F")
-        .arg("/PID")
-        .arg(pid.to_string())
-}
-
-/// The operating-system operation a forced Windows close needs.
-#[cfg(windows)]
-pub(crate) trait Taskkill: Send + Sync {
-    /// Force-closes `pid` with `taskkill /F /PID <pid>`.
-    ///
-    /// Returns `true` when the termination request was submitted.
-    fn taskkill(&self, pid: u32) -> bool;
-}
-
-#[cfg(windows)]
-struct HostTaskkill;
-
-#[cfg(windows)]
-impl Taskkill for HostTaskkill {
-    fn taskkill(&self, pid: u32) -> bool {
-        taskkill_command(pid).run().is_ok()
-    }
-}
-
-#[cfg(windows)]
-pub(crate) struct WinAppCloser {
-    win32: Box<dyn Win32>,
-    taskkill: Box<dyn Taskkill>,
-}
-
-#[cfg(windows)]
-impl WinAppCloser {
-    /// The closer that talks to the real machine.
-    #[must_use]
-    pub(crate) fn host() -> Self {
-        Self {
-            win32: Box::new(HostWin32),
-            taskkill: Box::new(HostTaskkill),
-        }
-    }
-
-    /// A closer that delegates to `win32` and `taskkill`, for tests.
-    #[must_use]
-    #[cfg(test)]
-    pub(crate) fn with(win32: Box<dyn Win32>, taskkill: Box<dyn Taskkill>) -> Self {
-        Self { win32, taskkill }
-    }
-
-    /// Sends `CloseMainWindow` to `pid` and waits for the process to exit.
-    #[must_use]
-    pub(crate) fn close(&self, pid: u32, policy: &QuitPolicy) -> bool {
-        close_main_window_and_wait(
-            pid,
-            |p| self.win32.close_main_window(p),
-            |p| self.win32.is_process_running(p),
-            policy,
-        )
-    }
-
-    /// Force-closes `pids` with `taskkill /F` and waits for the grace period.
-    ///
-    /// Used when the graceful `CloseMainWindow` did not stop the processes
-    /// before the timeout.
-    pub(crate) fn force_kill(&self, pids: &[u32], policy: &QuitPolicy) {
-        if pids.is_empty() {
-            return;
-        }
-        for pid in pids {
-            let _ = self.taskkill.taskkill(*pid);
-        }
-        std::thread::sleep(policy.force_kill_grace);
-    }
-}
-
-/// The operating-system operations a graceful Windows close needs.
-#[cfg(windows)]
-pub(crate) trait Win32: Send + Sync {
-    /// Posts `CloseMainWindow` to the main window of `pid`.
-    fn close_main_window(&self, pid: u32) -> bool;
-
-    /// Returns `true` when `pid` is still running.
-    fn is_process_running(&self, pid: u32) -> bool;
-}
-
-#[cfg(windows)]
-struct HostWin32;
-
-#[cfg(windows)]
-impl Win32 for HostWin32 {
-    fn close_main_window(&self, pid: u32) -> bool {
-        win32::close_main_window(pid)
-    }
-
-    fn is_process_running(&self, pid: u32) -> bool {
-        win32::is_process_running(pid)
-    }
 }
 
 fn warn(message: &str) {
@@ -2122,10 +1958,11 @@ mod tests {
         is_menu_bar_app_from_info, kill_command, login_item_helpers_in, menu_bar_command,
         open_command, open_path_command, pid_list_command, pids_from_apple_script,
         pids_from_processes, process_list_command, quit_apps, quit_choice, quit_command,
-        reopen_apps, restore_window_command, running_updater, self_updater_from_bundle,
-        taskkill_command, terminate_command, window_positions_command, window_sizes_command,
+        quit_windows_app, reopen_apps, restore_window_command, running_updater,
+        self_updater_from_bundle, terminate_command, window_positions_command,
+        window_sizes_command,
         window_state_from_script, AppKind, AppSystem, QuitChoice, QuitOutcome, QuitPolicy,
-        Relaunch, Reopen, SelfUpdater, SessionState, UpdateState, WindowState,
+        RunningApp, Relaunch, Reopen, SelfUpdater, SessionState, UpdateState, WindowState,
         SESSION_STATE_TIMEOUT,
     };
     use crate::policy::AppLists;
@@ -2143,10 +1980,12 @@ mod tests {
         quit_outcome: QuitOutcome,
         terminate_succeeds: bool,
         terminate_stops_apps: bool,
+        close_stops: bool,
         open_succeeds: bool,
         quit_calls: Mutex<Vec<String>>,
         terminated: Mutex<Vec<Vec<u32>>>,
         killed: Mutex<Vec<Vec<u32>>>,
+        close_calls: Mutex<Vec<u32>>,
         opened: Mutex<Vec<(String, bool)>>,
         opened_paths: Mutex<Vec<PathBuf>>,
         restored: Mutex<Vec<(String, usize, WindowState)>>,
@@ -2168,6 +2007,7 @@ mod tests {
                 open_succeeds: true,
                 terminate_succeeds: true,
                 terminate_stops_apps: true,
+                close_stops: true,
                 ..Self::default()
             }
         }
@@ -2240,6 +2080,15 @@ mod tests {
             self
         }
 
+        /// Whether a close request stops the process.
+        ///
+        /// When `false` the process keeps running after the close request,
+        /// which simulates a graceful close that times out.
+        fn with_close_stops(mut self, stops: bool) -> Self {
+            self.close_stops = stops;
+            self
+        }
+
         /// The app updates itself for the next `checks` checks.
         ///
         /// The counter stands for an update that finishes after a while: every
@@ -2302,6 +2151,18 @@ mod tests {
             lock(&self.killed).push(pids.to_vec());
             lock(&self.running).clear();
             lock(&self.running_bundles).clear();
+        }
+
+        fn close_main_window(&self, pid: u32) -> bool {
+            lock(&self.close_calls).push(pid);
+            if self.close_stops {
+                let mut running = lock(&self.running);
+                running.retain(|_, app_pids| {
+                    app_pids.retain(|p| *p != pid);
+                    !app_pids.is_empty()
+                });
+            }
+            self.close_stops
         }
 
         fn is_menu_bar_app(&self, app: &std::path::Path) -> bool {
@@ -2395,6 +2256,16 @@ mod tests {
 
     fn running(system: &FakeSystem, app: &str) -> bool {
         system.is_running(&PathBuf::from(app))
+    }
+
+    /// The pids that `close_main_window` was called with.
+    fn close_calls(system: &FakeSystem) -> Vec<u32> {
+        lock(&system.close_calls).clone()
+    }
+
+    /// The pids that were force-killed.
+    fn killed(system: &FakeSystem) -> Vec<Vec<u32>> {
+        lock(&system.killed).clone()
     }
 
     fn fast_policy(force_kill: bool) -> QuitPolicy {
@@ -3879,245 +3750,64 @@ mod tests {
     }
 
     #[test]
-    fn taskkill_command_builds_the_force_close_command() {
-        assert_eq!(transcript(&taskkill_command(7)), ["/F", "/PID", "7"]);
+    fn quit_windows_app_closes_each_pid_and_waits_until_stopped() {
+        let system = FakeSystem::new().with_app("C:/Apps/Firefox.exe", "com.firefox", &[7]);
+        let app = RunningApp::new(PathBuf::from("C:/Apps/Firefox.exe"), "com.firefox");
+        let policy = QuitPolicy::new(Duration::from_secs(1), false)
+            .with_poll_interval(Duration::from_millis(5));
+
+        assert!(quit_windows_app(&system, &app, &policy));
+        assert_eq!(close_calls(&system), [7]);
+        assert!(killed(&system).is_empty());
+        assert!(!running(&system, "C:/Apps/Firefox.exe"));
     }
 
-    #[cfg(windows)]
-    mod windows_tests {
-        use super::super::{
-            quit_windows_app, QuitPolicy, RunningApp, Taskkill, Win32, WinAppCloser,
-        };
-        use super::lock;
-        use std::path::PathBuf;
-        use std::sync::{Arc, Mutex};
-        use std::time::Duration;
+    #[test]
+    fn quit_windows_app_does_not_close_a_process_that_is_not_running() {
+        let system = FakeSystem::new().with_app("C:/Apps/Firefox.exe", "com.firefox", &[]);
+        let app = RunningApp::new(PathBuf::from("C:/Apps/Firefox.exe"), "com.firefox");
+        let policy = QuitPolicy::new(Duration::from_secs(1), false);
 
-        /// A fake Win32 layer that records close requests and reports whether
-        /// the process is still running.
-        struct FakeWin32 {
-            close_pids: Arc<Mutex<Vec<u32>>>,
-            running: Arc<Mutex<bool>>,
-            close_stops: bool,
-        }
+        assert!(quit_windows_app(&system, &app, &policy));
+        assert!(close_calls(&system).is_empty());
+    }
 
-        impl Win32 for FakeWin32 {
-            fn close_main_window(&self, pid: u32) -> bool {
-                lock(&*self.close_pids).push(pid);
-                if self.close_stops {
-                    *lock(&*self.running) = false;
-                }
-                true
-            }
+    #[test]
+    fn quit_windows_app_force_closes_when_graceful_close_times_out() {
+        let system = FakeSystem::new()
+            .with_app("C:/Apps/Firefox.exe", "com.firefox", &[7])
+            .with_close_stops(false);
+        let app = RunningApp::new(PathBuf::from("C:/Apps/Firefox.exe"), "com.firefox");
+        let policy = QuitPolicy::new(Duration::from_millis(20), true)
+            .with_poll_interval(Duration::from_millis(5));
 
-            fn is_process_running(&self, _pid: u32) -> bool {
-                *lock(&*self.running)
-            }
-        }
+        assert!(quit_windows_app(&system, &app, &policy));
+        assert_eq!(close_calls(&system), [7]);
+        assert_eq!(killed(&system), [vec![7]]);
+    }
 
-        /// A fake taskkill layer that records the pids it is asked to close.
-        struct FakeTaskkill {
-            killed: Arc<Mutex<Vec<u32>>>,
-        }
+    #[test]
+    fn quit_windows_app_does_not_force_close_when_force_kill_is_disabled() {
+        let system = FakeSystem::new()
+            .with_app("C:/Apps/Firefox.exe", "com.firefox", &[7])
+            .with_close_stops(false);
+        let app = RunningApp::new(PathBuf::from("C:/Apps/Firefox.exe"), "com.firefox");
+        let policy = QuitPolicy::new(Duration::from_millis(20), false)
+            .with_poll_interval(Duration::from_millis(5));
 
-        impl Taskkill for FakeTaskkill {
-            fn taskkill(&self, pid: u32) -> bool {
-                lock(&*self.killed).push(pid);
-                true
-            }
-        }
+        assert!(!quit_windows_app(&system, &app, &policy));
+        assert_eq!(close_calls(&system), [7]);
+        assert!(killed(&system).is_empty());
+    }
 
-        #[test]
-        fn close_sends_close_main_window_and_waits_until_stopped() {
-            let close_pids = Arc::new(Mutex::new(Vec::new()));
-            let running = Arc::new(Mutex::new(true));
-            let killed = Arc::new(Mutex::new(Vec::new()));
-            let closer = WinAppCloser::with(
-                Box::new(FakeWin32 {
-                    close_pids: close_pids.clone(),
-                    running: running.clone(),
-                    close_stops: true,
-                }),
-                Box::new(FakeTaskkill {
-                    killed: killed.clone(),
-                }),
-            );
-            let policy = QuitPolicy::new(Duration::from_secs(1), false)
-                .with_poll_interval(Duration::from_millis(5));
+    #[test]
+    fn quit_windows_app_closes_each_pid_when_multiple() {
+        let system = FakeSystem::new().with_app("C:/Apps/Firefox.exe", "com.firefox", &[7, 8]);
+        let app = RunningApp::new(PathBuf::from("C:/Apps/Firefox.exe"), "com.firefox");
+        let policy = QuitPolicy::new(Duration::from_secs(1), false)
+            .with_poll_interval(Duration::from_millis(5));
 
-            assert!(closer.close(7, &policy));
-            assert_eq!(*lock(&*close_pids), [7]);
-            assert!(lock(&*killed).is_empty());
-            assert!(!*lock(&*running), "the process should have been stopped");
-        }
-
-        #[test]
-        fn does_not_close_when_the_process_is_not_running() {
-            let close_pids = Arc::new(Mutex::new(Vec::new()));
-            let running = Arc::new(Mutex::new(false));
-            let killed = Arc::new(Mutex::new(Vec::new()));
-            let closer = WinAppCloser::with(
-                Box::new(FakeWin32 {
-                    close_pids: close_pids.clone(),
-                    running: running.clone(),
-                    close_stops: true,
-                }),
-                Box::new(FakeTaskkill {
-                    killed: killed.clone(),
-                }),
-            );
-            let policy = QuitPolicy::new(Duration::from_secs(1), false);
-
-            assert!(closer.close(7, &policy));
-            assert!(lock(&*close_pids).is_empty());
-            assert!(lock(&*killed).is_empty());
-        }
-
-        #[test]
-        fn returns_false_when_the_process_does_not_stop_before_timeout() {
-            let close_pids = Arc::new(Mutex::new(Vec::new()));
-            let running = Arc::new(Mutex::new(true));
-            let killed = Arc::new(Mutex::new(Vec::new()));
-            let closer = WinAppCloser::with(
-                Box::new(FakeWin32 {
-                    close_pids: close_pids.clone(),
-                    running: running.clone(),
-                    close_stops: false,
-                }),
-                Box::new(FakeTaskkill {
-                    killed: killed.clone(),
-                }),
-            );
-            let policy = QuitPolicy::new(Duration::from_millis(20), false)
-                .with_poll_interval(Duration::from_millis(5));
-
-            assert!(!closer.close(7, &policy));
-            assert_eq!(*lock(&*close_pids), [7]);
-            assert!(lock(&*killed).is_empty());
-        }
-
-        #[test]
-        fn host_closer_uses_the_real_win32_calls() {
-            let closer = WinAppCloser::host();
-            // Process 42 is not running on the test machine, so no close
-            // request is attempted and the closer reports it as stopped.
-            assert!(
-                closer.close(42, &QuitPolicy::new(Duration::ZERO, false)),
-                "the host closer should not panic on a dead pid"
-            );
-        }
-
-        #[test]
-        fn force_kill_calls_taskkill_for_each_pid_and_waits_the_grace() {
-            let killed = Arc::new(Mutex::new(Vec::new()));
-            let closer = WinAppCloser::with(
-                Box::new(FakeWin32 {
-                    close_pids: Arc::new(Mutex::new(Vec::new())),
-                    running: Arc::new(Mutex::new(true)),
-                    close_stops: true,
-                }),
-                Box::new(FakeTaskkill {
-                    killed: killed.clone(),
-                }),
-            );
-            let policy =
-                QuitPolicy::new(Duration::ZERO, false).with_force_kill_grace(Duration::ZERO);
-
-            closer.force_kill(&[7, 8], &policy);
-
-            assert_eq!(*lock(&*killed), [7, 8]);
-        }
-
-        #[test]
-        fn force_kill_does_nothing_when_there_are_no_pids() {
-            let killed = Arc::new(Mutex::new(Vec::new()));
-            let closer = WinAppCloser::with(
-                Box::new(FakeWin32 {
-                    close_pids: Arc::new(Mutex::new(Vec::new())),
-                    running: Arc::new(Mutex::new(true)),
-                    close_stops: true,
-                }),
-                Box::new(FakeTaskkill {
-                    killed: killed.clone(),
-                }),
-            );
-            let policy = QuitPolicy::new(Duration::ZERO, false);
-
-            closer.force_kill(&[], &policy);
-
-            assert!(lock(&*killed).is_empty());
-        }
-
-        #[test]
-        fn quit_windows_app_force_closes_when_graceful_close_times_out() {
-            let system =
-                super::FakeSystem::new().with_app("C:/Apps/Firefox.exe", "com.firefox", &[7]);
-            let app = RunningApp::new(PathBuf::from("C:/Apps/Firefox.exe"), "com.firefox");
-            let killed = Arc::new(Mutex::new(Vec::new()));
-            let closer = WinAppCloser::with(
-                Box::new(FakeWin32 {
-                    close_pids: Arc::new(Mutex::new(Vec::new())),
-                    running: Arc::new(Mutex::new(true)),
-                    close_stops: false,
-                }),
-                Box::new(FakeTaskkill {
-                    killed: killed.clone(),
-                }),
-            );
-            let policy = QuitPolicy::new(Duration::from_millis(20), true)
-                .with_poll_interval(Duration::from_millis(5));
-
-            assert!(
-                quit_windows_app(&system, &app, &policy, &closer),
-                "the app should be reported as handled after force-close"
-            );
-            assert_eq!(*lock(&*killed), [7]);
-        }
-
-        #[test]
-        fn quit_windows_app_does_not_taskkill_when_graceful_close_succeeds() {
-            let system =
-                super::FakeSystem::new().with_app("C:/Apps/Firefox.exe", "com.firefox", &[7]);
-            let app = RunningApp::new(PathBuf::from("C:/Apps/Firefox.exe"), "com.firefox");
-            let killed = Arc::new(Mutex::new(Vec::new()));
-            let closer = WinAppCloser::with(
-                Box::new(FakeWin32 {
-                    close_pids: Arc::new(Mutex::new(Vec::new())),
-                    running: Arc::new(Mutex::new(true)),
-                    close_stops: true,
-                }),
-                Box::new(FakeTaskkill {
-                    killed: killed.clone(),
-                }),
-            );
-            let policy = QuitPolicy::new(Duration::from_secs(1), true)
-                .with_poll_interval(Duration::from_millis(5));
-
-            assert!(quit_windows_app(&system, &app, &policy, &closer));
-            assert!(lock(&*killed).is_empty());
-        }
-
-        #[test]
-        fn quit_windows_app_does_not_taskkill_when_force_kill_is_disabled() {
-            let system =
-                super::FakeSystem::new().with_app("C:/Apps/Firefox.exe", "com.firefox", &[7]);
-            let app = RunningApp::new(PathBuf::from("C:/Apps/Firefox.exe"), "com.firefox");
-            let killed = Arc::new(Mutex::new(Vec::new()));
-            let closer = WinAppCloser::with(
-                Box::new(FakeWin32 {
-                    close_pids: Arc::new(Mutex::new(Vec::new())),
-                    running: Arc::new(Mutex::new(true)),
-                    close_stops: false,
-                }),
-                Box::new(FakeTaskkill {
-                    killed: killed.clone(),
-                }),
-            );
-            let policy = QuitPolicy::new(Duration::from_millis(20), false)
-                .with_poll_interval(Duration::from_millis(5));
-
-            assert!(!quit_windows_app(&system, &app, &policy, &closer));
-            assert!(lock(&*killed).is_empty());
-        }
+        assert!(quit_windows_app(&system, &app, &policy));
+        assert_eq!(close_calls(&system), [7, 8]);
     }
 }
