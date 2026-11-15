@@ -12,6 +12,10 @@
 //! exists on this machine is Windows-only, behind [`mod@self::windows`],
 //! together with its tests and imports.
 
+use std::ffi::OsString;
+
+use crate::process::CommandSpec;
+
 /// A `cmd.exe` launching shell used to run `.cmd`/`.bat` shims.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CmdShell;
@@ -21,6 +25,32 @@ impl CmdShell {
     #[must_use]
     pub fn command(self) -> &'static str {
         "cmd"
+    }
+
+    /// Arguments for invoking `cmd.exe` to run `command`:
+    /// `/C <command>`.
+    ///
+    /// `command` is handed to `cmd.exe` as a single argument, so `cmd.exe`
+    /// parses it with its own quoting rules. Use [`quote`] to make individual
+    /// arguments survive `cmd.exe`'s parsing when building `command` by hand.
+    ///
+    /// The C runtime escapes a quote inside an argument with a backslash, which
+    /// `cmd.exe` does not understand, so `command` must not be built by joining
+    /// Rust-quoted arguments; instead use [`quote`] on each piece and assemble
+    /// the command line yourself before passing it here.
+    #[must_use]
+    pub fn invocation_args(self, command: &str) -> Vec<OsString> {
+        vec![OsString::from("/C"), OsString::from(command)]
+    }
+
+    /// Builds a [`CommandSpec`] that runs `command` through `cmd.exe /C`.
+    ///
+    /// The command is handed to `cmd.exe` as a single argument, so `cmd.exe`
+    /// parses it with its own quoting rules. Use [`quote`] to make individual
+    /// arguments survive `cmd.exe`'s parsing when building `command` by hand.
+    #[must_use]
+    pub fn command_spec(self, command: &str) -> CommandSpec {
+        CommandSpec::new(self.command()).args(self.invocation_args(command))
     }
 }
 
@@ -120,6 +150,7 @@ pub mod windows {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
 
     #[test]
     fn command_name() {
@@ -171,5 +202,46 @@ mod tests {
         assert!(!is_shim("tool.exe"));
         assert!(!is_shim("tool.ps1"));
         assert!(!is_shim("shim.cmd.bak"));
+    }
+
+    #[test]
+    fn invocation_args_uses_cmd_slash_c() {
+        let args = CmdShell.invocation_args("echo hello");
+        assert_eq!(
+            args.as_slice(),
+            ["/C", "echo hello"].map(OsString::from).as_slice()
+        );
+    }
+
+    #[test]
+    fn command_spec_runs_through_cmd_exe() {
+        let spec = CmdShell.command_spec("echo hello");
+        assert_eq!(spec.program(), "cmd");
+        let arguments: Vec<String> = spec
+            .arguments()
+            .iter()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(arguments, ["/C", "echo hello"]);
+    }
+
+    #[test]
+    fn command_spec_preserves_timeout_and_retries() {
+        use std::time::Duration;
+
+        let spec = CmdShell
+            .command_spec("echo hello")
+            .timeout(Duration::from_secs(30))
+            .retries(2);
+
+        assert_eq!(spec.program(), "cmd");
+        let arguments: Vec<String> = spec
+            .arguments()
+            .iter()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(arguments, ["/C", "echo hello"]);
+        assert_eq!(spec.timeout_limit(), Some(Duration::from_secs(30)));
+        assert_eq!(spec.retry_count(), 2);
     }
 }
