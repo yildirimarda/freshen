@@ -359,7 +359,7 @@ mod tests {
     use crate::platform::Platform;
     #[cfg(windows)]
     use crate::runner::{Runner, StepStatus};
-    use crate::step::{Detection, OutdatedItem, Step};
+    use crate::step::{CheckReport, Detection, OutdatedItem, Step};
 
     #[cfg(windows)]
     use serde_json::Value;
@@ -796,8 +796,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn check_filter_applies_include_exclude_lists() {
+    /// Runs `check_with_options` with the include/exclude filter against the
+    /// stubbed PowerShell, restoring `PATH` and `FRESHEN_WINDOWS_UPDATE_LOG`
+    /// (and removing the stub directory) afterwards. Returns the report.
+    fn filter_report() -> CheckReport {
         let dir = stub_powershell(
             "PSWindowsUpdate",
             r#"[
@@ -812,7 +814,6 @@ mod tests {
         let previous_log = std::env::var("FRESHEN_WINDOWS_UPDATE_LOG").ok();
         std::env::set_var("PATH", &dir);
         std::env::set_var("FRESHEN_WINDOWS_UPDATE_LOG", dir.join("calls.log"));
-
         let options = RunOptions::new().with_filters(
             crate::policy::ItemFilters::new()
                 .with_packages(crate::policy::NameFilter::new().with_exclude(["Update B"])),
@@ -833,8 +834,32 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&dir);
 
+        report
+    }
+
+    #[test]
+    fn check_filter_applies_include_exclude_lists() {
+        let report = filter_report();
+
         assert_eq!(report.pending(), 1);
         assert_eq!(report.items()[0].name(), "Update A");
+    }
+
+    /// Runs `check_filter_applies_include_exclude_lists` repeatedly to prove
+    /// the check is deterministic: the stubbed `Get-WindowsUpdate` listing is
+    /// parsed and filtered identically every iteration, so `pending()` never
+    /// drops to 0 and no CI rerun is needed.
+    #[test]
+    fn check_filter_applies_include_exclude_lists_is_deterministic() {
+        for iteration in 1..=50 {
+            let report = filter_report();
+            assert_eq!(
+                report.pending(),
+                1,
+                "iteration {iteration}: expected exactly one pending update"
+            );
+            assert_eq!(report.items()[0].name(), "Update A");
+        }
     }
 
     #[test]
