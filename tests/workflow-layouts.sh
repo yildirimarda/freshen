@@ -14,7 +14,14 @@ make_fixture() {
   mkdir -p "$dir/tests" "$dir/ci-proposals" "$dir/.github/workflows"
   cp "$root/tests/run-tests.sh" "$dir/tests/run-tests.sh"
   cp "$root/Cargo.toml" "$dir/Cargo.toml"
+  cp "$root/rust-toolchain.toml" "$dir/rust-toolchain.toml"
   cp "$root/deny.toml" "$dir/deny.toml"
+  for crate in "$root"/crates/*/Cargo.toml; do
+    [[ -e "$crate" ]] || continue
+    rel="${crate#$root/}"
+    mkdir -p "$dir/$(dirname "$rel")"
+    cp "$crate" "$dir/$rel"
+  done
   cp "$root/PLAN.md" "$dir/PLAN.md"
   cat > "$dir/README.md" <<'MD'
 # freshen
