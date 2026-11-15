@@ -26,14 +26,70 @@ use rustls_pki_types::{CertificateDer, ServerName};
 const MAX_PROXY_HEADER_BYTES: usize = 8 * 1024;
 
 /// One host the preflight check tries to reach.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `host` is owned so it can come from the `FRESHEN_NETWORK_ENDPOINT`
+/// override as well as from the compiled-in defaults.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Endpoint {
     /// Name used for TLS validation and for the proxy `CONNECT` request.
-    pub(crate) host: &'static str,
+    pub(crate) host: String,
     /// Port used for TLS validation and for the proxy `CONNECT` request.
     pub(crate) port: u16,
     /// Address used when connecting directly, so the check works without DNS.
     pub(crate) address: SocketAddr,
+}
+
+/// Environment variable that overrides the endpoints used by the network
+/// preflight check.
+///
+/// An offline CI runner can point the check at a local probe instead of the
+/// public internet. The value is `host:port` (used as both the TLS host and
+/// the connect address, so `host` should be an IP literal) or
+/// `host:port:address` to use a separate TLS host name and connect address,
+/// for example `localhost:8443:127.0.0.1:8443`. When unset, the compiled-in
+/// `default_endpoints()` are tried.
+pub(crate) const NETWORK_ENDPOINT_ENV: &str = "FRESHEN_NETWORK_ENDPOINT";
+
+/// Parses `FRESHEN_NETWORK_ENDPOINT` into a single endpoint.
+///
+/// Accepted forms:
+/// * `ip:port` — used as both the TLS host and the connect address;
+/// * `host:port:a.b.c.d:port` — separate TLS host and IPv4 connect address.
+pub(crate) fn parse_network_endpoint(value: &str) -> Result<Endpoint, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err("FRESHEN_NETWORK_ENDPOINT is empty".to_owned());
+    }
+
+    // `ip:port` — host and address are the same.
+    if let Ok(address) = value.parse::<SocketAddr>() {
+        return Ok(Endpoint {
+            host: address.ip().to_string(),
+            port: address.port(),
+            address,
+        });
+    }
+
+    // `host:port:a.b.c.d:port` — separate host and address (IPv4 address).
+    let parts: Vec<&str> = value.split(':').collect();
+    if parts.len() == 4 {
+        let host = parts[0].to_owned();
+        let port = parts[1]
+            .parse::<u16>()
+            .map_err(|_| format!("invalid port in FRESHEN_NETWORK_ENDPOINT: {value}"))?;
+        let address = format!("{}:{}", parts[2], parts[3])
+            .parse::<SocketAddr>()
+            .map_err(|_| format!("invalid address in FRESHEN_NETWORK_ENDPOINT: {value}"))?;
+        return Ok(Endpoint {
+            host,
+            port,
+            address,
+        });
+    }
+
+    Err(format!(
+        "invalid FRESHEN_NETWORK_ENDPOINT '{value}': expected `host:port` or `host:port:address`"
+    ))
 }
 
 /// The well-known hosts tried by the preflight check.
@@ -46,22 +102,22 @@ pub(crate) struct Endpoint {
 pub(crate) fn default_endpoints() -> [Endpoint; 4] {
     [
         Endpoint {
-            host: "one.one.one.one",
+            host: "one.one.one.one".to_owned(),
             port: 443,
             address: SocketAddr::from(([1, 1, 1, 1], 443)),
         },
         Endpoint {
-            host: "one.one.one.one",
+            host: "one.one.one.one".to_owned(),
             port: 443,
             address: SocketAddr::from(([0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111], 443)),
         },
         Endpoint {
-            host: "dns.google",
+            host: "dns.google".to_owned(),
             port: 443,
             address: SocketAddr::from(([8, 8, 8, 8], 443)),
         },
         Endpoint {
-            host: "dns.google",
+            host: "dns.google".to_owned(),
             port: 443,
             address: SocketAddr::from(([0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888], 443)),
         },
@@ -75,6 +131,8 @@ pub(crate) struct Environment {
     https_proxy: Option<String>,
     no_proxy: Option<String>,
     ca_bundles: Vec<PathBuf>,
+    /// The endpoint override from `FRESHEN_NETWORK_ENDPOINT`, when set.
+    network_endpoint: Option<Endpoint>,
 }
 
 impl Environment {
@@ -85,11 +143,27 @@ impl Environment {
 
     /// Reads the settings from an injected lookup, used by tests.
     fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Self {
+        let network_endpoint = lookup(NETWORK_ENDPOINT_ENV)
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .and_then(|value| parse_network_endpoint(value).ok());
+
         Self {
             http_proxy: first_value(&lookup, &["HTTP_PROXY", "http_proxy"]),
             https_proxy: first_value(&lookup, &["HTTPS_PROXY", "https_proxy"]),
             no_proxy: first_value(&lookup, &["NO_PROXY", "no_proxy"]),
             ca_bundles: ca_bundle_paths(&lookup),
+            network_endpoint,
+        }
+    }
+
+    /// The endpoints the network check should try: the override when set, the
+    /// compiled-in defaults otherwise.
+    #[must_use]
+    pub(crate) fn endpoints(&self) -> Vec<Endpoint> {
+        match &self.network_endpoint {
+            Some(endpoint) => vec![endpoint.clone()],
+            None => default_endpoints().to_vec(),
         }
     }
 
@@ -109,7 +183,7 @@ impl Environment {
             return false;
         };
         let address = endpoint.address.ip().to_string();
-        no_proxy_matches(no_proxy, endpoint.host, endpoint.port)
+        no_proxy_matches(no_proxy, &endpoint.host, endpoint.port)
             || no_proxy_matches(no_proxy, &address, endpoint.port)
     }
 }
@@ -360,10 +434,12 @@ fn split_no_proxy_port(entry: &str) -> (&str, Option<u16>) {
     (entry, None)
 }
 
-/// Checks whether any of the default endpoints is reachable.
+/// Checks whether the network is reachable, using the `FRESHEN_NETWORK_ENDPOINT`
+/// override when it is set and the compiled-in defaults otherwise.
 pub(crate) fn check() -> Result<(), NetworkCheckError> {
     let environment = Environment::from_process();
-    check_with(&environment, &default_endpoints(), Duration::from_secs(2))
+    let endpoints = environment.endpoints();
+    check_with(&environment, &endpoints, Duration::from_secs(2))
 }
 
 fn check_with(
@@ -506,7 +582,7 @@ fn endpoint_reachable(
         Ok(None) => {
             let mut stream =
                 connect(endpoint.address, timeout).ok_or(NetworkCheckError::Unreachable)?;
-            tls_handshake(&mut stream, endpoint.host, config)
+            tls_handshake(&mut stream, &endpoint.host, config)
         }
         Err(error) => Err(NetworkCheckError::InvalidProxy(error)),
     }
@@ -535,13 +611,13 @@ fn proxy_reachable(
             match tls_stream(stream, &proxy.host, config) {
                 Ok(mut tunnel) => {
                     connect_tunnel(&mut tunnel, endpoint, proxy.authorization.as_deref())
-                        .and_then(|()| tls_handshake(&mut tunnel, endpoint.host, config))
+                        .and_then(|()| tls_handshake(&mut tunnel, &endpoint.host, config))
                 }
                 Err(error) => Err(error),
             }
         } else {
             connect_tunnel(&mut stream, endpoint, proxy.authorization.as_deref())
-                .and_then(|()| tls_handshake(&mut stream, endpoint.host, config))
+                .and_then(|()| tls_handshake(&mut stream, &endpoint.host, config))
         };
 
         match result {
@@ -699,8 +775,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        certificates_from_file, check_with, default_endpoints, no_proxy_matches, parse_proxy,
-        root_store, Endpoint, Environment, NetworkCheckError,
+        certificates_from_file, check_with, default_endpoints, no_proxy_matches,
+        parse_network_endpoint, parse_proxy, root_store, Endpoint, Environment, NetworkCheckError,
+        NETWORK_ENDPOINT_ENV,
     };
     use base64::Engine as _;
     use rustls::{ServerConfig, ServerConnection, StreamOwned};
@@ -799,7 +876,7 @@ pT8yRnSiD29WLvz412hxX/k=
 
     fn endpoint(host: &'static str, address: SocketAddr) -> Endpoint {
         Endpoint {
-            host,
+            host: host.to_owned(),
             port: address.port(),
             address,
         }
@@ -1129,6 +1206,132 @@ pT8yRnSiD29WLvz412hxX/k=
         assert!(check_with(
             &environment,
             &[endpoint("localhost", address)],
+            Duration::from_secs(2)
+        )
+        .is_ok());
+        server
+            .join()
+            .unwrap_or_else(|_| panic!("TLS test server panicked"));
+        let _ = std::fs::remove_file(bundle);
+    }
+
+    #[test]
+    fn parse_network_endpoint_uses_the_socket_address_as_host_and_address() {
+        let endpoint = parse_network_endpoint("127.0.0.1:8443")
+            .unwrap_or_else(|error| panic!("failed to parse network endpoint: {error}"));
+
+        assert_eq!(endpoint.host, "127.0.0.1");
+        assert_eq!(endpoint.port, 8443);
+        assert_eq!(
+            endpoint.address,
+            "127.0.0.1:8443"
+                .parse::<SocketAddr>()
+                .unwrap_or_else(|error| panic!("failed to parse socket address: {error}"))
+        );
+    }
+
+    #[test]
+    fn parse_network_endpoint_uses_a_separate_host_and_address() {
+        let endpoint = parse_network_endpoint("localhost:8443:127.0.0.1:8443")
+            .unwrap_or_else(|error| panic!("failed to parse network endpoint: {error}"));
+
+        assert_eq!(endpoint.host, "localhost");
+        assert_eq!(endpoint.port, 8443);
+        assert_eq!(
+            endpoint.address,
+            "127.0.0.1:8443"
+                .parse::<SocketAddr>()
+                .unwrap_or_else(|error| panic!("failed to parse socket address: {error}"))
+        );
+    }
+
+    #[test]
+    fn parse_network_endpoint_accepts_a_bracketed_ipv6_address() {
+        let endpoint = parse_network_endpoint("[::1]:8443")
+            .unwrap_or_else(|error| panic!("failed to parse network endpoint: {error}"));
+
+        assert_eq!(endpoint.host, "::1");
+        assert_eq!(endpoint.port, 8443);
+        assert_eq!(
+            endpoint.address,
+            "[::1]:8443"
+                .parse::<SocketAddr>()
+                .unwrap_or_else(|error| panic!("failed to parse socket address: {error}"))
+        );
+    }
+
+    #[test]
+    fn parse_network_endpoint_rejects_invalid_values() {
+        assert!(parse_network_endpoint("").is_err());
+        assert!(parse_network_endpoint("   ").is_err());
+        assert!(parse_network_endpoint("not-an-endpoint").is_err());
+        // A bare host name has no connect address, so it is rejected.
+        assert!(parse_network_endpoint("localhost:8443").is_err());
+        assert!(parse_network_endpoint("localhost:not-a-port:127.0.0.1:8443").is_err());
+        assert!(parse_network_endpoint("localhost:8443:not-an-address").is_err());
+    }
+
+    #[test]
+    fn an_overridden_unreachable_endpoint_is_reported_instead_of_the_defaults() {
+        let endpoint = Endpoint {
+            host: "localhost".to_owned(),
+            port: 1,
+            address: "127.0.0.1:1"
+                .parse::<SocketAddr>()
+                .unwrap_or_else(|error| panic!("failed to parse socket address: {error}")),
+        };
+        let environment = Environment::from_lookup(|_| None);
+
+        let error = check_failure(&environment, &[endpoint], Duration::from_millis(500));
+
+        assert_eq!(error, NetworkCheckError::Unreachable);
+    }
+
+    #[test]
+    fn endpoints_without_override_return_the_defaults() {
+        let environment = Environment::from_lookup(|_| None);
+
+        assert_eq!(environment.endpoints(), default_endpoints());
+    }
+
+    #[test]
+    fn endpoints_return_the_network_endpoint_override() {
+        let environment = Environment::from_lookup(|key| {
+            (key == NETWORK_ENDPOINT_ENV).then_some("localhost:8443:127.0.0.1:8443".to_owned())
+        });
+
+        let endpoints = environment.endpoints();
+        assert_eq!(endpoints.len(), 1);
+        assert_eq!(endpoints[0].host, "localhost");
+        assert_eq!(endpoints[0].port, 8443);
+        assert_eq!(
+            endpoints[0].address,
+            "127.0.0.1:8443"
+                .parse::<SocketAddr>()
+                .unwrap_or_else(|error| panic!("failed to parse socket address: {error}"))
+        );
+    }
+
+    #[test]
+    fn the_network_endpoint_override_is_used_by_the_preflight_check() {
+        let (address, server) = tls_server();
+        let bundle = ca_bundle();
+        let environment = environment(&[
+            (
+                NETWORK_ENDPOINT_ENV,
+                &format!("localhost:{}:127.0.0.1:{}", address.port(), address.port()),
+            ),
+            (
+                "SSL_CERT_FILE",
+                bundle
+                    .to_str()
+                    .unwrap_or_else(|| panic!("test CA path is not UTF-8")),
+            ),
+        ]);
+
+        assert!(check_with(
+            &environment,
+            &environment.endpoints(),
             Duration::from_secs(2)
         )
         .is_ok());
