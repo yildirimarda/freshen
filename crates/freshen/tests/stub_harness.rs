@@ -229,6 +229,44 @@ fn runs_stub_tools_in_step_order() {
     assert!(stdout(&output).contains("7 ok, 0 planned, 0 skipped, 0 failed"));
 }
 
+#[cfg(unix)]
+#[test]
+fn concurrent_check_calls_are_appended_to_the_stub_log_atomically() {
+    let tools = StubTools::new(&["uv", "mise"]);
+    // Both stubs log their invocation and then sleep, so the two concurrent
+    // check queries have overlapping log writes.
+    tools.set_script("uv", "/bin/sleep 0.1");
+    tools.set_script("mise", "/bin/sleep 0.1");
+
+    let output = tools
+        .command()
+        .args(["--check", "--jobs", "2", "--only", "uv,mise"])
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run freshen: {error}"));
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+
+    let calls = tools.calls();
+    let expected = [
+        "uv tool list --outdated",
+        "mise outdated",
+        "mise current node",
+    ];
+    assert_eq!(calls.len(), expected.len(), "calls: {calls:?}");
+    for call in &calls {
+        assert!(
+            expected.iter().any(|expected| call == *expected),
+            "stub log line is interleaved or unexpected: {call:?}"
+        );
+    }
+    for expected in expected {
+        assert!(
+            calls.iter().any(|call| call == expected),
+            "stub log does not contain {expected:?}: {calls:?}"
+        );
+    }
+}
+
 #[test]
 fn list_steps_reports_detection_without_calling_any_stub() {
     let tools = StubTools::new(&["brew", "uv"]);

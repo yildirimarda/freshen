@@ -272,11 +272,9 @@ impl StubTools {
 
         let script = format!(
             "#!/bin/sh\n\
-             {{\n\
-               printf '%s' '{tool}'\n\
-               for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
-               printf '\\n'\n\
-             }} >> \"${{FRESHEN_STUB_LOG:?FRESHEN_STUB_LOG is not set}}\"\n\
+             line='{tool}'\n\
+             for arg in \"$@\"; do line=\"$line $arg\"; done\n\
+             printf '%s\\n' \"$line\" >> \"${{FRESHEN_STUB_LOG:?FRESHEN_STUB_LOG is not set}}\"\n\
              {body}\n"
         );
         let path = self.dir.join(tool);
@@ -299,11 +297,9 @@ impl StubTools {
 
             let mut script = format!(
                 "#!/bin/sh\n\
-                 {{\n\
-                   printf '%s' '{tool}'\n\
-                   for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
-                   printf '\\n'\n\
-                 }} >> \"${{FRESHEN_STUB_LOG:?FRESHEN_STUB_LOG is not set}}\"\n\
+                 line='{tool}'\n\
+                 for arg in \"$@\"; do line=\"$line $arg\"; done\n\
+                 printf '%s\\n' \"$line\" >> \"${{FRESHEN_STUB_LOG:?FRESHEN_STUB_LOG is not set}}\"\n\
                  state=\"${{FRESHEN_STUB_STATE:?FRESHEN_STUB_STATE is not set}}\"\n\
                  count_file=\"$state/{tool}.count\"\n\
                  count=0\n\
@@ -431,11 +427,9 @@ impl StubTools {
 
         let script = format!(
             "#!/bin/sh\n\
-             {{\n\
-               printf '%s' '{tool}'\n\
-               for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
-               printf '\\n'\n\
-             }} >> \"${{FRESHEN_STUB_LOG:?FRESHEN_STUB_LOG is not set}}\"\n"
+             line='{tool}'\n\
+             for arg in \"$@\"; do line=\"$line $arg\"; done\n\
+             printf '%s\\n' \"$line\" >> \"${{FRESHEN_STUB_LOG:?FRESHEN_STUB_LOG is not set}}\"\n"
         );
         let path = self.dir.join(tool);
         fs::write(&path, script)
