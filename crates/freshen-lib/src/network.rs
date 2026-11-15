@@ -478,7 +478,16 @@ fn check_with(
         }
     }
 
-    let roots = root_store(environment).map_err(NetworkCheckError::TrustStore)?;
+    let native = rustls_native_certs::load_native_certs();
+    let native = NativeCerts {
+        certs: native.certs,
+        errors: native
+            .errors
+            .iter()
+            .map(|error| error.to_string())
+            .collect(),
+    };
+    let roots = root_store(environment, native).map_err(NetworkCheckError::TrustStore)?;
     let config = Arc::new(
         ClientConfig::builder()
             .with_root_certificates(roots)
@@ -503,21 +512,31 @@ fn check_with(
     Err(failure.unwrap_or(NetworkCheckError::Unreachable))
 }
 
-fn root_store(environment: &Environment) -> Result<RootCertStore, String> {
-    let mut roots = RootCertStore::empty();
+/// Certificates and errors produced while loading the native trust store.
+///
+/// Separate from [`rustls_native_certs::CertificateResult`] so tests can
+/// inject a canned result instead of reading the real system store.
+#[derive(Debug, Default)]
+struct NativeCerts {
+    /// Certificates that were loaded successfully.
+    certs: Vec<CertificateDer<'static>>,
+    /// Errors encountered while loading, as strings.
+    errors: Vec<String>,
+}
 
-    // The native store can fail partially: some certificates are loaded and
-    // others are not. Only a store that yielded nothing usable is an error,
-    // and only when no custom bundle can take over.
-    let native = rustls_native_certs::load_native_certs();
+/// Builds the root certificate store used for the TLS handshake.
+///
+/// A native trust store that only partially loaded is still a problem: its
+/// errors are reported even when some certificates were loaded, so a partly
+/// broken system trust store is not silently ignored. A custom CA bundle can
+/// replace the system store, so native errors are not fatal when one is
+/// configured.
+fn root_store(environment: &Environment, native: NativeCerts) -> Result<RootCertStore, String> {
+    let mut roots = RootCertStore::empty();
     roots.add_parsable_certificates(native.certs);
-    if roots.is_empty() && !native.errors.is_empty() && environment.ca_bundles.is_empty() {
-        let details = native
-            .errors
-            .iter()
-            .map(|error| error.to_string())
-            .collect::<Vec<_>>()
-            .join("; ");
+
+    if !native.errors.is_empty() && environment.ca_bundles.is_empty() {
+        let details = native.errors.join("; ");
         return Err(format!("cannot load the system trust store: {details}"));
     }
 
@@ -801,11 +820,12 @@ where
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
         certificates_from_file, check_with, default_endpoints, no_proxy_matches,
-        parse_network_endpoint, parse_proxy, root_store, Endpoint, Environment, NetworkCheckError,
-        NETWORK_ENDPOINT_ENV, SSL_CERT_DIR_DELIMITER,
+        parse_network_endpoint, parse_proxy, root_store, Endpoint, Environment, NativeCerts,
+        NetworkCheckError, NETWORK_ENDPOINT_ENV, SSL_CERT_DIR_DELIMITER,
     };
     use base64::Engine as _;
     use rustls::{ServerConfig, ServerConnection, StreamOwned};
@@ -900,6 +920,20 @@ pT8yRnSiD29WLvz412hxX/k=
                 .find(|(name, _)| *name == key)
                 .map(|(_, value)| (*value).to_owned())
         })
+    }
+
+    /// Loads the real native trust store, stringifying its errors, the way
+    /// `check_with` does when running against the real machine.
+    fn native_certs() -> NativeCerts {
+        let native = rustls_native_certs::load_native_certs();
+        NativeCerts {
+            certs: native.certs,
+            errors: native
+                .errors
+                .iter()
+                .map(|error| error.to_string())
+                .collect(),
+        }
     }
 
     fn endpoint(host: &'static str, address: SocketAddr) -> Endpoint {
@@ -1379,7 +1413,7 @@ pT8yRnSiD29WLvz412hxX/k=
                 .unwrap_or_else(|| panic!("test CA path is not UTF-8")),
         )]);
 
-        let roots = root_store(&environment)
+        let roots = root_store(&environment, native_certs())
             .unwrap_or_else(|error| panic!("the trust store should be built: {error}"));
 
         assert!(
@@ -1408,7 +1442,7 @@ pT8yRnSiD29WLvz412hxX/k=
                 .unwrap_or_else(|| panic!("test CA directory path is not UTF-8")),
         )]);
 
-        let roots = root_store(&environment)
+        let roots = root_store(&environment, native_certs())
             .unwrap_or_else(|error| panic!("the trust store should be built: {error}"));
         assert!(
             roots.subjects().iter().any(|subject| subject
@@ -1442,7 +1476,7 @@ pT8yRnSiD29WLvz412hxX/k=
         );
         let environment = environment(&[("SSL_CERT_DIR", &list)]);
 
-        let roots = root_store(&environment)
+        let roots = root_store(&environment, native_certs())
             .unwrap_or_else(|error| panic!("the trust store should be built: {error}"));
         assert!(
             roots.subjects().iter().any(|subject| subject
@@ -1739,6 +1773,92 @@ pT8yRnSiD29WLvz412hxX/k=
         server
             .join()
             .unwrap_or_else(|_| panic!("TLS test server panicked"));
+    }
+
+    #[test]
+    fn partial_native_trust_store_load_errors_are_reported() {
+        let certificate = CertificateDer::pem_slice_iter(CA_CERTIFICATE.as_bytes())
+            .next()
+            .unwrap()
+            .unwrap();
+        let native = NativeCerts {
+            certs: vec![certificate],
+            errors: vec!["cannot read '/etc/ssl/certs/bad.pem': permission denied".to_owned()],
+        };
+        let environment = environment(&[]);
+
+        let error = root_store(&environment, native).unwrap_err();
+
+        assert!(
+            error.contains("cannot load the system trust store"),
+            "{error}"
+        );
+        assert!(error.contains("permission denied"), "{error}");
+    }
+
+    #[test]
+    fn a_custom_ca_bundle_overrides_a_partly_broken_native_store() {
+        let certificate = CertificateDer::pem_slice_iter(CA_CERTIFICATE.as_bytes())
+            .next()
+            .unwrap()
+            .unwrap();
+        let native = NativeCerts {
+            certs: vec![certificate],
+            errors: vec!["cannot load system trust store".to_owned()],
+        };
+        let bundle = ca_bundle();
+        let environment = environment(&[(
+            "SSL_CERT_FILE",
+            bundle
+                .to_str()
+                .unwrap_or_else(|| panic!("test CA path is not UTF-8")),
+        )]);
+
+        let roots = root_store(&environment, native)
+            .unwrap_or_else(|error| panic!("the trust store should be built: {error}"));
+
+        assert!(
+            roots.subjects().iter().any(|subject| subject
+                .as_ref()
+                .windows(CA_SUBJECT.len())
+                .any(|part| part == CA_SUBJECT)),
+            "the custom CA certificate should be part of the trust store"
+        );
+        let _ = std::fs::remove_file(bundle);
+    }
+
+    #[test]
+    fn an_empty_native_trust_store_with_load_errors_is_reported() {
+        let native = NativeCerts {
+            certs: vec![],
+            errors: vec!["cannot load system trust store".to_owned()],
+        };
+        let environment = environment(&[]);
+
+        let error = root_store(&environment, native).unwrap_err();
+
+        assert!(
+            error.contains("cannot load the system trust store"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_native_trust_store_loaded_without_errors_succeeds() {
+        let certificate = CertificateDer::pem_slice_iter(CA_CERTIFICATE.as_bytes())
+            .next()
+            .unwrap()
+            .unwrap();
+        let native = NativeCerts {
+            certs: vec![certificate],
+            errors: vec![],
+        };
+        let environment = environment(&[]);
+
+        let roots = root_store(&environment, native)
+            .unwrap_or_else(|error| panic!("the trust store should be built: {error}"));
+
+        assert!(!roots.is_empty());
     }
 
     #[test]
