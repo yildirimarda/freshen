@@ -440,7 +440,7 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 - [x] Add the Cargo workspace checks promised by `tests/README.md` to `tests/run-tests.sh`: the workspace sets an MSRV (`rust-version`), `rust-toolchain.toml` pins an exact channel with `rustfmt`/`clippy`, and every crate under `crates/` inherits the workspace MSRV and lints
 - [x] Probe both IPv4 and IPv6 in the network preflight check so IPv6-only or filtered networks are not reported as unreachable, covered by tests with injected endpoints
 - [x] Allow overriding the network preflight endpoint, so an offline CI runner can point at a local probe, covered by tests
-- [ ] Detect user-marked metered networks on macOS instead of only hotspot SSIDs, so the metered preflight check matches the system setting, covered by tests with injected command output
+- [x] Detect user-marked metered networks on macOS instead of only hotspot SSIDs, so the metered preflight check matches the system setting, covered by tests with injected command output
 - [ ] Make `StubTools` append each invocation to the stub log atomically, so integration tests can assert the calls of concurrently executed `--check` steps without interleaved lines, covered by a test that runs two stubs at once
 - [ ] Run every Windows command that needs a shell through `cmd.exe /C` with `cmd`-compatible quoting: the C runtime escapes a quote inside an argument with a backslash, which `cmd.exe` does not understand, so a quoted path arrives mangled
 - [ ] Verify the stub-based integration tests on `windows-latest`: while the Windows unit tests failed, the job stopped before that step, so the `.cmd` stubs have never been exercised in CI
