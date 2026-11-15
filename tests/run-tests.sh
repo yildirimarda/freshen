@@ -432,4 +432,56 @@ else
   bad "no coverage workflow in ci-proposals/ or .github/workflows/"
 fi
 
+# 19. Cargo workspace checks promised by tests/README.md: the workspace sets an
+#     MSRV (rust-version), rust-toolchain.toml pins an exact channel with
+#     rustfmt/clippy, and every crate under crates/ inherits the workspace
+#     MSRV and lints.
+if [[ -f Cargo.toml && -f rust-toolchain.toml && -d crates ]]; then
+  problems="$(python3 - <<'PY'
+import glob, re, sys, tomllib
+problems = []
+with open("Cargo.toml", "rb") as f:
+    ws = tomllib.load(f)
+msrv = ws.get("workspace", {}).get("package", {}).get("rust-version")
+if not msrv:
+    problems.append("Cargo.toml workspace.package has no rust-version (MSRV)")
+with open("rust-toolchain.toml", "rb") as f:
+    tc = tomllib.load(f)
+channel = tc.get("toolchain", {}).get("channel", "")
+if not channel:
+    problems.append("rust-toolchain.toml has no channel")
+elif not re.fullmatch(r"\d+\.\d+(\.\d+)?", channel):
+    problems.append(f"rust-toolchain.toml channel {channel!r} is not a pinned exact version")
+components = tc.get("toolchain", {}).get("components", [])
+if "rustfmt" not in components:
+    problems.append("rust-toolchain.toml components missing rustfmt")
+if "clippy" not in components:
+    problems.append("rust-toolchain.toml components missing clippy")
+crates = sorted(glob.glob("crates/*/Cargo.toml"))
+if not crates:
+    problems.append("no crates found under crates/")
+for crate in crates:
+    with open(crate, "rb") as fh:
+        cfg = tomllib.load(fh)
+    rv = cfg.get("package", {}).get("rust-version")
+    if not isinstance(rv, dict) or rv.get("workspace") is not True:
+        problems.append(f"{crate} does not inherit workspace rust-version")
+    if cfg.get("lints", {}).get("workspace") is not True:
+        problems.append(f"{crate} does not inherit workspace lints")
+for p in problems:
+    print(p)
+sys.exit(1 if problems else 0)
+PY
+)"
+  if [[ $? -eq 0 ]]; then
+    ok "Cargo workspace (workspace MSRV, pinned toolchain with rustfmt+clippy, crates inherit MSRV and lints)"
+  else
+    bad "Cargo workspace checks failed:"
+    echo "$problems"
+    fail=1
+  fi
+else
+  bad "Cargo workspace files missing (Cargo.toml, rust-toolchain.toml, crates/)"; fail=1
+fi
+
 exit "$fail"
