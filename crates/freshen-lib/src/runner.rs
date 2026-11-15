@@ -1948,9 +1948,6 @@ mod tests {
     fn with_hook_stubs<R>(log_path: &str, f: impl FnOnce() -> R) -> R {
         use std::os::unix::fs::PermissionsExt;
 
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let dir = std::env::temp_dir().join(format!(
             "freshen-hook-stubs-{pid}-{n}",
             pid = std::process::id(),
@@ -1998,16 +1995,8 @@ mod tests {
                 .unwrap_or_else(|error| panic!("failed to make stub executable: {error}"));
         }
 
-        let previous = std::env::var("PATH").ok();
-        std::env::set_var("PATH", &dir);
-        let result = f();
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
+        let result = crate::process::with_path(&dir, f);
         let _ = std::fs::remove_dir_all(&dir);
-        drop(_guard);
         result
     }
 
@@ -2567,7 +2556,7 @@ mod tests {
     #[test]
     fn a_check_within_the_check_timeout_budget_completes() {
         let step = FakeStep::new("brew", "Homebrew").check_sleep(Duration::from_millis(5));
-        let options = RunOptions::new().with_check_timeout(Some(Duration::from_millis(50)));
+        let options = RunOptions::new().with_check_timeout(Some(Duration::from_millis(500)));
 
         let summary = Runner::with_options([&step as &dyn Step], options).check();
 

@@ -318,10 +318,6 @@ mod tests {
         // `helm` may be installed on the machine the test runs on (CI runners
         // ship it), so detection must be exercised against a `PATH` that does
         // not contain `helm` instead of relying on the ambient environment.
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var("PATH").ok();
         let dir = std::env::temp_dir().join(format!(
             "freshen-helm-absent-{pid}",
             pid = std::process::id()
@@ -329,16 +325,12 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap_or_else(|error| {
             panic!("failed to create stub directory {}: {error}", dir.display())
         });
-        std::env::set_var("PATH", &dir);
-        assert!(
-            !detect_helm().is_installed(),
-            "helm must not be detected when absent from PATH"
-        );
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
+        crate::process::with_path(&dir, || {
+            assert!(
+                !detect_helm().is_installed(),
+                "helm must not be detected when absent from PATH"
+            );
+        });
         let _ = std::fs::remove_dir_all(&dir);
     }
 

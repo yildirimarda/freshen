@@ -103,30 +103,12 @@ fn finish(failures: Vec<StepError>) -> Result<(), StepError> {
 mod tests {
     use super::{PreCommitStep, PRE_COMMIT};
     use crate::platform::Platform;
-    use crate::process::PATH_GUARD;
     use crate::step::Step;
     use std::env;
     use std::fs;
-    use std::path::{Path, PathBuf};
-
-    /// Runs `f` with `PATH` replaced by `dir`, restoring the previous `PATH`
-    /// afterwards so the test does not depend on what happens to be installed
-    /// on the host machine.
-    fn with_path<F>(dir: &Path, f: F)
-    where
-        F: FnOnce(),
-    {
-        let _guard = PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = env::var_os("PATH");
-        env::set_var("PATH", dir);
-        f();
-        match previous {
-            Some(value) => env::set_var("PATH", value),
-            None => env::remove_var("PATH"),
-        }
-    }
+    #[cfg(unix)]
+    use std::path::Path;
+    use std::path::PathBuf;
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir =
@@ -153,7 +135,7 @@ mod tests {
     #[test]
     fn detect_reports_not_installed_when_pre_commit_is_absent() {
         let dir = temp_dir("absent");
-        with_path(&dir, || {
+        crate::process::with_path(&dir, || {
             assert!(!PreCommitStep::detect_pre_commit().is_installed());
         });
         let _ = fs::remove_dir_all(&dir);
@@ -177,7 +159,7 @@ mod tests {
              esac\n\
              exit 0\n",
         );
-        with_path(&dir, || {
+        crate::process::with_path(&dir, || {
             assert!(PreCommitStep::detect_pre_commit().is_installed());
         });
         let _ = fs::remove_dir_all(&dir);

@@ -454,13 +454,7 @@ mod tests {
     #[test]
     fn run_with_options_stops_process_before_upgrading() {
         let (dir, log) = stub_scoop_always_ok();
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous_path = std::env::var("PATH").ok();
         let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
-        std::env::set_var("PATH", &dir);
-        std::env::set_var("FRESHEN_SCOOP_LOG", &log);
 
         let fake = FakeProcessSystem::new()
             .with_process(100, "/Users/Alice/scoop/apps/git/current/bin/git.exe")
@@ -475,22 +469,24 @@ mod tests {
             process_system: Some(Box::new(fake)),
         };
 
-        // Use a short stop timeout so the test does not wait 20 seconds when
-        // the fake process does not stop after the graceful quit.
-        std::env::set_var("DESKTOP_STOP_TIMEOUT", "1");
-        let result = step.run_with_options(&RunOptions::new());
-        std::env::remove_var("DESKTOP_STOP_TIMEOUT");
+        let result = crate::process::with_path(&dir, || {
+            // `FRESHEN_SCOOP_LOG` is process-global, so it is mutated while
+            // holding `PATH_GUARD`, the same way `PATH` is; otherwise a parallel
+            // test would clobber the log variable this test's stub writes to.
+            std::env::set_var("FRESHEN_SCOOP_LOG", &log);
+            // Use a short stop timeout so the test does not wait 20 seconds when
+            // the fake process does not stop after the graceful quit.
+            std::env::set_var("DESKTOP_STOP_TIMEOUT", "1");
+            let result = step.run_with_options(&RunOptions::new());
+            std::env::remove_var("DESKTOP_STOP_TIMEOUT");
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_SCOOP_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_SCOOP_LOG");
+            }
+            result
+        });
 
-        if let Some(previous) = previous_path {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_SCOOP_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_SCOOP_LOG");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert!(result.is_ok(), "run should succeed: {result:?}");
@@ -505,14 +501,6 @@ mod tests {
     #[test]
     fn run_with_options_no_locations_means_no_stopping() {
         let (dir, log) = stub_scoop_always_ok();
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous_path = std::env::var("PATH").ok();
-        let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
-        std::env::set_var("PATH", &dir);
-        std::env::set_var("FRESHEN_SCOOP_LOG", &log);
-
         let fake = FakeProcessSystem::new()
             .with_process(100, "/Users/Alice/scoop/apps/git/current/bin/git.exe")
             .with_current_pid(999);
@@ -523,18 +511,17 @@ mod tests {
             process_system: Some(Box::new(fake)),
         };
 
-        let result = step.run_with_options(&RunOptions::new());
-
-        if let Some(previous) = previous_path {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_SCOOP_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_SCOOP_LOG");
-        }
+        let result = crate::process::with_path(&dir, || {
+            let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
+            std::env::set_var("FRESHEN_SCOOP_LOG", &log);
+            let result = step.run_with_options(&RunOptions::new());
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_SCOOP_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_SCOOP_LOG");
+            }
+            result
+        });
         let _ = std::fs::remove_dir_all(&dir);
 
         assert!(result.is_ok());
@@ -655,24 +642,16 @@ mod tests {
              curl 7.81.0 -> 7.88.0\n\
              git 2.34.1 -> 2.40.1\n",
         );
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var("PATH").ok();
-        std::env::set_var("PATH", &dir);
 
-        let options = RunOptions::new().with_filters(
-            ItemFilters::new().with_packages(NameFilter::new().with_exclude(["git"])),
-        );
-        let report = ScoopStep::new()
-            .check_with_options(&options)
-            .unwrap_or_else(|error| panic!("check should succeed: {error}"));
+        let report = crate::process::with_path(&dir, || {
+            let options = RunOptions::new().with_filters(
+                ItemFilters::new().with_packages(NameFilter::new().with_exclude(["git"])),
+            );
+            ScoopStep::new()
+                .check_with_options(&options)
+                .unwrap_or_else(|error| panic!("check should succeed: {error}"))
+        });
 
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(report.pending(), 1);
@@ -683,21 +662,13 @@ mod tests {
     #[test]
     fn detect_reports_installed_when_scoop_is_on_path() {
         let dir = stub_scoop_with_status_output("All apps are up to date.\n");
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var("PATH").ok();
-        std::env::set_var("PATH", &dir);
 
-        let detection = ScoopStep::new()
-            .detect()
-            .unwrap_or_else(|error| panic!("detect should succeed: {error}"));
+        let detection = crate::process::with_path(&dir, || {
+            ScoopStep::new()
+                .detect()
+                .unwrap_or_else(|error| panic!("detect should succeed: {error}"))
+        });
 
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(detection, Detection::Installed);
@@ -713,21 +684,12 @@ mod tests {
             panic!("failed to create stub directory {}: {error}", dir.display())
         });
 
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var("PATH").ok();
-        std::env::set_var("PATH", &dir);
+        let detection = crate::process::with_path(&dir, || {
+            ScoopStep::new()
+                .detect()
+                .unwrap_or_else(|error| panic!("detect should succeed: {error}"))
+        });
 
-        let detection = ScoopStep::new()
-            .detect()
-            .unwrap_or_else(|error| panic!("detect should succeed: {error}"));
-
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(detection, Detection::NotInstalled);
@@ -775,27 +737,17 @@ mod tests {
                 .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
         }
 
-        let previous_path = std::env::var("PATH").ok();
-        let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
-
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::set_var("PATH", &dir);
-        std::env::set_var("FRESHEN_SCOOP_LOG", &log);
-
-        let result = ScoopStep::new().run();
-
-        if let Some(previous) = previous_path {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_SCOOP_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_SCOOP_LOG");
-        }
+        let result = crate::process::with_path(&dir, || {
+            let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
+            std::env::set_var("FRESHEN_SCOOP_LOG", &log);
+            let result = ScoopStep::new().run();
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_SCOOP_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_SCOOP_LOG");
+            }
+            result
+        });
 
         assert!(result.is_ok(), "scoop run should succeed");
 
@@ -858,27 +810,17 @@ mod tests {
                 .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
         }
 
-        let previous_path = std::env::var("PATH").ok();
-        let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
-
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::set_var("PATH", &dir);
-        std::env::set_var("FRESHEN_SCOOP_LOG", &log);
-
-        let result = ScoopStep::new().run();
-
-        if let Some(previous) = previous_path {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_SCOOP_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_SCOOP_LOG");
-        }
+        let result = crate::process::with_path(&dir, || {
+            let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
+            std::env::set_var("FRESHEN_SCOOP_LOG", &log);
+            let result = ScoopStep::new().run();
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_SCOOP_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_SCOOP_LOG");
+            }
+            result
+        });
 
         let calls = std::fs::read_to_string(&log).unwrap_or_default();
         let _ = std::fs::remove_dir_all(&dir);
@@ -948,27 +890,21 @@ mod tests {
     #[test]
     fn run_with_cleanup_runs_scoop_cleanup_star() {
         let (dir, log) = stub_scoop_logging_calls();
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous_path = std::env::var("PATH").ok();
-        let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
-        std::env::set_var("PATH", &dir);
-        std::env::set_var("FRESHEN_SCOOP_LOG", &log);
 
-        let options = RunOptions::new().with_cleanup(true);
-        let result = ScoopStep::new().run_with_options(&options);
-
-        if let Some(previous) = previous_path {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_SCOOP_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_SCOOP_LOG");
-        }
+        let result = crate::process::with_path(&dir, || {
+            let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
+            std::env::set_var("FRESHEN_SCOOP_LOG", &log);
+            let result = {
+                let options = RunOptions::new().with_cleanup(true);
+                ScoopStep::new().run_with_options(&options)
+            };
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_SCOOP_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_SCOOP_LOG");
+            }
+            result
+        });
 
         assert!(result.is_ok(), "scoop run with cleanup should succeed");
 
@@ -992,27 +928,21 @@ mod tests {
     #[test]
     fn run_without_cleanup_skips_scoop_cleanup_star() {
         let (dir, log) = stub_scoop_logging_calls();
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous_path = std::env::var("PATH").ok();
-        let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
-        std::env::set_var("PATH", &dir);
-        std::env::set_var("FRESHEN_SCOOP_LOG", &log);
 
-        let options = RunOptions::new();
-        let result = ScoopStep::new().run_with_options(&options);
-
-        if let Some(previous) = previous_path {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_SCOOP_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_SCOOP_LOG");
-        }
+        let result = crate::process::with_path(&dir, || {
+            let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
+            std::env::set_var("FRESHEN_SCOOP_LOG", &log);
+            let result = {
+                let options = RunOptions::new();
+                ScoopStep::new().run_with_options(&options)
+            };
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_SCOOP_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_SCOOP_LOG");
+            }
+            result
+        });
 
         assert!(result.is_ok(), "scoop run without cleanup should succeed");
 
@@ -1031,27 +961,21 @@ mod tests {
     #[test]
     fn run_with_cleanup_runs_scoop_cache_rm_star() {
         let (dir, log) = stub_scoop_logging_calls();
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous_path = std::env::var("PATH").ok();
-        let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
-        std::env::set_var("PATH", &dir);
-        std::env::set_var("FRESHEN_SCOOP_LOG", &log);
 
-        let options = RunOptions::new().with_cleanup(true);
-        let result = ScoopStep::new().run_with_options(&options);
-
-        if let Some(previous) = previous_path {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_SCOOP_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_SCOOP_LOG");
-        }
+        let result = crate::process::with_path(&dir, || {
+            let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
+            std::env::set_var("FRESHEN_SCOOP_LOG", &log);
+            let result = {
+                let options = RunOptions::new().with_cleanup(true);
+                ScoopStep::new().run_with_options(&options)
+            };
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_SCOOP_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_SCOOP_LOG");
+            }
+            result
+        });
 
         assert!(result.is_ok(), "scoop run with cleanup should succeed");
 
@@ -1075,27 +999,21 @@ mod tests {
     #[test]
     fn run_without_cleanup_skips_scoop_cache_rm_star() {
         let (dir, log) = stub_scoop_logging_calls();
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous_path = std::env::var("PATH").ok();
-        let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
-        std::env::set_var("PATH", &dir);
-        std::env::set_var("FRESHEN_SCOOP_LOG", &log);
 
-        let options = RunOptions::new();
-        let result = ScoopStep::new().run_with_options(&options);
-
-        if let Some(previous) = previous_path {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_SCOOP_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_SCOOP_LOG");
-        }
+        let result = crate::process::with_path(&dir, || {
+            let previous_log = std::env::var("FRESHEN_SCOOP_LOG").ok();
+            std::env::set_var("FRESHEN_SCOOP_LOG", &log);
+            let result = {
+                let options = RunOptions::new();
+                ScoopStep::new().run_with_options(&options)
+            };
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_SCOOP_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_SCOOP_LOG");
+            }
+            result
+        });
 
         assert!(result.is_ok(), "scoop run without cleanup should succeed");
 

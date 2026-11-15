@@ -171,27 +171,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     use std::fs;
     #[cfg(target_os = "linux")]
-    use std::path::{Path, PathBuf};
-
-    /// Runs `f` with `PATH` replaced by `dir`, restoring the previous `PATH`
-    /// afterwards so the test does not depend on what happens to be installed
-    /// on the host machine.
-    #[cfg(target_os = "linux")]
-    fn with_path<F>(dir: &Path, f: F)
-    where
-        F: FnOnce(),
-    {
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = env::var_os("PATH");
-        env::set_var("PATH", dir);
-        f();
-        match previous {
-            Some(value) => env::set_var("PATH", value),
-            None => env::remove_var("PATH"),
-        }
-    }
+    use std::path::PathBuf;
 
     #[cfg(target_os = "linux")]
     fn temp_dir(name: &str) -> PathBuf {
@@ -213,7 +193,7 @@ mod tests {
     #[test]
     fn detect_snap_reports_not_installed_when_absent_from_path() {
         let dir = temp_dir("absent");
-        with_path(&dir, || {
+        crate::process::with_path(&dir, || {
             assert!(!detect_snap().is_installed());
         });
         let _ = fs::remove_dir_all(&dir);
@@ -233,7 +213,7 @@ mod tests {
             panic!("failed to make {} executable: {error}", program.display())
         });
 
-        with_path(&dir, || {
+        crate::process::with_path(&dir, || {
             assert!(detect_snap().is_installed());
         });
         let _ = fs::remove_dir_all(&dir);

@@ -594,13 +594,7 @@ mod tests {
     #[test]
     fn run_with_options_stops_process_before_upgrading() {
         let (dir, log) = stub_choco_always_ok();
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous_path = std::env::var("PATH").ok();
         let previous_log = std::env::var("FRESHEN_CHOCO_LOG").ok();
-        std::env::set_var("PATH", &dir);
-        std::env::set_var("FRESHEN_CHOCO_LOG", &log);
 
         let fake = FakeProcessSystem::new()
             .with_process(100, "/Program Files/Chocolatey/lib/git/tools/git.exe")
@@ -615,22 +609,24 @@ mod tests {
             process_system: Some(Box::new(fake)),
         };
 
-        // Use a short stop timeout so the test does not wait 20 seconds when
-        // the fake process does not stop after the graceful quit.
-        std::env::set_var("DESKTOP_STOP_TIMEOUT", "1");
-        let result = step.run_with_options(&RunOptions::new());
-        std::env::remove_var("DESKTOP_STOP_TIMEOUT");
+        let result = crate::process::with_path(&dir, || {
+            // `FRESHEN_CHOCO_LOG` is process-global, so it is mutated while
+            // holding `PATH_GUARD`, the same way `PATH` is; otherwise a parallel
+            // test would clobber the log variable this test's stub writes to.
+            std::env::set_var("FRESHEN_CHOCO_LOG", &log);
+            // Use a short stop timeout so the test does not wait 20 seconds when
+            // the fake process does not stop after the graceful quit.
+            std::env::set_var("DESKTOP_STOP_TIMEOUT", "1");
+            let result = step.run_with_options(&RunOptions::new());
+            std::env::remove_var("DESKTOP_STOP_TIMEOUT");
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_CHOCO_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_CHOCO_LOG");
+            }
+            result
+        });
 
-        if let Some(previous) = previous_path {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_CHOCO_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_CHOCO_LOG");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert!(result.is_ok(), "run should succeed: {result:?}");
@@ -645,13 +641,7 @@ mod tests {
     #[test]
     fn run_with_options_no_locations_means_no_stopping() {
         let (dir, log) = stub_choco_always_ok();
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous_path = std::env::var("PATH").ok();
         let previous_log = std::env::var("FRESHEN_CHOCO_LOG").ok();
-        std::env::set_var("PATH", &dir);
-        std::env::set_var("FRESHEN_CHOCO_LOG", &log);
 
         let fake = FakeProcessSystem::new()
             .with_process(100, "/Program Files/Chocolatey/lib/git/tools/git.exe")
@@ -663,18 +653,20 @@ mod tests {
             process_system: Some(Box::new(fake)),
         };
 
-        let result = step.run_with_options(&RunOptions::new());
+        let result = crate::process::with_path(&dir, || {
+            // `FRESHEN_CHOCO_LOG` is process-global, so it is mutated while
+            // holding `PATH_GUARD`, the same way `PATH` is; otherwise a parallel
+            // test would clobber the log variable this test's stub writes to.
+            std::env::set_var("FRESHEN_CHOCO_LOG", &log);
+            let result = step.run_with_options(&RunOptions::new());
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_CHOCO_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_CHOCO_LOG");
+            }
+            result
+        });
 
-        if let Some(previous) = previous_path {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_CHOCO_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_CHOCO_LOG");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert!(result.is_ok());
@@ -731,21 +723,11 @@ mod tests {
     #[test]
     fn detect_reports_installed_when_choco_is_on_path() {
         let dir = stub_choco();
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var("PATH").ok();
-        std::env::set_var("PATH", &dir);
-
-        let detection = ChocolateyStep::new()
-            .detect()
-            .unwrap_or_else(|error| panic!("detect should succeed: {error}"));
-
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
+        let detection = crate::process::with_path(&dir, || {
+            ChocolateyStep::new()
+                .detect()
+                .unwrap_or_else(|error| panic!("detect should succeed: {error}"))
+        });
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(detection, Detection::Installed);
@@ -761,21 +743,11 @@ mod tests {
             panic!("failed to create stub directory {}: {error}", dir.display())
         });
 
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var("PATH").ok();
-        std::env::set_var("PATH", &dir);
-
-        let detection = ChocolateyStep::new()
-            .detect()
-            .unwrap_or_else(|error| panic!("detect should succeed: {error}"));
-
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
+        let detection = crate::process::with_path(&dir, || {
+            ChocolateyStep::new()
+                .detect()
+                .unwrap_or_else(|error| panic!("detect should succeed: {error}"))
+        });
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(detection, Detection::NotInstalled);
@@ -897,21 +869,14 @@ mod tests {
     fn check_reports_outdated_packages_and_holds_back_pinned_ones() {
         let dir =
             stub_choco_with_outdated_output("git|2.45.2|2.46.0|\npython|3.11.0|3.11.1|pinned\n");
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var("PATH").ok();
-        std::env::set_var("PATH", &dir);
 
-        let report = ChocolateyStep::new()
-            .check_with_options(&RunOptions::new())
-            .unwrap_or_else(|error| panic!("check should succeed: {error}"));
+        let report = crate::process::with_path(&dir, || {
+            let report = ChocolateyStep::new()
+                .check_with_options(&RunOptions::new())
+                .unwrap_or_else(|error| panic!("check should succeed: {error}"));
+            report
+        });
 
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(report.pending(), 2);
@@ -936,22 +901,14 @@ mod tests {
     #[test]
     fn check_excludes_excepted_packages() {
         let dir = stub_choco_with_outdated_output("git|2.45.2|2.46.0|\npython|3.11.0|3.11.1|\n");
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var("PATH").ok();
-        std::env::set_var("PATH", &dir);
 
-        let options = RunOptions::new().with_chocolatey_except(["python"]);
-        let report = ChocolateyStep::new()
-            .check_with_options(&options)
-            .unwrap_or_else(|error| panic!("check should succeed: {error}"));
+        let report = crate::process::with_path(&dir, || {
+            let options = RunOptions::new().with_chocolatey_except(["python"]);
+            ChocolateyStep::new()
+                .check_with_options(&options)
+                .unwrap_or_else(|error| panic!("check should succeed: {error}"))
+        });
 
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(report.pending(), 1);
@@ -968,21 +925,13 @@ mod tests {
     #[test]
     fn check_reports_nothing_when_no_outdated_packages() {
         let dir = stub_choco_with_outdated_output("");
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var("PATH").ok();
-        std::env::set_var("PATH", &dir);
 
-        let report = ChocolateyStep::new()
-            .check_with_options(&RunOptions::new())
-            .unwrap_or_else(|error| panic!("check should succeed: {error}"));
+        let report = crate::process::with_path(&dir, || {
+            ChocolateyStep::new()
+                .check_with_options(&RunOptions::new())
+                .unwrap_or_else(|error| panic!("check should succeed: {error}"))
+        });
 
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert!(report.is_up_to_date());
@@ -1069,19 +1018,11 @@ mod tests {
     #[test]
     fn run_upgrades_chocolatey_itself_first_then_each_package() {
         let dir = stub_choco_for_run("git|2.45.2|2.46.0|\npython|3.11.0|3.11.1|\n");
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var("PATH").ok();
-        std::env::set_var("PATH", &dir);
 
-        let result = ChocolateyStep::new().run_with_options(&RunOptions::new());
+        let result = crate::process::with_path(&dir, || {
+            ChocolateyStep::new().run_with_options(&RunOptions::new())
+        });
 
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert!(result.is_ok(), "run should succeed: {result:?}");
@@ -1090,21 +1031,14 @@ mod tests {
     #[test]
     fn run_reports_failed_when_a_package_upgrade_fails() {
         let dir = stub_choco_for_run("git|2.45.2|2.46.0|\npython|3.11.0|3.11.1|\n");
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var("PATH").ok();
-        std::env::set_var("PATH", &dir);
-        std::env::set_var("FRESHEN_CHOCO_FAIL_PACKAGE", "python");
 
-        let result = ChocolateyStep::new().run_with_options(&RunOptions::new());
+        let result = crate::process::with_path(&dir, || {
+            std::env::set_var("FRESHEN_CHOCO_FAIL_PACKAGE", "python");
+            let result = ChocolateyStep::new().run_with_options(&RunOptions::new());
+            std::env::remove_var("FRESHEN_CHOCO_FAIL_PACKAGE");
+            result
+        });
 
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        std::env::remove_var("FRESHEN_CHOCO_FAIL_PACKAGE");
         let _ = std::fs::remove_dir_all(&dir);
 
         let error = match result {
@@ -1123,23 +1057,16 @@ mod tests {
     #[test]
     fn run_skips_pinned_packages() {
         let dir = stub_choco_for_run("git|2.45.2|2.46.0|\npython|3.11.0|3.11.1|pinned\n");
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var("PATH").ok();
-        std::env::set_var("PATH", &dir);
-        // If the pinned package were upgraded, this would fail, so a successful
-        // run proves pinned packages are skipped.
-        std::env::set_var("FRESHEN_CHOCO_FAIL_PACKAGE", "python");
 
-        let result = ChocolateyStep::new().run_with_options(&RunOptions::new());
+        let result = crate::process::with_path(&dir, || {
+            // If the pinned package were upgraded, this would fail, so a successful
+            // run proves pinned packages are skipped.
+            std::env::set_var("FRESHEN_CHOCO_FAIL_PACKAGE", "python");
+            let result = ChocolateyStep::new().run_with_options(&RunOptions::new());
+            std::env::remove_var("FRESHEN_CHOCO_FAIL_PACKAGE");
+            result
+        });
 
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        std::env::remove_var("FRESHEN_CHOCO_FAIL_PACKAGE");
         let _ = std::fs::remove_dir_all(&dir);
 
         assert!(
@@ -1151,24 +1078,17 @@ mod tests {
     #[test]
     fn run_skips_excepted_packages() {
         let dir = stub_choco_for_run("git|2.45.2|2.46.0|\npython|3.11.0|3.11.1|\n");
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var("PATH").ok();
-        std::env::set_var("PATH", &dir);
-        // If python were upgraded, this would fail, so a successful run proves
-        // the excepted package is skipped instead of upgraded.
-        std::env::set_var("FRESHEN_CHOCO_FAIL_PACKAGE", "python");
 
-        let options = RunOptions::new().with_chocolatey_except(["python"]);
-        let result = ChocolateyStep::new().run_with_options(&options);
+        let result = crate::process::with_path(&dir, || {
+            // If python were upgraded, this would fail, so a successful run proves
+            // the excepted package is skipped instead of upgraded.
+            std::env::set_var("FRESHEN_CHOCO_FAIL_PACKAGE", "python");
+            let options = RunOptions::new().with_chocolatey_except(["python"]);
+            let result = ChocolateyStep::new().run_with_options(&options);
+            std::env::remove_var("FRESHEN_CHOCO_FAIL_PACKAGE");
+            result
+        });
 
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        std::env::remove_var("FRESHEN_CHOCO_FAIL_PACKAGE");
         let _ = std::fs::remove_dir_all(&dir);
 
         assert!(result.is_ok(), "excepted package should not be upgraded");
@@ -1182,19 +1102,11 @@ mod tests {
     #[test]
     fn run_reports_nothing_when_no_outdated_packages() {
         let dir = stub_choco_for_run("");
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var("PATH").ok();
-        std::env::set_var("PATH", &dir);
 
-        let result = ChocolateyStep::new().run_with_options(&RunOptions::new());
+        let result = crate::process::with_path(&dir, || {
+            ChocolateyStep::new().run_with_options(&RunOptions::new())
+        });
 
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert!(result.is_ok(), "run should succeed: {result:?}");
@@ -1203,21 +1115,14 @@ mod tests {
     #[test]
     fn run_reports_failed_when_chocolatey_itself_fails() {
         let dir = stub_choco_for_run("git|2.45.2|2.46.0|\n");
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var("PATH").ok();
-        std::env::set_var("PATH", &dir);
-        std::env::set_var("FRESHEN_CHOCO_FAIL_CHOCOLATEY", "1");
 
-        let result = ChocolateyStep::new().run_with_options(&RunOptions::new());
+        let result = crate::process::with_path(&dir, || {
+            std::env::set_var("FRESHEN_CHOCO_FAIL_CHOCOLATEY", "1");
+            let result = ChocolateyStep::new().run_with_options(&RunOptions::new());
+            std::env::remove_var("FRESHEN_CHOCO_FAIL_CHOCOLATEY");
+            result
+        });
 
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        std::env::remove_var("FRESHEN_CHOCO_FAIL_CHOCOLATEY");
         let _ = std::fs::remove_dir_all(&dir);
 
         let error = match result {
@@ -1242,19 +1147,11 @@ mod tests {
     #[test]
     fn run_does_not_report_reboot_pending_on_clean_exit_zero() {
         let dir = stub_choco_for_run("git|2.45.2|2.46.0|\n");
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var("PATH").ok();
-        std::env::set_var("PATH", &dir);
 
-        let result = ChocolateyStep::new().run_with_options(&RunOptions::new());
+        let result = crate::process::with_path(&dir, || {
+            ChocolateyStep::new().run_with_options(&RunOptions::new())
+        });
 
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
         let _ = std::fs::remove_dir_all(&dir);
 
         assert!(result.is_ok(), "exit 0 should succeed: {result:?}");

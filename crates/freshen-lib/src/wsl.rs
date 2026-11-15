@@ -272,7 +272,7 @@ mod tests {
         wrap_in_distro, WslStep, COLIMA_STOP, WSL,
     };
     use crate::options::RunOptions;
-    use crate::process::{CommandSpec, PATH_GUARD};
+    use crate::process::CommandSpec;
     use crate::step::{CheckReport, Detection, Step, StepError, StepId};
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -399,21 +399,11 @@ mod tests {
         F: FnOnce() -> R,
     {
         let log = dir.join("calls.log");
-        let _guard = PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var("PATH").ok();
         let previous_log = std::env::var("FRESHEN_WSL_LOG").ok();
-        std::env::set_var("PATH", dir);
         std::env::set_var("FRESHEN_WSL_LOG", &log);
 
-        let result = f();
+        let result = crate::process::with_path(dir, f);
 
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
         if let Some(previous) = previous_log {
             std::env::set_var("FRESHEN_WSL_LOG", previous);
         } else {

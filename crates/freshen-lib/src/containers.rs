@@ -3464,7 +3464,7 @@ mod tests {
     use crate::options::RunOptions;
     use crate::platform::Platform;
     use crate::policy::{ItemFilters, NameFilter};
-    use crate::process::{ProcessError, PATH_GUARD};
+    use crate::process::ProcessError;
     use crate::registry::Registry;
     use crate::step::{Detection, Step, StepId};
     #[cfg(windows)]
@@ -4826,50 +4826,49 @@ mod tests {
     #[test]
     fn docker_builder_prune_runs_only_with_cleanup() {
         let (dir, log) = stub_docker_logging_calls();
-        let _guard = PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous_path = std::env::var("PATH").ok();
         let previous_log = std::env::var("FRESHEN_DOCKER_LOG").ok();
         let previous_host = std::env::var("DOCKER_HOST").ok();
-        std::env::set_var("PATH", &dir);
-        std::env::set_var("FRESHEN_DOCKER_LOG", &log);
-        std::env::remove_var("DOCKER_HOST");
 
-        let options = RunOptions::new().with_cleanup(true);
-        let runtime: Arc<dyn ContainerRuntime> = Arc::new(FakeRuntime);
-        let step = DockerStep::new(runtime, None, "docker");
-        let result = step.run_with_options(&options);
-
-        let calls = {
-            let deadline = Instant::now() + Duration::from_secs(30);
-            loop {
-                let calls = read_docker_calls(&log);
-                if calls.iter().any(|call| call == "docker builder prune -f")
-                    || Instant::now() >= deadline
-                {
-                    break calls;
-                }
-                thread::sleep(Duration::from_millis(10));
-            }
-        };
-
-        if let Some(previous) = previous_path {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_DOCKER_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_DOCKER_LOG");
-        }
-        if let Some(previous) = previous_host {
-            std::env::set_var("DOCKER_HOST", previous);
-        } else {
+        let (result, calls) = crate::process::with_path(&dir, || {
+            // `FRESHEN_DOCKER_LOG` and `DOCKER_HOST` are process-global, so they
+            // are mutated while holding `PATH_GUARD`, the same way `PATH` is;
+            // otherwise a parallel test would clobber the log variable this
+            // test's stub writes to.
+            std::env::set_var("FRESHEN_DOCKER_LOG", &log);
             std::env::remove_var("DOCKER_HOST");
-        }
-        let _ = std::fs::remove_dir_all(&dir);
+
+            let options = RunOptions::new().with_cleanup(true);
+            let runtime: Arc<dyn ContainerRuntime> = Arc::new(FakeRuntime);
+            let step = DockerStep::new(runtime, None, "docker");
+            let result = step.run_with_options(&options);
+
+            let calls = {
+                let deadline = Instant::now() + Duration::from_secs(30);
+                loop {
+                    let calls = read_docker_calls(&log);
+                    if calls.iter().any(|call| call == "docker builder prune -f")
+                        || Instant::now() >= deadline
+                    {
+                        break calls;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+            };
+
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_DOCKER_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_DOCKER_LOG");
+            }
+            if let Some(previous) = previous_host {
+                std::env::set_var("DOCKER_HOST", previous);
+            } else {
+                std::env::remove_var("DOCKER_HOST");
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+
+            (result, calls)
+        });
 
         assert!(result.is_ok(), "docker run with cleanup should succeed");
 
@@ -4898,39 +4897,36 @@ mod tests {
     #[test]
     fn docker_builder_prune_is_skipped_without_cleanup() {
         let (dir, log) = stub_docker_logging_calls();
-        let _guard = PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous_path = std::env::var("PATH").ok();
         let previous_log = std::env::var("FRESHEN_DOCKER_LOG").ok();
         let previous_host = std::env::var("DOCKER_HOST").ok();
-        std::env::set_var("PATH", &dir);
-        std::env::set_var("FRESHEN_DOCKER_LOG", &log);
-        std::env::remove_var("DOCKER_HOST");
 
-        let options = RunOptions::new();
-        let runtime: Arc<dyn ContainerRuntime> = Arc::new(FakeRuntime);
-        let step = DockerStep::new(runtime, None, "docker");
-        let result = step.run_with_options(&options);
-
-        let calls = read_docker_calls(&log);
-
-        if let Some(previous) = previous_path {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_DOCKER_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_DOCKER_LOG");
-        }
-        if let Some(previous) = previous_host {
-            std::env::set_var("DOCKER_HOST", previous);
-        } else {
+        let (result, calls) = crate::process::with_path(&dir, || {
+            // `FRESHEN_DOCKER_LOG` and `DOCKER_HOST` are process-global, so they
+            // are mutated while holding `PATH_GUARD`, the same way `PATH` is.
+            std::env::set_var("FRESHEN_DOCKER_LOG", &log);
             std::env::remove_var("DOCKER_HOST");
-        }
-        let _ = std::fs::remove_dir_all(&dir);
+
+            let options = RunOptions::new();
+            let runtime: Arc<dyn ContainerRuntime> = Arc::new(FakeRuntime);
+            let step = DockerStep::new(runtime, None, "docker");
+            let result = step.run_with_options(&options);
+
+            let calls = read_docker_calls(&log);
+
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_DOCKER_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_DOCKER_LOG");
+            }
+            if let Some(previous) = previous_host {
+                std::env::set_var("DOCKER_HOST", previous);
+            } else {
+                std::env::remove_var("DOCKER_HOST");
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+
+            (result, calls)
+        });
 
         assert!(result.is_ok(), "docker run without cleanup should succeed");
 

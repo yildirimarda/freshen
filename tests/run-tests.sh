@@ -484,4 +484,54 @@ else
   bad "Cargo workspace files missing (Cargo.toml, rust-toolchain.toml, crates/)"; fail=1
 fi
 
+# 20. The global `PATH` may only be mutated inside the shared
+#     `crate::process::with_path` test helper
+#     (crates/freshen-lib/src/process.rs). Any other `set_var("PATH"` /
+#     `remove_var("PATH"` in a source file lets one parallel test clobber
+#     another test's `PATH` (the sudo tests broke the Windows Update stub
+#     tests intermittently on macOS this way).
+python3 - <<'PY'
+import pathlib, re
+crates = pathlib.Path("crates")
+pat = re.compile(r'set_var\("PATH"|remove_var\("PATH"')
+helper = crates / "freshen-lib" / "src" / "process.rs"
+violations = []
+helper_start = helper_end = None
+if helper.exists():
+    lines = helper.read_text().splitlines()
+    for i, line in enumerate(lines):
+        if re.search(r'\bfn\s+with_path\b', line):
+            helper_start = i
+            depth = 0
+            entered = False
+            for j in range(i + 1, len(lines)):
+                depth += lines[j].count("{") - lines[j].count("}")
+                if depth > 0:
+                    entered = True
+                if entered and depth <= 0:
+                    helper_end = j
+                    break
+            break
+for path in crates.rglob("*.rs"):
+    text_lines = path.read_text().splitlines()
+    for i, line in enumerate(text_lines, 1):
+        if not pat.search(line):
+            continue
+        if path == helper and helper_start is not None and helper_end is not None:
+            if helper_start + 1 <= i <= helper_end + 1:
+                continue  # inside the shared helper: allowed
+        violations.append(f"{path}:{i}")
+if violations:
+    print("PATH mutated outside crate::process::with_path:")
+    for v in violations:
+        print(f"  {v}")
+    raise SystemExit(1)
+PY
+if [[ $? -ne 0 ]]; then
+  bad "PATH mutated outside crate::process::with_path"
+  fail=1
+else
+  ok "no PATH mutation outside crate::process::with_path"
+fi
+
 exit "$fail"

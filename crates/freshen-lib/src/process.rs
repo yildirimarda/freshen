@@ -26,6 +26,8 @@
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{BufRead, BufReader, Read};
+#[cfg(test)]
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -47,6 +49,31 @@ const POLL_INTERVAL: Duration = Duration::from_millis(10);
 /// `PATH` while cargo runs tests in parallel.
 #[cfg(test)]
 pub(crate) static PATH_GUARD: Mutex<()> = Mutex::new(());
+
+/// Runs `f` with `PATH` replaced by `dir`, holding `PATH_GUARD` for the whole
+/// mutation and restoring `PATH` afterwards - even when `f` panics - so one
+/// test can never clobber the `PATH` another test relies on while tests run
+/// in parallel. Returns `f`'s result.
+#[cfg(test)]
+pub(crate) fn with_path<F, R>(dir: &Path, f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    let _guard = PATH_GUARD
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let previous = std::env::var_os("PATH");
+    std::env::set_var("PATH", dir);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    match previous {
+        Some(value) => std::env::set_var("PATH", value),
+        None => std::env::remove_var("PATH"),
+    }
+    match result {
+        Ok(value) => value,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
 
 /// How long to wait for reader threads after the child has been reaped.
 ///
@@ -1764,10 +1791,6 @@ mod tests {
     fn streams_lines_while_the_command_is_still_running() {
         // Stub `sleep` so the test does not depend on an external `sleep`
         // binary being installed (minimal containers may not ship one).
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var("PATH").ok();
         let dir = std::env::temp_dir().join(format!(
             "freshen-process-stub-sleep-{pid}",
             pid = std::process::id()
@@ -1787,35 +1810,31 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
             .unwrap_or_else(|error| panic!("failed to make stub executable: {error}"));
-        std::env::set_var("PATH", &dir);
 
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let handle = std::thread::spawn(move || {
-            shell("printf 'first\\n'; sleep 1; printf 'second\\n'").run_streaming(
-                move |stream, line| {
-                    let _ = sender.send((stream, line.to_owned()));
-                },
-            )
+        // Hold the PATH guard only until the child has been spawned: parallel
+        // tests may otherwise replace `PATH` with a directory that lacks
+        // `sleep` between our `set_var` and the spawn. The spawned shell
+        // inherits `PATH`, so it keeps resolving `sleep` to our stub after we
+        // restore `PATH`.
+        let handle = crate::process::with_path(&dir, || {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let handle = std::thread::spawn(move || {
+                shell("printf 'first\\n'; sleep 1; printf 'second\\n'").run_streaming(
+                    move |stream, line| {
+                        let _ = sender.send((stream, line.to_owned()));
+                    },
+                )
+            });
+
+            let first = match receiver.recv_timeout(Duration::from_millis(800)) {
+                Ok(chunk) => chunk,
+                Err(error) => panic!("no live output before the process exited: {error}"),
+            };
+            assert_eq!(first, (OutputStream::Stdout, "first".to_owned()));
+            handle
         });
 
-        // Wait until the child has been spawned (it streams "first"
-        // immediately) before releasing the PATH guard: parallel tests may
-        // otherwise replace `PATH` with a directory that lacks `sleep`
-        // between our `set_var` and the spawn, and the spawn itself is not
-        // synchronized with the thread start.
-        let first = match receiver.recv_timeout(Duration::from_millis(800)) {
-            Ok(chunk) => chunk,
-            Err(error) => panic!("no live output before the process exited: {error}"),
-        };
-        assert_eq!(first, (OutputStream::Stdout, "first".to_owned()));
-
-        if let Some(previous) = previous {
-            std::env::set_var("PATH", previous);
-        } else {
-            std::env::remove_var("PATH");
-        }
         let _ = std::fs::remove_dir_all(&dir);
-        drop(_guard);
 
         match handle.join() {
             Ok(Ok(output)) => {
@@ -2363,7 +2382,7 @@ mod tests {
                 .unwrap_or_else(|error| panic!("failed to read {}: {error}", file.display()));
             let lines: Vec<&str> = content.lines().collect();
             for (index, line) in lines.iter().enumerate() {
-                if !line.contains(r#"set_var("PATH""#) {
+                if !line.contains("set_var(\"PATH\"") {
                     continue;
                 }
                 let mut fn_start = 0;

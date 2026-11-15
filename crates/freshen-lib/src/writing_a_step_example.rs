@@ -176,11 +176,22 @@ mod tests {
     fn detect_reports_not_installed_when_sample_is_absent() {
         // `sample` is not installed in the test environment, so detection
         // reports NotInstalled and the step is skipped gracefully instead of
-        // failing.
+        // failing. Run detection under `with_path` with a stub `PATH` that
+        // contains no `sample`: the ambient `PATH` cannot be relied on to
+        // lack `sample` (macOS ships a real `/usr/bin/sample`), and while a
+        // parallel test holds `PATH_GUARD` its stub directory is this test's
+        // `PATH`.
+        let empty = std::env::temp_dir().join("freshen-sample-absent");
+        std::fs::create_dir_all(&empty).unwrap_or_else(|error| {
+            panic!(
+                "failed to create stub directory {}: {error}",
+                empty.display()
+            )
+        });
         let step = SampleStep;
-        assert!(step
-            .detect()
+        assert!(crate::process::with_path(&empty, || step.detect())
             .is_ok_and(|detection| !detection.is_installed()));
+        let _ = std::fs::remove_dir_all(&empty);
     }
 
     #[test]

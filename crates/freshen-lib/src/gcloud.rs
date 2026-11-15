@@ -297,7 +297,7 @@ mod tests {
     use crate::step::{Detection, Operation, Step};
     use std::env;
     use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::sync::{Arc, Mutex};
 
     /// A `gcloud` that replays recorded transcripts.
@@ -385,98 +385,37 @@ mod tests {
         assert!(GcloudStep::new().is_user_level());
     }
 
-    /// A stub directory on `PATH` whose commands always exit 0 and log their
-    /// invocation to `$FRESHEN_GCLOUD_LOG`.
-    fn stub_dir() -> (PathBuf, PathBuf) {
+    /// Runs `f` with `gcloud` and the given package managers on `PATH`,
+    /// restoring `PATH` afterwards.
+    ///
+    /// Holds `crate::process::PATH_GUARD` (via `crate::process::with_path`)
+    /// for the whole mutation so parallel tests cannot replace `PATH` (and
+    /// wipe a stub such as `choco`) out from under another test. All stubs
+    /// are written into a single directory so `PATH` is replaced by that one
+    /// directory rather than appended to the ambient `PATH`.
+    fn with_path_guard(pms: &[&str], f: impl FnOnce()) {
+        let previous_log = env::var("FRESHEN_GCLOUD_LOG").ok();
+        env::set_var("FRESHEN_GCLOUD_LOG", "");
+
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = env::temp_dir().join(format!("freshen-gcloud-{}-{}", std::process::id(), id));
         fs::create_dir_all(&dir).unwrap_or_else(|error| {
             panic!("failed to create stub directory {}: {error}", dir.display())
         });
-        let log = dir.join("calls.log");
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let script = "#!/bin/sh\n\
-                 {\n\
-                   printf '%s' \"$0\"\n\
-                   for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
-                   printf '\\n'\n\
-                 } >> \"$FRESHEN_GCLOUD_LOG\"\n\
-                 exit 0\n";
-            let stub = dir.join("gcloud");
-            fs::write(&stub, script)
-                .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
-            fs::set_permissions(&stub, fs::Permissions::from_mode(0o755))
-                .unwrap_or_else(|error| panic!("failed to make stub executable: {error}"));
-        }
-
-        #[cfg(windows)]
-        {
-            let script = "@echo off\r\n>>\"%FRESHEN_GCLOUD_LOG%\" echo %0 %*\r\nexit /b 0\r\n";
-            let stub = dir.join("gcloud.cmd");
-            fs::write(&stub, script)
-                .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
-        }
-
-        (dir, log)
-    }
-
-    /// The `PATH` list separator for the current platform.
-    const PATH_LIST_SEPARATOR: char = if cfg!(windows) { ';' } else { ':' };
-
-    /// Runs `f` with `gcloud` and the given package managers on `PATH`,
-    /// restoring `PATH` afterwards.
-    ///
-    /// Holds `crate::process::PATH_GUARD` for the whole mutation so parallel
-    /// tests cannot replace `PATH` (and wipe a stub such as `choco`) out from
-    /// under another test.
-    fn with_path_guard(pms: &[&str], f: impl FnOnce()) {
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = env::var("PATH").ok();
-        let mut dirs: Vec<PathBuf> = Vec::new();
         for pm in pms {
-            let (dir, _log) = stub_dir();
             write_stub(pm, &dir);
-            dirs.push(dir);
         }
-        let (gcloud_dir, _gcloud_log) = stub_dir();
-        write_stub("gcloud", &gcloud_dir);
-        dirs.push(gcloud_dir);
+        write_stub("gcloud", &dir);
 
-        let mut joined = String::new();
-        for dir in &dirs {
-            if !joined.is_empty() {
-                joined.push(PATH_LIST_SEPARATOR);
-            }
-            joined.push_str(
-                dir.to_str()
-                    .unwrap_or_else(|| panic!("non-UTF-8 stub path: {}", dir.display())),
-            );
-        }
-        if let Some(previous) = &previous {
-            joined.push(PATH_LIST_SEPARATOR);
-            joined.push_str(previous);
-        }
-        env::set_var("PATH", &joined);
-        env::set_var("FRESHEN_GCLOUD_LOG", "");
-
-        let result = f;
+        crate::process::with_path(&dir, f);
 
         env::remove_var("FRESHEN_GCLOUD_LOG");
-        match previous {
-            Some(previous) => env::set_var("PATH", &previous),
-            None => env::remove_var("PATH"),
+        match previous_log {
+            Some(previous) => env::set_var("FRESHEN_GCLOUD_LOG", previous),
+            None => env::remove_var("FRESHEN_GCLOUD_LOG"),
         }
-
-        for dir in &dirs {
-            let _ = fs::remove_dir_all(dir);
-        }
-        let _ = result;
+        let _ = fs::remove_dir_all(&dir);
     }
 
     fn write_stub(pm: &str, dir: &Path) {
@@ -502,16 +441,12 @@ mod tests {
 
     #[test]
     fn detect_reports_not_installed_when_gcloud_is_absent() {
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = env::var("PATH").ok();
-        env::set_var("PATH", "");
-        let result = detect_gcloud();
-        match previous {
-            Some(previous) => env::set_var("PATH", &previous),
-            None => env::remove_var("PATH"),
-        }
+        let dir = env::temp_dir().join(format!("freshen-gcloud-absent-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap_or_else(|error| {
+            panic!("failed to create stub directory {}: {error}", dir.display())
+        });
+        let result = crate::process::with_path(&dir, detect_gcloud);
+        let _ = fs::remove_dir_all(&dir);
         assert_eq!(result, Detection::NotInstalled);
     }
 
@@ -528,10 +463,6 @@ mod tests {
         // `bin/brew` so Homebrew reports itself as installed at that prefix.
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = env::var("PATH").ok();
         let dir =
             env::temp_dir().join(format!("freshen-gcloud-brew-{}-{}", std::process::id(), id));
         fs::create_dir_all(dir.join("bin")).unwrap_or_else(|error| {
@@ -544,20 +475,10 @@ mod tests {
             dir.to_str()
                 .unwrap_or_else(|| panic!("non-UTF-8 stub path: {}", dir.display())),
         );
-        env::set_var(
-            "PATH",
-            dir.join("bin")
-                .to_str()
-                .unwrap_or_else(|| panic!("non-UTF-8 stub path: {}", dir.display())),
-        );
 
-        let result = detect_gcloud();
+        let result = crate::process::with_path(&dir.join("bin"), detect_gcloud);
 
         env::remove_var("FRESHEN_BREW_PREFIXES");
-        match previous {
-            Some(previous) => env::set_var("PATH", &previous),
-            None => env::remove_var("PATH"),
-        }
         let _ = fs::remove_dir_all(&dir);
         assert_eq!(result, Detection::NotInstalled);
     }
@@ -614,16 +535,14 @@ mod tests {
     #[test]
     fn gcloud_installed_with_system_package_manager_probes_each_manager() {
         // No package manager is present, so nothing is owned.
-        let _guard = crate::process::PATH_GUARD
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = env::var("PATH").ok();
-        env::set_var("PATH", "");
-        let result = gcloud_installed_with_system_package_manager(Path::new("/tmp/gcloud"));
-        match previous {
-            Some(previous) => env::set_var("PATH", &previous),
-            None => env::remove_var("PATH"),
-        }
+        let dir = env::temp_dir().join(format!("freshen-gcloud-probes-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap_or_else(|error| {
+            panic!("failed to create stub directory {}: {error}", dir.display())
+        });
+        let result = crate::process::with_path(&dir, || {
+            gcloud_installed_with_system_package_manager(Path::new("/tmp/gcloud"))
+        });
+        let _ = fs::remove_dir_all(&dir);
         assert!(!result);
     }
 }

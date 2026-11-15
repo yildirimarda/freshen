@@ -153,13 +153,6 @@ mod tests {
         where
             F: FnOnce(&HostSudoProbe) -> bool,
         {
-            // `PATH` is process-global and tests run in parallel threads: every
-            // test that replaces it must hold the one shared guard, or it
-            // overwrites the `PATH` another module's test is relying on.
-            let _guard = crate::process::PATH_GUARD
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let original = env::var("PATH").unwrap_or_default();
             let id = COUNTER.fetch_add(1, Ordering::Relaxed);
             let dir = env::temp_dir().join(format!(
                 "freshen-sudo-test-{pid}-{id}",
@@ -174,9 +167,7 @@ mod tests {
                 .unwrap_or_else(|error| panic!("failed to write stub sudo: {error}"));
             fs::set_permissions(&sudo, fs::Permissions::from_mode(0o755))
                 .unwrap_or_else(|error| panic!("failed to chmod stub sudo: {error}"));
-            env::set_var("PATH", format!("{}:{}", dir.display(), original));
-            let result = f(&HostSudoProbe);
-            env::set_var("PATH", &original);
+            let result = crate::process::with_path(&dir, || f(&HostSudoProbe));
             let _ = fs::remove_dir_all(&dir);
             result
         }
