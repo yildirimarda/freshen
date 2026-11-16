@@ -385,9 +385,6 @@ mod tests {
     /// are written into a single directory so `PATH` is replaced by that one
     /// directory rather than appended to the ambient `PATH`.
     fn with_path_guard(pms: &[&str], f: impl FnOnce()) {
-        let previous_log = env::var("FRESHEN_AZ_LOG").ok();
-        env::set_var("FRESHEN_AZ_LOG", "");
-
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = env::temp_dir().join(format!("freshen-az-{}-{}", std::process::id(), id));
@@ -399,13 +396,19 @@ mod tests {
         }
         write_stub("az", &dir);
 
-        crate::process::with_path(&dir, f);
+        // `FRESHEN_AZ_LOG` is process-global, so it is mutated while holding
+        // `PATH_GUARD`, the same way `PATH` is; otherwise a parallel test
+        // would clobber the log variable this test's stub writes to.
+        crate::process::with_path(&dir, || {
+            let previous_log = env::var("FRESHEN_AZ_LOG").ok();
+            env::set_var("FRESHEN_AZ_LOG", "");
+            f();
+            match previous_log {
+                Some(previous) => env::set_var("FRESHEN_AZ_LOG", previous),
+                None => env::remove_var("FRESHEN_AZ_LOG"),
+            }
+        });
 
-        env::remove_var("FRESHEN_AZ_LOG");
-        match previous_log {
-            Some(previous) => env::set_var("FRESHEN_AZ_LOG", previous),
-            None => env::remove_var("FRESHEN_AZ_LOG"),
-        }
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -520,5 +523,18 @@ mod tests {
         with_path_guard(&["apt"], || {
             assert_eq!(detect_az(), Detection::Installed);
         });
+    }
+
+    #[test]
+    fn with_path_guard_sets_the_log_variable_inside_the_guard() {
+        let mut observed = None;
+        with_path_guard(&[], || {
+            observed = env::var("FRESHEN_AZ_LOG").ok();
+        });
+        assert_eq!(
+            observed,
+            Some("".to_owned()),
+            "the log variable must be set inside the guarded closure so parallel tests cannot clobber it"
+        );
     }
 }
