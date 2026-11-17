@@ -212,10 +212,11 @@ jobs:
 
       # Refresh the package indexes so the check runs against the latest winget
       # and Chocolatey metadata, not a stale cache.
-      - name: Update winget and Chocolatey metadata
+      # Chocolatey has no metadata-refresh command; `choco outdated` queries the
+      # feed live, so only winget needs an explicit refresh.
+      - name: Update winget metadata
         run: |
           winget source update
-          choco source update
 
       # Exit code 2 is success here: it means the tools have updates pending,
       # which is exactly what the read-only check is supposed to report.
