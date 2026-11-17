@@ -1228,18 +1228,57 @@ fn parse_doctor_findings(stderr: &str, stdout: &str) -> Vec<DoctorFinding> {
     findings
 }
 
+/// Removes what makes a `brew doctor` output hard to read for the parser:
+/// ANSI escape sequences (bold notice) and the GitHub Actions annotation
+/// escapes (`%0A` for a newline, `%0D` for a carriage return) that Homebrew
+/// uses there.
+fn normalize_doctor_output(output: &str) -> String {
+    let mut plain = String::with_capacity(output.len());
+    let mut chars = output.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                // A CSI sequence ends at its first byte in `@`..=`~`.
+                for next in chars.by_ref() {
+                    if ('@'..='~').contains(&next) {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        plain.push(c);
+    }
+    plain.replace("%0D", "").replace("%0A", "\n")
+}
+
+/// The text of a `brew doctor` warning line, if the line starts a warning.
+///
+/// Homebrew prints `Warning: <text>`; inside GitHub Actions it prints the
+/// annotation `::warning::<text>` (optionally with `file=...` metadata) instead.
+fn doctor_warning_text(line: &str) -> Option<&str> {
+    if let Some(text) = line.strip_prefix("Warning: ") {
+        return Some(text);
+    }
+    let annotation = line.strip_prefix("::warning")?;
+    let (_metadata, text) = annotation.split_once("::")?;
+    Some(text)
+}
+
 /// Parses the `Warning: ` blocks of a `brew doctor` output.
 fn parse_doctor_warnings(output: &str) -> Vec<DoctorFinding> {
     let mut findings: Vec<DoctorFinding> = Vec::new();
     let mut block: Vec<String> = Vec::new();
     let mut in_notice = false;
 
+    let output = normalize_doctor_output(output);
     for line in output.lines() {
         let line = line.trim();
 
         // The notice that precedes the first warning ends at the empty line
         // below it.
-        if in_notice && !line.starts_with("Warning: ") {
+        if in_notice && doctor_warning_text(line).is_none() {
             in_notice = !line.is_empty();
             continue;
         }
@@ -1254,7 +1293,7 @@ fn parse_doctor_warnings(output: &str) -> Vec<DoctorFinding> {
             continue;
         }
 
-        if let Some(finding) = line.strip_prefix("Warning: ") {
+        if let Some(finding) = doctor_warning_text(line) {
             if !block.is_empty() {
                 findings.push(DoctorFinding::from_block(&block));
             }
@@ -3600,6 +3639,19 @@ mod tests {
                 .all(|finding| !finding.message.contains("Please note")),
             "findings: {findings:?}"
         );
+    }
+
+    #[test]
+    fn parses_the_github_actions_annotations_of_brew_doctor() {
+        let stderr = "\u{1b}[1mPlease note that these warnings are just used to help the Homebrew maintainers\n\
+                      with debugging if you file an issue. If everything you use Homebrew for is\n\
+                      working fine: please don't worry or file an issue; just ignore this. Thanks!\u{1b}[0m\n\
+                      \n\
+                      ::warning::Some installed formulae are deprecated or disabled.%0AYou should find replacements for the following formulae:%0A%0A  tcl-tk@8\n";
+
+        let findings = parse_doctor_findings(stderr, "");
+
+        assert_eq!(findings.len(), 1);
     }
 
     #[test]
