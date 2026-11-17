@@ -1,33 +1,55 @@
-name: real-tools
+# Scheduled read-only checks against the latest real package-manager metadata.
+#
+# Unlike `.github/workflows/real-tools.yml`, which runs on every pull request
+# and deliberately never refreshes package metadata, this job runs on a nightly
+# schedule and *does* refresh metadata (`brew update`, `apt-get update`,
+# `winget source update`) before checking. That way a change in Homebrew's,
+# apt's or winget's output format is caught as a parser error here instead of
+# silently producing bogus package names on users' machines.
+#
+# The jobs are read-only: `freshen --check` and `freshen --dry-run` never
+# upgrade, install, remove or clean up anything. They are not required checks:
+# an upstream output change can flip at any time, so a scheduled failure must
+# never block a pull request from merging.
+#
+# Apply this proposal:
+#   git mv ci-proposals/real-tools-scheduled.yml .github/workflows/real-tools-scheduled.yml
+#
+# It needs no repository secrets beyond the default GITHUB_TOKEN (none used).
+
+name: real-tools-scheduled
 
 on:
-  pull_request:
+  schedule:
+    - cron: "0 4 * * *"
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: real-tools-${{ github.ref }}
+  group: real-tools-scheduled-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   # The stub-based tests prove the command transcripts; these jobs prove that
-  # the same parsers still understand what the real tools print today. They are
-  # deliberately read-only: `--check` and `--dry-run` never upgrade, install,
-  # remove or clean up anything, and the jobs never refresh package metadata.
+  # the same parsers still understand what the real tools print today, against
+  # freshly refreshed metadata. They are deliberately read-only: `--check` and
+  # `--dry-run` never upgrade, install, remove or clean up anything, and the
+  # jobs only refresh package metadata (never upgrade packages).
   #
   # The apt and Windows jobs exercise the apt (Milestone 5) and winget /
   # Chocolatey (Milestone 6) steps. They fail closed until those steps exist:
   # a missing, skipped or failed step is a failure, exactly like the Homebrew
   # job, so an unimplemented step cannot make the job pass silently.
   homebrew-read-only:
-    name: real Homebrew (macOS, read-only)
+    name: real Homebrew (macOS, read-only, latest metadata)
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
-      BREW_STEPS: brew,brew-formulae,brew-casks,brew-autoremove,brew-cleanup,brew-doctor,brew-bundle-cleanup,brew-reopen
+      BREW_STEPS: brew,brew-formulae,brew-casks,brew-autoremove,brew-cleanup,brew-reopen
     steps:
       - uses: actions/checkout@v4
 
@@ -42,14 +64,11 @@ jobs:
           command -v brew
           brew --version
 
-      # `brew bundle cleanup` reads a Brewfile from the working directory and is
-      # skipped without one. Write a minimal Brewfile so the step is exercised
-      # against real output instead of being skipped.
-      - name: Write a Brewfile for the bundle cleanup step
-        run: |
-          cat > Brewfile <<'EOF'
-          brew "wget"
-          EOF
+      # Refresh the formulae and cask metadata so the check runs against the
+      # latest Homebrew output, not a stale cache. This is what catches upstream
+      # output changes early.
+      - name: Update Homebrew metadata
+        run: brew update
 
       # Exit code 2 is success here: it means Homebrew has updates pending,
       # which is exactly what the read-only check is supposed to report.
@@ -98,10 +117,9 @@ jobs:
           fi
 
   apt-read-only:
-    name: real apt (Ubuntu, read-only)
-    if: ${{ vars.REAL_TOOLS_PENDING_STEPS == 'true' }}
+    name: real apt (Ubuntu, read-only, latest metadata)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       APT_STEPS: apt
     steps:
@@ -117,6 +135,11 @@ jobs:
         run: |
           command -v apt
           apt --version
+
+      # Refresh the package lists so the check runs against the latest apt
+      # metadata, not a stale cache.
+      - name: Update apt metadata
+        run: sudo apt-get update
 
       # Exit code 2 is success here: it means apt has updates pending, which is
       # exactly what the read-only check is supposed to report.
@@ -163,10 +186,9 @@ jobs:
           fi
 
   windows-read-only:
-    name: real Chocolatey and winget (Windows, read-only)
-    if: ${{ vars.REAL_TOOLS_PENDING_STEPS == 'true' }}
+    name: real winget and Chocolatey (Windows, read-only, latest metadata)
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
@@ -187,6 +209,14 @@ jobs:
           winget --version
           command -v choco
           choco --version
+
+      # Refresh the package indexes so the check runs against the latest winget
+      # and Chocolatey metadata, not a stale cache.
+      # Chocolatey has no metadata-refresh command; `choco outdated` queries the
+      # feed live, so only winget needs an explicit refresh.
+      - name: Update winget metadata
+        run: |
+          winget source update
 
       # Exit code 2 is success here: it means the tools have updates pending,
       # which is exactly what the read-only check is supposed to report.

@@ -1294,6 +1294,13 @@ fn parse_bundle_cleanup(stdout: &str) -> Vec<BundlePackage> {
             continue;
         }
 
+        // Real Homebrew also reports leftovers that are not packages, such as
+        // `Would remove (empty directory): /opt/homebrew/lib/gio`. They are
+        // not Brewfile entries, so they must never become package names.
+        if line.starts_with("Would remove") {
+            continue;
+        }
+
         if let Some(header) = line.strip_suffix(':') {
             kind = bundle_kind(header);
             continue;
@@ -3660,6 +3667,22 @@ mod tests {
             report.items()[0].to_string(),
             "wget (formula not in the Brewfile)"
         );
+    }
+
+    #[test]
+    fn brew_bundle_cleanup_ignores_would_remove_lines_that_are_not_packages() {
+        let stdout = "Would remove (empty directory): /opt/homebrew/lib/gio\n\
+                      Would remove (empty directory): /opt/homebrew/lib/gio/modules\n\
+                      Would uninstall formulae:\n\
+                      wget\n\
+                      \n\
+                      Run `brew bundle cleanup --force` to make these changes.\n";
+
+        let packages = parse_bundle_cleanup(stdout);
+
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].name, "wget");
+        assert_eq!(packages[0].kind, "formula");
     }
 
     #[test]

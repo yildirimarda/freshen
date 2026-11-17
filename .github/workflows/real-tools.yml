@@ -27,7 +27,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 30
     env:
-      BREW_STEPS: brew,brew-formulae,brew-casks,brew-autoremove,brew-cleanup,brew-reopen
+      BREW_STEPS: brew,brew-formulae,brew-casks,brew-autoremove,brew-cleanup,brew-doctor,brew-bundle-cleanup,brew-reopen
     steps:
       - uses: actions/checkout@v4
 
@@ -41,6 +41,15 @@ jobs:
         run: |
           command -v brew
           brew --version
+
+      # `brew bundle cleanup` reads a Brewfile from the working directory and is
+      # skipped without one. Write a minimal Brewfile so the step is exercised
+      # against real output instead of being skipped.
+      - name: Write a Brewfile for the bundle cleanup step
+        run: |
+          cat > Brewfile <<'EOF'
+          brew "wget"
+          EOF
 
       # Exit code 2 is success here: it means Homebrew has updates pending,
       # which is exactly what the read-only check is supposed to report.
