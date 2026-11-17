@@ -47,7 +47,7 @@ PROFILES = {
         "noun": "pacman package name",
     },
     "windows": {
-        "steps": ("winget", "choco"),
+        "steps": ("winget", "chocolatey"),
         "tool": "winget or Chocolatey",
         "noun": "winget or Chocolatey package name",
     },
