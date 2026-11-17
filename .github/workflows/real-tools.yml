@@ -51,6 +51,15 @@ jobs:
           brew "wget"
           EOF
 
+      # Diagnostic: show what the real `brew doctor` prints (stdout and stderr
+      # separately) and its exit status, so the doctor parser can be compared
+      # with the real output.
+      - name: Show the raw brew doctor output
+        run: |
+          brew doctor > doctor.out 2> doctor.err || echo "brew doctor exit status: $?"
+          echo "--- stdout"; cat doctor.out
+          echo "--- stderr"; cat doctor.err
+
       # Exit code 2 is success here: it means Homebrew has updates pending,
       # which is exactly what the read-only check is supposed to report.
       - name: freshen --check against the real Homebrew
