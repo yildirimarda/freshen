@@ -399,16 +399,21 @@ mod tests {
         F: FnOnce() -> R,
     {
         let log = dir.join("calls.log");
-        let previous_log = std::env::var("FRESHEN_WSL_LOG").ok();
-        std::env::set_var("FRESHEN_WSL_LOG", &log);
+        // The log variable is changed inside the guarded closure, like `PATH`,
+        // so parallel tests cannot overwrite each other's log path.
+        let result = crate::process::with_path(dir, || {
+            let previous_log = std::env::var("FRESHEN_WSL_LOG").ok();
+            std::env::set_var("FRESHEN_WSL_LOG", &log);
 
-        let result = crate::process::with_path(dir, f);
+            let result = f();
 
-        if let Some(previous) = previous_log {
-            std::env::set_var("FRESHEN_WSL_LOG", previous);
-        } else {
-            std::env::remove_var("FRESHEN_WSL_LOG");
-        }
+            if let Some(previous) = previous_log {
+                std::env::set_var("FRESHEN_WSL_LOG", previous);
+            } else {
+                std::env::remove_var("FRESHEN_WSL_LOG");
+            }
+            result
+        });
 
         let calls = std::fs::read_to_string(&log).unwrap_or_default();
         let calls: Vec<String> = calls.lines().map(str::trim).map(String::from).collect();

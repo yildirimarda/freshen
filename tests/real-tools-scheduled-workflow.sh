@@ -39,7 +39,7 @@ grep -qF -- '--json' "$workflow" || { echo "  does not request JSON reports"; st
 grep -qF -- '--only' "$workflow" || { echo "  does not select a package manager step"; static_ok=0; }
 grep -qF 'brew,brew-formulae,brew-casks' "$workflow" || { echo "  does not select the Homebrew steps"; static_ok=0; }
 grep -qF 'APT_STEPS: apt' "$workflow" || { echo "  does not select the apt step"; static_ok=0; }
-grep -qF 'WINDOWS_STEPS: winget,choco' "$workflow" || { echo "  does not select the winget and Chocolatey steps"; static_ok=0; }
+grep -qF 'WINDOWS_STEPS: winget,chocolatey' "$workflow" || { echo "  does not select the winget and Chocolatey steps"; static_ok=0; }
 grep -qF 'brew update' "$workflow" || { echo "  does not refresh Homebrew metadata"; static_ok=0; }
 grep -qF 'apt-get update' "$workflow" || { echo "  does not refresh apt metadata"; static_ok=0; }
 grep -qF 'winget source update' "$workflow" || { echo "  does not refresh winget metadata"; static_ok=0; }
@@ -148,7 +148,7 @@ cat > "$tmp/windows-check.json" <<'JSON'
     {"id": "winget", "name": "winget", "status": "outdated",
      "items": [{"name": "Microsoft.VisualStudioCode", "current": "1.90.0", "latest": "1.91.0"}],
      "error": null},
-    {"id": "choco", "name": "Chocolatey", "status": "up to date", "items": [], "error": null}
+    {"id": "chocolatey", "name": "Chocolatey", "status": "up to date", "items": [], "error": null}
   ]
 }
 JSON
@@ -161,7 +161,7 @@ cat > "$tmp/windows-dry-run.json" <<'JSON'
   "was_interrupted": false,
   "steps": [
     {"id": "winget", "name": "winget", "status": "planned", "error": null},
-    {"id": "choco", "name": "Chocolatey", "status": "planned", "error": null}
+    {"id": "chocolatey", "name": "Chocolatey", "status": "planned", "error": null}
   ]
 }
 JSON

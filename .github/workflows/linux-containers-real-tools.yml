@@ -48,12 +48,12 @@ jobs:
         run: |
           if command -v apt-get >/dev/null 2>&1; then
             apt-get update -y && apt-get install -y --no-install-recommends \
-              git build-essential curl ca-certificates
+              git build-essential curl ca-certificates python3
           elif command -v dnf >/dev/null 2>&1; then
-            dnf install -y git gcc gcc-c++ make curl ca-certificates
+            dnf install -y git gcc gcc-c++ make curl ca-certificates python3
           elif command -v pacman >/dev/null 2>&1; then
             # -Syu, never a bare -Sy: a partial upgrade can leave Arch broken.
-            pacman -Syu --needed --noconfirm git base-devel curl ca-certificates
+            pacman -Syu --needed --noconfirm git base-devel curl ca-certificates python
           else
             echo "::error::no supported package manager found in ${{ matrix.container }}"
             exit 1

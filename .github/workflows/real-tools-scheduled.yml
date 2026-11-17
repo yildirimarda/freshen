@@ -193,7 +193,7 @@ jobs:
       run:
         shell: bash
     env:
-      WINDOWS_STEPS: winget,choco
+      WINDOWS_STEPS: winget,chocolatey
     steps:
       - uses: actions/checkout@v4
 

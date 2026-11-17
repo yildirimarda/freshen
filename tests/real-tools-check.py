@@ -47,7 +47,7 @@ PROFILES = {
         "noun": "pacman package name",
     },
     "windows": {
-        "steps": ("winget", "choco"),
+        "steps": ("winget", "chocolatey"),
         "tool": "winget or Chocolatey",
         "noun": "winget or Chocolatey package name",
     },
@@ -58,6 +58,9 @@ PROFILES = {
 # in names, winget ids contain dots, Homebrew allows `@` and `/`): it must
 # reject prose that leaked into a name, not enforce each tool's exact grammar.
 PACKAGE_TOKEN = re.compile(r"^[A-Za-z0-9@._+~:/-]+$")
+
+# Steps whose items are findings with free text, not package names.
+FINDING_STEPS = {"brew-doctor"}
 
 
 def load_report(path):
@@ -90,7 +93,12 @@ def validate_item(step_id, item, errors, noun):
         return
 
     name = item.get("name")
-    if not isinstance(name, str) or not PACKAGE_TOKEN.fullmatch(name):
+    if step_id in FINDING_STEPS:
+        # The items of a report-only step are findings (`brew doctor`
+        # warnings), whose names are sentences, not package names.
+        if not isinstance(name, str) or not name.strip():
+            errors.append(f"{step_id}: finding has no text (parser drift?)")
+    elif not isinstance(name, str) or not PACKAGE_TOKEN.fullmatch(name):
         errors.append(
             f"{step_id}: outdated item {name!r} does not look like a {noun} "
             "(parser drift?)"
