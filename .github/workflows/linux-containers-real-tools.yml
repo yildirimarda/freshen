@@ -38,6 +38,11 @@ jobs:
             profile: pacman
     container:
       image: ${{ matrix.container }}
+    # Container jobs default to `sh` (dash on Ubuntu), which has no
+    # `set -o pipefail`. bash exists in all three images.
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Install build dependencies (${{ matrix.container }})
         run: |
