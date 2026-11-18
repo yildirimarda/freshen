@@ -1,16 +1,5 @@
-{
-  "Workflows": [],
-  "Errors": [],
-  "PackageUpdates": [
-    {
-      "PackageIdentifier": "7zip.7zip",
-      "PackageName": "7zip",
-      "AvailableVersion": "24.08"
-    },
-    {
-      "PackageIdentifier": "Git.Git",
-      "PackageName": "Git",
-      "AvailableVersion": "2.45.2"
-    }
-  ]
-}
+Found the following packages available for upgrade:
+Name    Id           Available Version   Source
+---------------------------------------------------
+7zip    7zip.7zip    24.08     21.07     winget
+Git     Git.Git      2.45.2    2.45.1    winget

@@ -1,16 +1,5 @@
-{
-  "Workflows": [],
-  "Errors": [],
-  "PackageUpdates": [
-    {
-      "PackageIdentifier": "Microsoft.VC++.Redist",
-      "PackageName": "Microsoft Visual C++ Redistributable",
-      "AvailableVersion": "14.42.34512"
-    },
-    {
-      "PackageIdentifier": "Google.Chrome",
-      "PackageName": "Google Chrome",
-      "AvailableVersion": "120.0.6099.109"
-    }
-  ]
-}
+Found the following packages available for upgrade:
+Name                                    Id                       Available         Version           Source
+---------------------------------------------------------------------------------------------------------------
+Microsoft Visual C++ Redistributable    Microsoft.VC++.Redist    14.42.34512       14.42.34511       winget
+Google Chrome                           Google.Chrome            120.0.6099.109    120.0.6099.108    winget
