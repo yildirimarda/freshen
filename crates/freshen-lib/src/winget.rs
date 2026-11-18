@@ -117,11 +117,22 @@ impl WingetStep {
     /// `--output` and parses its table output. `--accept-source-agreements` is
     /// passed so the first call never waits for a source agreement prompt.
     fn check_with_options(&self, options: &RunOptions) -> Result<CheckReport, StepError> {
-        let output = CommandSpec::new("winget")
+        let output = match CommandSpec::new("winget")
             .args(["upgrade", "--accept-source-agreements"])
             .neutral_locale()
             .run()
-            .map_err(|error| StepError::check_from_process(WINGET, &error))?;
+        {
+            Ok(output) => output,
+            Err(error) => {
+                // `winget upgrade` returns EXIT_UPDATE_NOT_APPLICABLE when no
+                // package upgrades are applicable; that is not a failure, it
+                // just means there is nothing to report.
+                if exit_code(&error) == Some(EXIT_UPDATE_NOT_APPLICABLE) {
+                    return Ok(CheckReport::from_items(std::iter::empty::<OutdatedItem>()));
+                }
+                return Err(StepError::check_from_process(WINGET, &error));
+            }
+        };
         let items = parse_winget_upgrade(output.stdout());
         let filter = options.filters().packages();
         let report = CheckReport::from_items(
@@ -243,6 +254,11 @@ impl WingetStep {
         {
             Ok(output) => output,
             Err(error) => {
+                if exit_code(&error) == Some(EXIT_UPDATE_NOT_APPLICABLE) {
+                    human!("No applicable package upgrades found.");
+                    *not_applicable = true;
+                    return;
+                }
                 failures.push(StepError::run_from_process(WINGET, &error));
                 return;
             }
@@ -836,6 +852,7 @@ mod tests {
             std::fs::write(&output_file, table)
                 .unwrap_or_else(|error| panic!("write {}: {error}", output_file.display()));
             let script = "@echo off\r\n\
+                 >>\"%FRESHEN_WINGET_LOG%\" echo winget %*\r\n\
                  if \"%~2\"==\"upgrade\" type \"%~dp0upgrade-output.txt\"\r\n\
                  exit /b 0\r\n";
             let stub = dir.join("winget.cmd");
