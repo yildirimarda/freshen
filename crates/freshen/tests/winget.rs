@@ -112,10 +112,10 @@ fn winget_holds_back_excluded_packages() {
     let tools = StubTools::new(&["winget"]);
 
     let package_list = "Found the following packages available for upgrade:\n\
-Name    Id           Available Version   Source\n\
----------------------------------------------------\n\
-7zip    7zip.7zip    24.08     21.07     winget\n\
-Git     Git.Git      2.45.2    2.45.1    winget\n";
+Name    Id           Version        Available   Source\n\
+------------------------------------------------------\n\
+7zip    7zip.7zip    21.07          24.08       winget\n\
+Git     Git.Git      2.45.1         2.45.2      winget\n";
 
     tools.set_responses(
         "winget",

@@ -892,11 +892,11 @@ mod tests {
     fn parses_the_winget_table_output() {
         let items = parse_winget_upgrade(
             "Found the following packages available for upgrade:\n\
-Name    Id           Available Version   Source\n\
----------------------------------------------------\n\
-7zip    7zip.7zip    24.08     21.07     winget\n\
-Git     Git.Git      2.45.2    2.45.1    winget\n\
-VLC     VideoLAN.VLC 3.0.20    3.0.18    winget\n",
+Name    Id           Version          Available   Source\n\
+----------------------------------------------------------\n\
+7zip    7zip.7zip    21.07            24.08       winget\n\
+Git     Git.Git      2.45.1           2.45.2      winget\n\
+VLC     VideoLAN.VLC 3.0.18           3.0.20      winget\n",
         );
 
         assert_eq!(items.len(), 3);
@@ -913,10 +913,10 @@ VLC     VideoLAN.VLC 3.0.20    3.0.18    winget\n",
     fn parses_packages_with_ids_and_versions() {
         let packages = parse_winget_packages(
             "Found the following packages available for upgrade:\n\
-Name    Id           Available Version   Source\n\
----------------------------------------------------\n\
-7zip    7zip.7zip    24.08     21.07     winget\n\
-Git     Git.Git      2.45.2    2.45.1    winget\n",
+Name    Id           Version          Available   Source\n\
+----------------------------------------------------------\n\
+7zip    7zip.7zip    21.07            24.08       winget\n\
+Git     Git.Git      2.45.1           2.45.2      winget\n",
         );
 
         assert_eq!(packages.len(), 2);
@@ -932,8 +932,8 @@ Git     Git.Git      2.45.2    2.45.1    winget\n",
     fn reports_nothing_when_no_upgrades_are_available() {
         let items = parse_winget_upgrade(
             "Found the following packages available for upgrade:\n\
-Name    Id           Available Version   Source\n\
----------------------------------------------------\n",
+Name    Id           Version          Available   Source\n\
+----------------------------------------------------------\n",
         );
         assert!(items.is_empty());
     }
@@ -982,11 +982,11 @@ Name    Id           Available Version   Source\n\
     fn check_excludes_packages_from_report() {
         let dir = stub_winget_with_upgrade_output(
             "Found the following packages available for upgrade:\n\
-Name    Id           Available Version   Source\n\
----------------------------------------------------\n\
-7zip    7zip.7zip    24.08     21.07     winget\n\
-Git     Git.Git      2.45.2    2.45.1    winget\n\
-VLC     VideoLAN.VLC 3.0.20    3.0.18    winget\n",
+Name    Id           Version          Available   Source\n\
+----------------------------------------------------------\n\
+7zip    7zip.7zip    21.07            24.08       winget\n\
+Git     Git.Git      2.45.1           2.45.2      winget\n\
+VLC     VideoLAN.VLC 3.0.18           3.0.20      winget\n",
         );
 
         let previous_log = std::env::var("FRESHEN_WINGET_LOG").ok();
@@ -1020,11 +1020,11 @@ VLC     VideoLAN.VLC 3.0.20    3.0.18    winget\n",
     fn check_holds_back_packages_outside_the_include_list() {
         let dir = stub_winget_with_upgrade_output(
             "Found the following packages available for upgrade:\n\
-Name    Id           Available Version   Source\n\
----------------------------------------------------\n\
-7zip    7zip.7zip    24.08     21.07     winget\n\
-Git     Git.Git      2.45.2    2.45.1    winget\n\
-VLC     VideoLAN.VLC 3.0.20    3.0.18    winget\n",
+Name    Id           Version          Available   Source\n\
+----------------------------------------------------------\n\
+7zip    7zip.7zip    21.07            24.08       winget\n\
+Git     Git.Git      2.45.1           2.45.2      winget\n\
+VLC     VideoLAN.VLC 3.0.18           3.0.20      winget\n",
         );
 
         let report = crate::process::with_path(&dir, || {
@@ -1047,11 +1047,11 @@ VLC     VideoLAN.VLC 3.0.20    3.0.18    winget\n",
     fn exclude_list_wins_over_include_list() {
         let dir = stub_winget_with_upgrade_output(
             "Found the following packages available for upgrade:\n\
-Name    Id           Available Version   Source\n\
----------------------------------------------------\n\
-7zip    7zip.7zip    24.08     21.07     winget\n\
-Git     Git.Git      2.45.2    2.45.1    winget\n\
-VLC     VideoLAN.VLC 3.0.20    3.0.18    winget\n",
+Name    Id           Version          Available   Source\n\
+----------------------------------------------------------\n\
+7zip    7zip.7zip    21.07            24.08       winget\n\
+Git     Git.Git      2.45.1           2.45.2      winget\n\
+VLC     VideoLAN.VLC 3.0.18           3.0.20      winget\n",
         );
 
         let report = crate::process::with_path(&dir, || {
@@ -1152,10 +1152,10 @@ VLC     VideoLAN.VLC 3.0.20    3.0.18    winget\n",
     #[test]
     fn run_holds_back_excluded_packages() {
         let table = "Found the following packages available for upgrade:\n\
-Name    Id           Available Version   Source\n\
----------------------------------------------------\n\
-7zip    7zip.7zip    24.08     21.07     winget\n\
-Git     Git.Git      2.45.2    2.45.1    winget\n";
+Name    Id           Version          Available   Source\n\
+----------------------------------------------------------\n\
+7zip    7zip.7zip    21.07            24.08       winget\n\
+Git     Git.Git      2.45.1           2.45.2      winget\n";
         let dir = stub_winget_with_upgrade_output(table);
         let log = dir.join("calls.log");
 
