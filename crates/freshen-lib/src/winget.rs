@@ -28,13 +28,13 @@ pub const WINGET: StepId = "winget";
 /// held back instead of upgraded.
 const HELD_BACK_REASON: &str = "held back (pinned)";
 
-/// Exit code `winget upgrade` returns when no package upgrades are
+/// Exit code `winget upgrade` may return when no package upgrades are
 /// applicable, so freshen reports the step as skipped instead of failed.
 ///
-/// `winget upgrade` returns `0` when nothing is applicable (success, nothing
-/// to do); this code is treated as skipped when `winget` reports it on a
-/// failed upgrade, and the filtered upgrade path also detects nothing-to-do
-/// by parsing the table output and finding no matching packages.
+/// Real `winget` may signal "nothing applicable" either through this exit
+/// code or by printing "No applicable package upgrades found." to its output;
+/// `is_no_upgrades` checks both. The filtered upgrade path also detects
+/// nothing-to-do by parsing the table output and finding no matching packages.
 pub const EXIT_UPDATE_NOT_APPLICABLE: i32 = 1;
 
 /// winget only runs on Windows.
@@ -124,10 +124,7 @@ impl WingetStep {
         {
             Ok(output) => output,
             Err(error) => {
-                // `winget upgrade` returns EXIT_UPDATE_NOT_APPLICABLE when no
-                // package upgrades are applicable; that is not a failure, it
-                // just means there is nothing to report.
-                if exit_code(&error) == Some(EXIT_UPDATE_NOT_APPLICABLE) {
+                if is_no_upgrades(&error) {
                     return Ok(CheckReport::from_items(std::iter::empty::<OutdatedItem>()));
                 }
                 return Err(StepError::check_from_process(WINGET, &error));
@@ -212,7 +209,7 @@ impl Step for WingetStep {
                 .neutral_locale()
                 .run();
             if let Err(error) = &upgrade {
-                if exit_code(error) == Some(EXIT_UPDATE_NOT_APPLICABLE) {
+                if is_no_upgrades(error) {
                     not_applicable = true;
                 } else {
                     failures.push(StepError::run_from_process(WINGET, error));
@@ -254,7 +251,7 @@ impl WingetStep {
         {
             Ok(output) => output,
             Err(error) => {
-                if exit_code(&error) == Some(EXIT_UPDATE_NOT_APPLICABLE) {
+                if is_no_upgrades(&error) {
                     human!("No applicable package upgrades found.");
                     *not_applicable = true;
                     return;
@@ -310,6 +307,28 @@ fn exit_code(error: &ProcessError) -> Option<i32> {
         .output()
         .and_then(|output| output.status())
         .and_then(|status| status.code())
+}
+
+/// Whether a failed `winget upgrade` invocation means "no applicable package
+/// upgrades", i.e. nothing to report rather than a failure.
+///
+/// Real `winget` may report this either through its exit code
+/// (`EXIT_UPDATE_NOT_APPLICABLE`) or through its output ("No applicable
+/// package upgrades found."). Checking both makes the check robust against
+/// whatever variant of winget is installed.
+fn is_no_upgrades(error: &ProcessError) -> bool {
+    if exit_code(error) == Some(EXIT_UPDATE_NOT_APPLICABLE) {
+        return true;
+    }
+    let Some(output) = error.output() else {
+        return false;
+    };
+    output
+        .stdout()
+        .contains("No applicable package upgrades found")
+        || output
+            .stderr()
+            .contains("No applicable package upgrades found")
 }
 
 /// A winget package as reported by `winget upgrade`, including its package id
