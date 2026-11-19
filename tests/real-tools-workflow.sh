@@ -38,7 +38,7 @@ grep -qF 'tests/real-tools-check.py dry-run' "$workflow" || { echo "  does not v
 grep -qF -- '--profile apt' "$workflow" || { echo "  does not validate the apt report"; static_ok=0; }
 grep -qF -- '--profile windows' "$workflow" || { echo "  does not validate the winget/Chocolatey report"; static_ok=0; }
 if grep -v '^[[:space:]]*#' "$workflow" | grep -Eq \
-  'brew[[:space:]]+(update|upgrade|install|uninstall|reinstall|autoremove|cleanup|prune)|apt(-get)?[[:space:]]+(update|upgrade|dist-upgrade|full-upgrade|install|remove|purge|autoremove|autoclean|clean)|choco[[:space:]]+(upgrade|install|uninstall|update)|winget[[:space:]]+(upgrade|install|uninstall)'; then
+  'brew[[:space:]]+(update|upgrade|install|uninstall|reinstall|autoremove|cleanup|prune)|apt(-get)?[[:space:]]+(update|upgrade|dist-upgrade|full-upgrade|install|remove|purge|autoremove|autoclean|clean)|choco[[:space:]]+(upgrade|install|uninstall|update)|winget[[:space:]]+(upgrade[[:space:]]+--all|install|uninstall)'; then
   echo "  runs a mutating package-manager command"
   static_ok=0
 fi
