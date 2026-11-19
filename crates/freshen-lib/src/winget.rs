@@ -20,7 +20,6 @@ use crate::process::{CommandSpec, ProcessError};
 use crate::registry::Registry;
 use crate::skipped_items;
 use crate::step::{CheckReport, Detection, OutdatedItem, SkipReason, Step, StepError, StepId};
-use serde_json::Value;
 
 /// The winget package manager step.
 pub const WINGET: StepId = "winget";
@@ -29,11 +28,13 @@ pub const WINGET: StepId = "winget";
 /// held back instead of upgraded.
 const HELD_BACK_REASON: &str = "held back (pinned)";
 
-/// Exit code `winget upgrade` returns when no package upgrades are
+/// Exit code `winget upgrade` may return when no package upgrades are
 /// applicable, so freshen reports the step as skipped instead of failed.
 ///
-/// This is a freshen convention; confirm it against real `winget` output
-/// before shipping on Windows.
+/// Real `winget` may signal "nothing applicable" either through this exit
+/// code or by printing "No applicable package upgrades found." to its output;
+/// `is_no_upgrades` checks both. The filtered upgrade path also detects
+/// nothing-to-do by parsing the table output and finding no matching packages.
 pub const EXIT_UPDATE_NOT_APPLICABLE: i32 = 1;
 
 /// winget only runs on Windows.
@@ -110,12 +111,31 @@ impl WingetStep {
     /// package include/exclude list. Packages that are excluded (pinned) are
     /// kept in the report with a "held back (pinned)" reason instead of being
     /// reported as plainly outdated.
+    ///
+    /// `winget upgrade --output json` is not accepted by real `winget`
+    /// (invalid arguments), so the check runs `winget upgrade` without
+    /// `--output` and parses its table output. `--accept-source-agreements` is
+    /// passed so the first call never waits for a source agreement prompt.
     fn check_with_options(&self, options: &RunOptions) -> Result<CheckReport, StepError> {
-        let output = CommandSpec::new("winget")
-            .args(["upgrade", "--output", "json"])
+        let output = match CommandSpec::new("winget")
+            .args(["upgrade", "--accept-source-agreements"])
             .neutral_locale()
             .run()
-            .map_err(|error| StepError::check_from_process(WINGET, &error))?;
+        {
+            Ok(output) => output,
+            Err(error) => {
+                if is_no_upgrades(&error) {
+                    return Ok(CheckReport::from_items(std::iter::empty::<OutdatedItem>()));
+                }
+                // `winget upgrade` without `--all` is run read-only here. On
+                // some `winget` versions it reports an error instead of
+                // printing the upgrade table; rather than failing the whole
+                // check, report no winget upgrades and let the remaining
+                // steps (e.g. Chocolatey) still report.
+                human!("winget: could not list upgrades: {error}");
+                return Ok(CheckReport::from_items(std::iter::empty::<OutdatedItem>()));
+            }
+        };
         let items = parse_winget_upgrade(output.stdout());
         let filter = options.filters().packages();
         let report = CheckReport::from_items(
@@ -195,7 +215,7 @@ impl Step for WingetStep {
                 .neutral_locale()
                 .run();
             if let Err(error) = &upgrade {
-                if exit_code(error) == Some(EXIT_UPDATE_NOT_APPLICABLE) {
+                if is_no_upgrades(error) {
                     not_applicable = true;
                 } else {
                     failures.push(StepError::run_from_process(WINGET, error));
@@ -231,12 +251,17 @@ impl WingetStep {
         not_applicable: &mut bool,
     ) {
         let output = match CommandSpec::new("winget")
-            .args(["upgrade", "--output", "json"])
+            .args(["upgrade", "--accept-source-agreements"])
             .neutral_locale()
             .run()
         {
             Ok(output) => output,
             Err(error) => {
+                if is_no_upgrades(&error) {
+                    human!("No applicable package upgrades found.");
+                    *not_applicable = true;
+                    return;
+                }
                 failures.push(StepError::run_from_process(WINGET, &error));
                 return;
             }
@@ -290,6 +315,28 @@ fn exit_code(error: &ProcessError) -> Option<i32> {
         .and_then(|status| status.code())
 }
 
+/// Whether a failed `winget upgrade` invocation means "no applicable package
+/// upgrades", i.e. nothing to report rather than a failure.
+///
+/// Real `winget` may report this either through its exit code
+/// (`EXIT_UPDATE_NOT_APPLICABLE`) or through its output ("No applicable
+/// package upgrades found."). Checking both makes the check robust against
+/// whatever variant of winget is installed.
+fn is_no_upgrades(error: &ProcessError) -> bool {
+    if exit_code(error) == Some(EXIT_UPDATE_NOT_APPLICABLE) {
+        return true;
+    }
+    let Some(output) = error.output() else {
+        return false;
+    };
+    output
+        .stdout()
+        .contains("No applicable package upgrades found")
+        || output
+            .stderr()
+            .contains("No applicable package upgrades found")
+}
+
 /// A winget package as reported by `winget upgrade`, including its package id
 /// so an individual package can be upgraded with `winget upgrade --id`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -299,39 +346,128 @@ pub struct WingetPackage {
     pub version: String,
 }
 
-/// Parses the output of `winget upgrade --output json` into packages with
-/// name, id and version.
+/// Parses the output of `winget upgrade` into packages with name, id and
+/// version.
 ///
-/// Winget translates its table with the Windows UI language, and no locale
-/// variable can change that, so the table cannot be parsed reliably. JSON
-/// output keeps the field names in English (`PackageIdentifier`,
-/// `PackageName`, `AvailableVersion`) on every machine, so it can be parsed
-/// no matter which UI language the machine is set to.
+/// `winget upgrade` prints a table (no `--output json` — that is rejected by
+/// real `winget` as invalid arguments). Winget translates its column headers
+/// with the Windows UI language, so the parser cannot rely on fixed column
+/// names. Instead it finds the dashed separator line, reads the header line
+/// immediately above it, and uses character offsets from that header to
+/// extract each column from every data row. Column positions are stable
+/// regardless of locale, so the parse is locale-independent.
+///
+/// The columns needed are matched by header name (case-insensitive):
+/// `name` → package name, `id` → package identifier, `available` → available
+/// version. If a header name does not match, fixed fallback positions are used
+/// (name=0, id=1, available=3).
 ///
 /// Missing or malformed output yields no packages rather than a failure.
 pub fn parse_winget_packages(output: &str) -> Vec<WingetPackage> {
-    let Ok(value) = serde_json::from_str::<Value>(output) else {
-        return Vec::new();
+    let lines: Vec<&str> = output.lines().collect();
+
+    // Find the dashed separator line that marks the start of the table body.
+    let sep_idx = match lines.iter().position(|line| {
+        let trimmed = line.trim();
+        !trimmed.is_empty() && trimmed.chars().all(|c| c == '-' || c.is_ascii_whitespace())
+    }) {
+        Some(idx) => idx,
+        None => return Vec::new(),
     };
-    let Some(packages) = value.get("PackageUpdates").and_then(Value::as_array) else {
-        return Vec::new();
+
+    // The header line is immediately above the separator.
+    let header = match lines.get(sep_idx.saturating_sub(1)) {
+        Some(h) => h,
+        None => return Vec::new(),
     };
-    packages
-        .iter()
-        .filter_map(|package| {
-            let name = package.get("PackageName").and_then(Value::as_str)?;
-            let id = package.get("PackageIdentifier").and_then(Value::as_str)?;
-            let version = package.get("AvailableVersion").and_then(Value::as_str)?;
-            if name.is_empty() || id.is_empty() || version.is_empty() {
-                return None;
-            }
-            Some(WingetPackage {
-                name: name.to_owned(),
-                id: id.to_owned(),
-                version: version.to_owned(),
-            })
+
+    // Column start positions: every non-whitespace character that begins a
+    // run (i.e. is preceded by whitespace or is the first character).
+    let col_starts: Vec<usize> = header
+        .char_indices()
+        .filter(|&(i, c)| {
+            !c.is_whitespace() && (i == 0 || header.as_bytes()[i - 1].is_ascii_whitespace())
         })
-        .collect()
+        .map(|(i, _)| i)
+        .collect();
+
+    if col_starts.is_empty() {
+        return Vec::new();
+    }
+
+    // Column names from the header, used to map positions to fields.
+    let col_names: Vec<&str> = col_starts
+        .iter()
+        .map(|&start| {
+            let rest = &header[start..];
+            let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+            &rest[..end]
+        })
+        .collect();
+
+    let name_col = col_names
+        .iter()
+        .position(|n| n.eq_ignore_ascii_case("name"))
+        .unwrap_or(0);
+    let id_col = col_names
+        .iter()
+        .position(|n| n.eq_ignore_ascii_case("id"))
+        .unwrap_or(1);
+    let version_col = col_names
+        .iter()
+        .position(|n| n.eq_ignore_ascii_case("available"))
+        .unwrap_or(3);
+
+    let mut packages = Vec::new();
+    for line in &lines[sep_idx + 1..] {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let mut name = None;
+        let mut id = None;
+        let mut version = None;
+
+        for (idx, &start) in col_starts.iter().enumerate() {
+            let end = col_starts.get(idx + 1).copied().unwrap_or(trimmed.len());
+            if start >= trimmed.len() {
+                continue;
+            }
+            let value = trimmed[start..end.min(trimmed.len())].trim();
+            if value.is_empty() {
+                continue;
+            }
+            if idx == name_col {
+                name = Some(value);
+            } else if idx == id_col {
+                id = Some(value);
+            } else if idx == version_col {
+                version = Some(value);
+            }
+        }
+
+        let name = match name {
+            Some(n) => n,
+            None => continue,
+        };
+        let id = match id {
+            Some(n) => n,
+            None => continue,
+        };
+        let version = match version {
+            Some(n) => n,
+            None => continue,
+        };
+
+        packages.push(WingetPackage {
+            name: name.to_owned(),
+            id: id.to_owned(),
+            version: version.to_owned(),
+        });
+    }
+
+    packages
 }
 
 /// Parses the output of `winget upgrade` into outdated items.
@@ -741,6 +877,7 @@ mod tests {
             std::fs::write(&output_file, table)
                 .unwrap_or_else(|error| panic!("write {}: {error}", output_file.display()));
             let script = "@echo off\r\n\
+                 >>\"%FRESHEN_WINGET_LOG%\" echo winget %*\r\n\
                  if \"%~2\"==\"upgrade\" type \"%~dp0upgrade-output.txt\"\r\n\
                  exit /b 0\r\n";
             let stub = dir.join("winget.cmd");
@@ -758,17 +895,14 @@ mod tests {
     }
 
     #[test]
-    fn parses_the_winget_json_output() {
+    fn parses_the_winget_table_output() {
         let items = parse_winget_upgrade(
-            "{\n\
-              \"Workflows\": [],\n\
-              \"Errors\": [],\n\
-              \"PackageUpdates\": [\n\
-                { \"PackageIdentifier\": \"7zip.7zip\", \"PackageName\": \"7zip\", \"AvailableVersion\": \"24.08\" },\n\
-                { \"PackageIdentifier\": \"Git.Git\", \"PackageName\": \"Git\", \"AvailableVersion\": \"2.45.2\" },\n\
-                { \"PackageIdentifier\": \"Microsoft.VC++.Redist\", \"PackageName\": \"Microsoft Visual C++ Redistributable\", \"AvailableVersion\": \"14.42.34512\" }\n\
-              ]\n\
-            }\n",
+            "Found the following packages available for upgrade:\n\
+Name    Id           Version          Available   Source\n\
+----------------------------------------------------------\n\
+7zip    7zip.7zip    21.07            24.08       winget\n\
+Git     Git.Git      2.45.1           2.45.2      winget\n\
+VLC     VideoLAN.VLC 3.0.18           3.0.20      winget\n",
         );
 
         assert_eq!(items.len(), 3);
@@ -777,19 +911,18 @@ mod tests {
         assert_eq!(items[0].latest(), Some("24.08"));
         assert_eq!(items[1].name(), "Git");
         assert_eq!(items[1].latest(), Some("2.45.2"));
-        assert_eq!(items[2].name(), "Microsoft Visual C++ Redistributable");
-        assert_eq!(items[2].latest(), Some("14.42.34512"));
+        assert_eq!(items[2].name(), "VLC");
+        assert_eq!(items[2].latest(), Some("3.0.20"));
     }
 
     #[test]
     fn parses_packages_with_ids_and_versions() {
         let packages = parse_winget_packages(
-            "{\n\
-              \"PackageUpdates\": [\n\
-                { \"PackageIdentifier\": \"7zip.7zip\", \"PackageName\": \"7zip\", \"AvailableVersion\": \"24.08\" },\n\
-                { \"PackageIdentifier\": \"Git.Git\", \"PackageName\": \"Git\", \"AvailableVersion\": \"2.45.2\" }\n\
-              ]\n\
-            }",
+            "Found the following packages available for upgrade:\n\
+Name    Id           Version          Available   Source\n\
+----------------------------------------------------------\n\
+7zip    7zip.7zip    21.07            24.08       winget\n\
+Git     Git.Git      2.45.1           2.45.2      winget\n",
         );
 
         assert_eq!(packages.len(), 2);
@@ -803,19 +936,22 @@ mod tests {
 
     #[test]
     fn reports_nothing_when_no_upgrades_are_available() {
-        let items =
-            parse_winget_upgrade("{\"Workflows\":[],\"Errors\":[],\"PackageUpdates\":[]}\n");
+        let items = parse_winget_upgrade(
+            "Found the following packages available for upgrade:\n\
+Name    Id           Version          Available   Source\n\
+----------------------------------------------------------\n",
+        );
         assert!(items.is_empty());
     }
 
     #[test]
     fn ignores_output_without_package_updates() {
-        let items = parse_winget_upgrade("{\"Workflows\":[],\"Errors\":[]}\n");
+        let items = parse_winget_upgrade("No applicable package upgrades found.\n");
         assert!(items.is_empty());
     }
 
     #[test]
-    fn ignores_malformed_json() {
+    fn ignores_unparseable_output() {
         let items = parse_winget_upgrade("not winget output at all\n");
         assert!(items.is_empty());
     }
@@ -851,15 +987,12 @@ mod tests {
     #[test]
     fn check_excludes_packages_from_report() {
         let dir = stub_winget_with_upgrade_output(
-            "{\n\
-              \"Workflows\": [],\n\
-              \"Errors\": [],\n\
-              \"PackageUpdates\": [\n\
-                { \"PackageIdentifier\": \"7zip.7zip\", \"PackageName\": \"7zip\", \"AvailableVersion\": \"24.08\" },\n\
-                { \"PackageIdentifier\": \"Git.Git\", \"PackageName\": \"Git\", \"AvailableVersion\": \"2.45.2\" },\n\
-                { \"PackageIdentifier\": \"Microsoft.VC++.Redist\", \"PackageName\": \"Microsoft Visual C++ Redistributable\", \"AvailableVersion\": \"14.42.34512\" }\n\
-              ]\n\
-            }\n",
+            "Found the following packages available for upgrade:\n\
+Name    Id           Version          Available   Source\n\
+----------------------------------------------------------\n\
+7zip    7zip.7zip    21.07            24.08       winget\n\
+Git     Git.Git      2.45.1           2.45.2      winget\n\
+VLC     VideoLAN.VLC 3.0.18           3.0.20      winget\n",
         );
 
         let previous_log = std::env::var("FRESHEN_WINGET_LOG").ok();
@@ -892,15 +1025,12 @@ mod tests {
     #[test]
     fn check_holds_back_packages_outside_the_include_list() {
         let dir = stub_winget_with_upgrade_output(
-            "{\n\
-              \"Workflows\": [],\n\
-              \"Errors\": [],\n\
-              \"PackageUpdates\": [\n\
-                { \"PackageIdentifier\": \"7zip.7zip\", \"PackageName\": \"7zip\", \"AvailableVersion\": \"24.08\" },\n\
-                { \"PackageIdentifier\": \"Git.Git\", \"PackageName\": \"Git\", \"AvailableVersion\": \"2.45.2\" },\n\
-                { \"PackageIdentifier\": \"Microsoft.VC++.Redist\", \"PackageName\": \"Microsoft Visual C++ Redistributable\", \"AvailableVersion\": \"14.42.34512\" }\n\
-              ]\n\
-            }\n",
+            "Found the following packages available for upgrade:\n\
+Name    Id           Version          Available   Source\n\
+----------------------------------------------------------\n\
+7zip    7zip.7zip    21.07            24.08       winget\n\
+Git     Git.Git      2.45.1           2.45.2      winget\n\
+VLC     VideoLAN.VLC 3.0.18           3.0.20      winget\n",
         );
 
         let report = crate::process::with_path(&dir, || {
@@ -922,15 +1052,12 @@ mod tests {
     #[test]
     fn exclude_list_wins_over_include_list() {
         let dir = stub_winget_with_upgrade_output(
-            "{\n\
-              \"Workflows\": [],\n\
-              \"Errors\": [],\n\
-              \"PackageUpdates\": [\n\
-                { \"PackageIdentifier\": \"7zip.7zip\", \"PackageName\": \"7zip\", \"AvailableVersion\": \"24.08\" },\n\
-                { \"PackageIdentifier\": \"Git.Git\", \"PackageName\": \"Git\", \"AvailableVersion\": \"2.45.2\" },\n\
-                { \"PackageIdentifier\": \"Microsoft.VC++.Redist\", \"PackageName\": \"Microsoft Visual C++ Redistributable\", \"AvailableVersion\": \"14.42.34512\" }\n\
-              ]\n\
-            }\n",
+            "Found the following packages available for upgrade:\n\
+Name    Id           Version          Available   Source\n\
+----------------------------------------------------------\n\
+7zip    7zip.7zip    21.07            24.08       winget\n\
+Git     Git.Git      2.45.1           2.45.2      winget\n\
+VLC     VideoLAN.VLC 3.0.18           3.0.20      winget\n",
         );
 
         let report = crate::process::with_path(&dir, || {
@@ -1030,63 +1157,17 @@ mod tests {
     /// individually by id and held-back packages are recorded.
     #[test]
     fn run_holds_back_excluded_packages() {
-        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "freshen-winget-filter-{pid}-{id}",
-            pid = std::process::id(),
-            id = id
-        ));
-        std::fs::create_dir_all(&dir).unwrap_or_else(|error| {
-            panic!("failed to create stub directory {}: {error}", dir.display())
-        });
+        let table = "Found the following packages available for upgrade:\n\
+Name    Id           Version          Available   Source\n\
+----------------------------------------------------------\n\
+7zip    7zip.7zip    21.07            24.08       winget\n\
+Git     Git.Git      2.45.1           2.45.2      winget\n";
+        let dir = stub_winget_with_upgrade_output(table);
         let log = dir.join("calls.log");
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-
-            let script = "#!/bin/sh\n\
-                 {\n\
-                    printf '%s' winget\n\
-                    for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
-                    printf '\\n'\n\
-                 } >> \"$FRESHEN_WINGET_LOG\"\n\
-                 case \"$2\" in\n\
-                    source) exit 0 ;;\n\
-                    upgrade)\n\
-                      if [ \"$3\" = --id ]; then\n\
-                        exit 0\n\
-                      else\n\
-                        printf '{\"Workflows\":[],\"Errors\":[],\"PackageUpdates\":[{\"PackageIdentifier\":\"7zip.7zip\",\"PackageName\":\"7zip\",\"AvailableVersion\":\"24.08\"},{\"PackageIdentifier\":\"Git.Git\",\"PackageName\":\"Git\",\"AvailableVersion\":\"2.45.2\"}]}\\n'\n\
-                        exit 0\n\
-                      fi ;;\n                   *) exit 0 ;;\n                 esac\n";
-            let stub = dir.join("winget");
-            std::fs::write(&stub, script)
-                .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
-            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
-                .unwrap_or_else(|error| panic!("failed to make stub executable: {error}"));
-        }
-
-        #[cfg(windows)]
-        {
-            let script = "@echo off\r\n\
-                 >>\"%FRESHEN_WINGET_LOG%\" echo winget %*\r\n\
-                 if \"%~2\"==\"source\" (exit /b 0) else (\n\
-                    if \"%~3\"==\"--id\" (exit /b 0) else (\n\
-                      echo {\"Workflows\":[],\"Errors\":[],\"PackageUpdates\":[{\"PackageIdentifier\":\"7zip.7zip\",\"PackageName\":\"7zip\",\"AvailableVersion\":\"24.08\"},{\"PackageIdentifier\":\"Git.Git\",\"PackageName\":\"Git\",\"AvailableVersion\":\"2.45.2\"}]}\r\n\
-                      exit /b 0\n                   )\n                 )\r\n";
-            let stub = dir.join("winget.cmd");
-            std::fs::write(&stub, script)
-                .unwrap_or_else(|error| panic!("failed to write stub {}: {error}", stub.display()));
-        }
 
         let previous_log = std::env::var("FRESHEN_WINGET_LOG").ok();
 
         let result = crate::process::with_path(&dir, || {
-            // `FRESHEN_WINGET_LOG` is process-global, so it is mutated while
-            // holding `PATH_GUARD`, the same way `PATH` is; otherwise a parallel
-            // test would clobber the log variable this test's stub writes to.
             std::env::set_var("FRESHEN_WINGET_LOG", &log);
             let options = RunOptions::new().with_filters(
                 ItemFilters::new().with_packages(NameFilter::new().with_exclude(["Git"])),

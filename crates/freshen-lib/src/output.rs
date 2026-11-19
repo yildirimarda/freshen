@@ -131,6 +131,13 @@ pub fn route_to_stdout() {
     HUMAN_STREAM.with(|stream| stream.set(Stream::Stdout));
 }
 
+/// Whether human-readable lines on this thread are routed to stderr rather
+/// than stdout. Structured reports (`--json`, `--markdown`) own stdout, so
+/// while they are active every thread must log to stderr.
+pub(crate) fn human_routes_to_stderr() -> bool {
+    matches!(HUMAN_STREAM.with(Cell::get), Stream::Stderr)
+}
+
 pub(crate) fn write_line(args: fmt::Arguments<'_>) {
     let _ = match HUMAN_STREAM.with(Cell::get) {
         Stream::Stdout => writeln!(io::stdout().lock(), "{args}"),
