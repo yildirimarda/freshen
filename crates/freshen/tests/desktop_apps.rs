@@ -100,7 +100,7 @@ fn stop_a_desktop_application(tools: &StubTools) -> std::process::Child {
             .args(["-c", "sleep 30; true"])
             .spawn()
     })
-        .unwrap_or_else(|error| panic!("failed to spawn {sleep_path:?}: {error}"));
+    .unwrap_or_else(|error| panic!("failed to spawn {sleep_path:?}: {error}"));
     // Wait until the new process is visible in `/proc` under its executable
     // name. `Command::spawn` returns once the process is forked, but its
     // `/proc/{pid}/cmdline` is only populated after `exec`; under heavy
