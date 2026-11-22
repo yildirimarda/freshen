@@ -127,13 +127,11 @@ impl WingetStep {
                 if is_no_upgrades(&error) {
                     return Ok(CheckReport::from_items(std::iter::empty::<OutdatedItem>()));
                 }
-                // `winget upgrade` without `--all` is run read-only here. On
-                // some `winget` versions it reports an error instead of
-                // printing the upgrade table; rather than failing the whole
-                // check, report no winget upgrades and let the remaining
-                // steps (e.g. Chocolatey) still report.
-                human!("winget: could not list upgrades: {error}");
-                return Ok(CheckReport::from_items(std::iter::empty::<OutdatedItem>()));
+                // Any other failure is a real failure. Reporting "no upgrades"
+                // here would hide a broken winget invocation (wrong arguments,
+                // a changed output format) as an up-to-date system, and the
+                // real-tools job exists to catch exactly that.
+                return Err(StepError::check_from_process(WINGET, &error));
             }
         };
         let items = parse_winget_upgrade(output.stdout());
