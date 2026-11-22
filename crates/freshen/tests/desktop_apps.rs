@@ -80,7 +80,7 @@ fn stop_a_desktop_application(tools: &StubTools) -> std::process::Child {
     // entry used to match the desktop application does not collide with other
     // tests running in parallel.
     let id = SLEEP_ID.fetch_add(1, Ordering::Relaxed);
-    let unique_name = format!("freshen-sleep-{id}");
+    let unique_name = format!("freshen-sleep-{}-{}", std::process::id(), id);
     let sleep_path = tools.home().join(unique_name);
     fs::copy(locate_sleep_binary(), &sleep_path)
         .unwrap_or_else(|error| panic!("failed to copy sleep binary to {sleep_path:?}: {error}"));
