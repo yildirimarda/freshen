@@ -90,7 +90,46 @@ fn stop_a_desktop_application(tools: &StubTools) -> std::process::Child {
 
     let sleep = retry_text_file_busy(|| Command::new(&sleep_path).arg("30").spawn())
         .unwrap_or_else(|error| panic!("failed to spawn {sleep_path:?}: {error}"));
-    thread::sleep(Duration::from_millis(100));
+    // Wait until the new process is visible in `/proc` under its executable
+    // name. `Command::spawn` returns once the process is forked, but its
+    // `/proc/{pid}/cmdline` is only populated after `exec`; under heavy
+    // scheduling `freshen` could probe the process table before that and miss
+    // the application entirely, so `find_running_apps` would report nothing to
+    // stop and `gtk-launch` would never run.
+    let sleep_name = sleep_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let visible = std::fs::read_dir("/proc")
+            .map(|entries| {
+                entries.flatten().any(|entry| {
+                    let Some(pid) = entry
+                        .file_name()
+                        .to_str()
+                        .and_then(|text| text.parse::<u32>().ok())
+                    else {
+                        return false;
+                    };
+                    let Ok(cmdline) = std::fs::read_to_string(format!("/proc/{pid}/cmdline"))
+                    else {
+                        return false;
+                    };
+                    cmdline.split('\0').next().and_then(|first| {
+                        Path::new(first).file_name().and_then(|name| name.to_str())
+                    }) == Some(sleep_name)
+                })
+            })
+            .unwrap_or(false);
+        if visible {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!("sleep process {sleep_path:?} never appeared in /proc");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
 
     let desktop_dir = tools.home().join("desktop-applications");
     std::fs::create_dir_all(&desktop_dir)
