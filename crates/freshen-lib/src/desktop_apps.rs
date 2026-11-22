@@ -404,7 +404,21 @@ impl DesktopAppSystem for HostDesktopAppSystem {
     }
 
     fn is_alive(&self, pid: u32) -> bool {
-        signal::kill(Pid::from_raw(pid as i32), None::<Signal>).is_ok()
+        // `/proc/{pid}/stat` is `pid (comm) state ...`; `comm` is enclosed in
+        // parentheses and may contain spaces, so the state field is the first
+        // whitespace-delimited token after the final `)`. A zombie (`Z`) has
+        // exited and is only awaiting reaping, so it is not "alive"; reporting
+        // it as such lets `stop_apps` notice a stopped application immediately
+        // instead of waiting out the full stop timeout when it is not reaped
+        // promptly.
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            return false;
+        };
+        let state = stat
+            .rsplit(')')
+            .next()
+            .and_then(|rest| rest.split_whitespace().next());
+        matches!(state, Some(state) if !state.is_empty() && state != "Z")
     }
 
     fn current_pid(&self) -> u32 {

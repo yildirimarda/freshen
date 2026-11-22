@@ -1,16 +1,5 @@
-{
-  "Workflows": [],
-  "Errors": [],
-  "PackageUpdates": [
-    {
-      "PackageIdentifier": "Microsoft.PowerToys",
-      "PackageName": "PowerToys",
-      "AvailableVersion": "0.80.0"
-    },
-    {
-      "PackageIdentifier": "VideoLAN.VLC",
-      "PackageName": "VLC",
-      "AvailableVersion": "3.0.20"
-    }
-  ]
-}
+Found the following packages available for upgrade:
+Name                                            Id                    Version        Available      Source
+----------------------------------------------------------------------------------------------------------
+PowerToys                                       Microsoft.PowerToys   0.79.0         0.80.0         winget
+VLC                                             VideoLAN.VLC          3.0.18         3.0.20         winget

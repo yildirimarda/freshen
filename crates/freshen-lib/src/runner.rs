@@ -29,7 +29,7 @@ use crate::elevation::{
 };
 use crate::homebrew::{BundlePackage, DoctorFinding};
 use crate::options::RunOptions;
-use crate::output::human;
+use crate::output::{human, human_routes_to_stderr, route_to_stderr};
 use crate::process::{CommandSpec, ProcessError};
 use crate::progress::Progress;
 use crate::snapshot::{RollbackCommand, SnapshotRecorder};
@@ -1201,22 +1201,31 @@ impl<'a> Runner<'a> {
         let jobs = self.options.jobs().min(self.steps.len());
         let next = AtomicUsize::new(0);
         let results = Mutex::new(vec![None; self.steps.len()]);
+        // Structured reports (`--json`, `--markdown`) own stdout: every human
+        // line must go to stderr on all threads, including the check workers
+        // spawned below (thread locals default to stdout per thread).
+        let route_stderr_to_stderr = human_routes_to_stderr();
 
         std::thread::scope(|scope| {
             for _ in 0..jobs {
-                scope.spawn(|| loop {
-                    let index = next.fetch_add(1, Ordering::Relaxed);
-                    let Some(planned) = self.steps.get(index).copied() else {
-                        break;
-                    };
-                    let result =
-                        check_planned(planned, &self.options, step_timeout, global_deadline);
-                    let mut slots = match results.lock() {
-                        Ok(slots) => slots,
-                        Err(poisoned) => poisoned.into_inner(),
-                    };
-                    if let Some(slot) = slots.get_mut(index) {
-                        *slot = Some(result);
+                scope.spawn(|| {
+                    if route_stderr_to_stderr {
+                        route_to_stderr();
+                    }
+                    loop {
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(planned) = self.steps.get(index).copied() else {
+                            break;
+                        };
+                        let result =
+                            check_planned(planned, &self.options, step_timeout, global_deadline);
+                        let mut slots = match results.lock() {
+                            Ok(slots) => slots,
+                            Err(poisoned) => poisoned.into_inner(),
+                        };
+                        if let Some(slot) = slots.get_mut(index) {
+                            *slot = Some(result);
+                        }
                     }
                 });
             }
@@ -1623,6 +1632,7 @@ mod tests {
     use crate::config::{HookSection, Hooks};
     use crate::elevation::{ElevationOutcome, ElevationProbe};
     use crate::options::{RunOptions, StepSelection};
+    use crate::output::{route_to_stderr, route_to_stdout};
     use crate::platform::Platform;
     use crate::step::{CheckReport, Detection, OutdatedItem, Step, StepError, StepId};
     use crate::system::Privilege;
@@ -1732,6 +1742,7 @@ mod tests {
         needs_root: bool,
         needs_administrator: bool,
         is_user_level: bool,
+        stream_observation: Option<Arc<AtomicBool>>,
         calls: Arc<Calls>,
     }
 
@@ -1756,6 +1767,7 @@ mod tests {
                 needs_root: false,
                 needs_administrator: false,
                 is_user_level: false,
+                stream_observation: None,
                 calls: Arc::new(Calls::default()),
             }
         }
@@ -1847,6 +1859,11 @@ mod tests {
             self
         }
 
+        fn observes_stream(mut self, observation: Arc<AtomicBool>) -> Self {
+            self.stream_observation = Some(observation);
+            self
+        }
+
         fn calls(&self) -> Arc<Calls> {
             Arc::clone(&self.calls)
         }
@@ -1871,6 +1888,9 @@ mod tests {
 
         fn check(&self) -> Result<CheckReport, StepError> {
             self.calls.check.fetch_add(1, Ordering::SeqCst);
+            if let Some(observation) = &self.stream_observation {
+                observation.store(crate::output::human_routes_to_stderr(), Ordering::SeqCst);
+            }
             let active = self.calls.check_active.fetch_add(1, Ordering::SeqCst) + 1;
             self.calls
                 .check_max_active
@@ -2768,6 +2788,33 @@ mod tests {
 
         assert_eq!(calls.detect.load(Ordering::SeqCst), 0);
         assert_eq!(calls.check.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn check_routes_human_output_to_stderr_on_worker_threads() {
+        // `--json`/`--markdown` route human output to stderr on the main
+        // thread; check workers must inherit that so stdout stays a pure
+        // structured report. Before this fix each worker thread defaulted to
+        // stdout, so a step's `human!` during `--check --json` prefixed the
+        // JSON report and made it unreadable.
+        route_to_stderr();
+        let observed = Arc::new(AtomicBool::new(false));
+        let step = FakeStep::new("winget", "winget").observes_stream(Arc::clone(&observed));
+        let summary = Runner::with_options_and_sudo(
+            [&step as &dyn Step],
+            RunOptions::new().with_jobs(2),
+            false,
+            Privilege::StandardUser,
+            &NoElevationProbe,
+        )
+        .check();
+        route_to_stdout();
+
+        assert!(
+            observed.load(Ordering::SeqCst),
+            "check worker did not inherit stderr routing"
+        );
+        assert_eq!(summary.steps()[0].status(), CheckStatus::UpToDate);
     }
 
     #[cfg(unix)]

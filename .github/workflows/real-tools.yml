@@ -197,6 +197,15 @@ jobs:
           command -v choco
           choco --version
 
+      # Diagnostic: show what the real `winget upgrade` prints (stdout and
+      # stderr separately) and its exit status, so the winget table parser can
+      # be compared with the real output.
+      - name: Show the raw winget upgrade output
+        run: |
+          winget upgrade > winget-upgrade.out 2> winget-upgrade.err || echo "winget upgrade exit status: $?"
+          echo "--- stdout"; cat winget-upgrade.out
+          echo "--- stderr"; cat winget-upgrade.err
+
       # Exit code 2 is success here: it means the tools have updates pending,
       # which is exactly what the read-only check is supposed to report.
       - name: freshen --check against real winget and Chocolatey

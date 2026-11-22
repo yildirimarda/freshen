@@ -29,17 +29,22 @@ use support::{retry_text_file_busy, StubOutput, StubTools};
 /// not collide when matching processes by executable name in `/proc`.
 static SLEEP_ID: AtomicU64 = AtomicU64::new(0);
 
-/// Locates the system `sleep` binary so it can be copied under a unique name.
-fn locate_sleep_binary() -> PathBuf {
+/// Locates the system `sh` binary so it can be copied under a unique name.
+///
+/// `sleep` itself cannot be copied: on systems that ship the uutils coreutils
+/// (recent Ubuntu runners) `sleep` is one entry of a multi-call binary that
+/// picks its program from `argv[0]`, so a copy under another name fails with
+/// `coreutils: unknown program`. A shell does not care what it is called.
+fn locate_sh_binary() -> PathBuf {
     if let Ok(path) = env::var("PATH") {
         for dir in env::split_paths(&path) {
-            let candidate = dir.join("sleep");
+            let candidate = dir.join("sh");
             if is_executable_file(&candidate) {
                 return candidate;
             }
         }
     }
-    PathBuf::from("/usr/bin/sleep")
+    PathBuf::from("/bin/sh")
 }
 
 #[cfg(unix)]
@@ -76,21 +81,66 @@ mod unix {
 /// Returns the application process, which the caller reaps while freshen runs
 /// (see [`run_with_stopped_app`]) so freshen observes it as stopped.
 fn stop_a_desktop_application(tools: &StubTools) -> std::process::Child {
-    // Copy the system `sleep` binary under a unique name so the process table
-    // entry used to match the desktop application does not collide with other
-    // tests running in parallel.
+    // Copy the system shell under a unique name so the process table entry
+    // used to match the desktop application does not collide with other tests
+    // running in parallel. The shell runs `sleep 30` followed by `true`, so it
+    // stays alive as the named process instead of replacing itself with
+    // `sleep` (a shell execs a lone last command).
     let id = SLEEP_ID.fetch_add(1, Ordering::Relaxed);
-    let unique_name = format!("freshen-sleep-{id}");
+    let unique_name = format!("freshen-sleep-{}-{}", std::process::id(), id);
     let sleep_path = tools.home().join(unique_name);
-    fs::copy(locate_sleep_binary(), &sleep_path)
-        .unwrap_or_else(|error| panic!("failed to copy sleep binary to {sleep_path:?}: {error}"));
+    fs::copy(locate_sh_binary(), &sleep_path)
+        .unwrap_or_else(|error| panic!("failed to copy sh binary to {sleep_path:?}: {error}"));
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(&sleep_path, fs::Permissions::from_mode(0o755))
         .unwrap_or_else(|error| panic!("failed to make {sleep_path:?} executable: {error}"));
 
-    let sleep = retry_text_file_busy(|| Command::new(&sleep_path).arg("30").spawn())
-        .unwrap_or_else(|error| panic!("failed to spawn {sleep_path:?}: {error}"));
-    thread::sleep(Duration::from_millis(100));
+    let sleep = retry_text_file_busy(|| {
+        Command::new(&sleep_path)
+            .args(["-c", "sleep 30; true"])
+            .spawn()
+    })
+    .unwrap_or_else(|error| panic!("failed to spawn {sleep_path:?}: {error}"));
+    // Wait until the new process is visible in `/proc` under its executable
+    // name. `Command::spawn` returns once the process is forked, but its
+    // `/proc/{pid}/cmdline` is only populated after `exec`; under heavy
+    // scheduling `freshen` could probe the process table before that and miss
+    // the application entirely, so `find_running_apps` would report nothing to
+    // stop and `gtk-launch` would never run.
+    let sleep_name = sleep_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let visible = std::fs::read_dir("/proc")
+            .map(|entries| {
+                entries.flatten().any(|entry| {
+                    let Some(pid) = entry
+                        .file_name()
+                        .to_str()
+                        .and_then(|text| text.parse::<u32>().ok())
+                    else {
+                        return false;
+                    };
+                    let Ok(cmdline) = std::fs::read_to_string(format!("/proc/{pid}/cmdline"))
+                    else {
+                        return false;
+                    };
+                    cmdline.split('\0').next().and_then(|first| {
+                        Path::new(first).file_name().and_then(|name| name.to_str())
+                    }) == Some(sleep_name)
+                })
+            })
+            .unwrap_or(false);
+        if visible {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!("sleep process {sleep_path:?} never appeared in /proc");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
 
     let desktop_dir = tools.home().join("desktop-applications");
     std::fs::create_dir_all(&desktop_dir)
