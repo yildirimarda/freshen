@@ -7,7 +7,7 @@
 
 freshen keeps a developer machine up to date (package managers, language
 toolchains, containers) on macOS, Linux and Windows. Until now the
-implementation was the zsh script `update-all.sh`, which cannot run on
+implementation was a shell script, which cannot run on
 Windows and has no story for a packaged, versioned release. We need an
 implementation language for the port (PLAN.md Milestone 2) that ships as a
 single artifact with no runtime to install, works on all three desktop
@@ -39,5 +39,5 @@ Implement freshen in Rust, shipped as a single static binary.
 - Strong subprocess and signal handling (streaming output, timeouts,
   SIGINT/SIGTERM with restoration of stopped resources).
 - Easy cross-compilation to prebuilt release targets.
-- The zsh script `update-all.sh` stays as-is until Rust reaches parity, then
-  is removed (PLAN.md Milestone 2).
+- The shell script it replaces is removed once Rust reaches parity
+  (PLAN.md Milestone 2).

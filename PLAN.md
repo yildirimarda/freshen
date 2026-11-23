@@ -14,10 +14,9 @@
 
 ## Milestone 0: Foundation
 
-- [x] Single zsh script `update-all.sh` with failure collection and a final summary
 - [x] Create base repository structure (README, LICENSE, CONTRIBUTING, CHANGELOG, .gitignore)
-- [x] Set up CI: zsh syntax check, workflow YAML validity
-- [x] Add `docs/` (index, ADR template) and `tests/` (`run-tests.sh` checking zsh syntax and PLAN.md format)
+- [x] Set up CI: workflow YAML validity
+- [x] Add `docs/` (index, ADR template) and `tests/` (`run-tests.sh` checking the PLAN.md format)
 - [x] Set up release-please for versioned releases from Conventional Commits
 - [x] Create AGENTS.md / CLAUDE.md with project guidelines for autonomous agents
 - [x] Choose the project name `freshen` (cross-platform, Rust) and rename the repository
@@ -41,7 +40,7 @@
 
 ## Milestone 2: Cross-Platform Core
 
-Goal: one tool for macOS, Linux and Windows, written in Rust and shipped as a single binary. This milestone replaces the zsh script as the implementation while keeping its behaviour (parity tests). The zsh script stays as-is until then; no further features are added to it.
+Goal: one tool for macOS, Linux and Windows, written in Rust and shipped as a single binary. This milestone builds the implementation, covered by tests that assert the exact command transcripts.
 
 - [x] Write ADR 0001 in `docs/adr/` recording the decision to implement in Rust (single static binary, no runtime to install, first-class Windows/macOS/Linux support, strong subprocess and signal handling, easy cross-compilation) and the alternatives considered (Go, Python via `uv tool install`) with the reasons they were not chosen
 - [x] Scaffold a Cargo workspace (library crate with all logic, thin binary crate `freshen`), pin the toolchain with `rust-toolchain.toml`, set the MSRV, and wire `cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` into CI and the AGENTS.md project reference
@@ -50,7 +49,7 @@ Goal: one tool for macOS, Linux and Windows, written in Rust and shipped as a si
 - [x] Implement a step registry with ordering, dependencies (e.g. brew formulae before casks, mise after brew) and per-step platform filter (`macos`, `linux`, `windows`)
 - [x] Implement a subprocess runner with live output streaming, per-step timeout, environment control, optional retry with backoff, and capture of stdout/stderr for the log
 - [x] Implement an OS abstraction layer: detect OS/distro/arch, privilege level, interactive vs non-interactive terminal, and the terminal application running the tool
-- [x] Implement failure collection and the final summary (steps ok / skipped / failed, duration per step) with the same exit-code semantics as the zsh script
+- [x] Implement failure collection and the final summary (steps ok / skipped / failed, duration per step) (exit code 0 when no step failed, 1 when one did)
 - [x] Add `--dry-run`, `--only`, `--skip`, `--yes`, `--force-kill` with identical semantics on every platform
 - [x] Add a test harness that runs the built binary against stub `brew`, `uv`, `mise`, `docker`, `colima` executables on `PATH` and asserts the call order (tests never invoke the real tools)
 - [x] Add a test that a failing step is recorded, does not abort the run, and produces exit code 1 with the step listed in the summary
@@ -60,7 +59,6 @@ Goal: one tool for macOS, Linux and Windows, written in Rust and shipped as a si
 - [x] Port the Colima/lima/Docker orchestration with parity tests
 - [x] Port the uv and mise steps with parity tests
 - [x] Port the warnings: processes still running on an old Node version (with the app that started them) and zellij upgraded from inside a zellij session
-- [x] Remove the zsh implementation once parity tests pass and document the migration in README and CHANGELOG
 - [x] Add a CI job that checks the code compiles against the MSRV (`rust-version` in the workspace manifest) with `cargo check --workspace`, so an accidental use of a newer language feature fails before release
 - [x] Validate the step graph in the registry: unknown prerequisite/conflict ids and dependency cycles fail with a clear message, covered by tests
 - [x] Enforce declared step conflicts when building a run: when two conflicting steps are available on the platform, skip the later one and report it as skipped with the reason, covered by tests
@@ -69,7 +67,6 @@ Goal: one tool for macOS, Linux and Windows, written in Rust and shipped as a si
 - [x] Fall back to walking the parent process chain when no environment marker identifies the terminal application, so the host terminal is still known on Linux and Windows; cover it with a fake process table
 - [x] Extend the stub harness so each stub can return canned stdout, stderr and exit status per invocation, so ported steps can be tested against recorded command transcripts
 - [x] Extend the stub harness with scripted stdin so the interactive quit prompt (yes / skip quitting / skip casks) is covered end to end
-- [x] Remove the deprecated `update-all.sh` compatibility shim and replace the zsh syntax step in `.github/workflows/ci.yml` with a check for the shim (requires a human to apply the workflow change, since agents cannot edit `.github/workflows/`)
 - [x] Make the Rust test targets compile on the MSRV and extend the MSRV CI job to `cargo check --workspace --all-targets`; the runner tests currently compare `ExitCode` values, which only implements `PartialEq` after 1.81
 - [x] Show conflict skips in `--list-steps` so the listing names the same reason the run summary reports when two selected steps conflict, covered by tests
 
@@ -454,6 +451,6 @@ The "deep detail" that sets the tool apart: updates should be predictable, rever
 
 <!-- The agent appends newly found work here. -->
 - [x] Fix the `winget` check and run against the real winget: `winget upgrade --output json` does not exist (the real Windows job in `real-tools.yml` fails with exit code `0x8a150002`, invalid arguments), so the earlier "parse the winget output as JSON" item rests on a wrong assumption and the stub tests only passed because the stubs print made-up JSON. Replace it with a command the real winget accepts and a parser for its real output, locale-independent (for example the table found through its dashed separator line and column offsets, or `Get-WinGetPackage` from the `Microsoft.WinGet.Client` module through PowerShell with `ConvertTo-Json`), pass `--accept-source-agreements` so the first call never waits for a prompt, confirm the exit code freshen treats as "no upgrade applicable" (`EXIT_UPDATE_NOT_APPLICABLE`) instead of assuming it, update `check_with_options` and `upgrade_filtered` in `crates/freshen-lib/src/winget.rs` together, and replace the stub output in the tests with output copied from a real run (add a diagnostic step that prints the raw `winget upgrade` output in the Windows job of `real-tools.yml`, as was done for `brew doctor`)
-- [ ] Fix the five release proposals in `ci-proposals/` (`release-binaries`, `release-deb`, `release-rpm`, `release-signing`, `release-crates-io`) so they work when applied: `github.inputs.tag` does not exist and must be `inputs.tag` (a manual `workflow_dispatch` otherwise releases the branch name instead of the tag), and every `actions/attest-sbom` step needs an `sbom-path` input and the job needs `attestations: write` (add both, or drop the SBOM attestation and keep `attest-build-provenance` with `attestations: write`), keeping the structural checks in `tests/run-tests.sh` green
-- [ ] Make release-please bump the version in `Cargo.toml`: `.github/workflows/release.yml` uses `release-type: simple`, which never edits `Cargo.toml`, so a release tag never matches the workspace version and the tag check in `ci-proposals/release-crates-io.yml` always fails. Use the `rust` release type or `extra-files` for the workspace `version` (and the `freshen-lib` dependency version in `crates/freshen/Cargo.toml`), keep `Cargo.lock` in sync, and explain the setting in `docs/`
+- [x] Fix the five release proposals in `ci-proposals/` (`release-binaries`, `release-deb`, `release-rpm`, `release-signing`, `release-crates-io`) so they work when applied: `github.inputs.tag` does not exist and must be `inputs.tag` (a manual `workflow_dispatch` otherwise releases the branch name instead of the tag), and every `actions/attest-sbom` step needs an `sbom-path` input and the job needs `attestations: write` (add both, or drop the SBOM attestation and keep `attest-build-provenance` with `attestations: write`), keeping the structural checks in `tests/run-tests.sh` green
+- [x] Make release-please bump the version in `Cargo.toml`: `.github/workflows/release.yml` uses `release-type: simple`, which never edits `Cargo.toml`, so a release tag never matches the workspace version and the tag check in `ci-proposals/release-crates-io.yml` always fails. Use the `rust` release type or `extra-files` for the workspace `version` (and the `freshen-lib` dependency version in `crates/freshen/Cargo.toml`), keep `Cargo.lock` in sync, and explain the setting in `docs/`
 - [x] Fix remaining `FRESHEN_*_LOG` env-var races in stub integration tests (scoop, windows_update, az, gcloud): mutate those log variables inside `crate::process::with_path`'s guarded closure, the same way `PATH` is, so parallel tests cannot clobber each other's stub logs (mirrors the `PATH_GUARD` race this item fixed).

@@ -108,7 +108,6 @@ jobs:
 
   apt-read-only:
     name: real apt (Ubuntu, read-only)
-    if: ${{ vars.REAL_TOOLS_PENDING_STEPS == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -173,7 +172,6 @@ jobs:
 
   windows-read-only:
     name: real Chocolatey and winget (Windows, read-only)
-    if: ${{ vars.REAL_TOOLS_PENDING_STEPS == 'true' }}
     runs-on: windows-latest
     timeout-minutes: 30
     defaults:

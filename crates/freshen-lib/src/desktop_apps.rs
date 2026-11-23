@@ -85,8 +85,7 @@ impl StopPolicy {
         }
     }
 
-    /// Reads `DESKTOP_STOP_TIMEOUT` (seconds) like the zsh script, falling back
-    /// to 20 seconds.
+    /// Reads `DESKTOP_STOP_TIMEOUT` (seconds), falling back to 20 seconds.
     #[must_use]
     pub fn from_env(force_kill: bool) -> Self {
         let timeout = env::var("DESKTOP_STOP_TIMEOUT")

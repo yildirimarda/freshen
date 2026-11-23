@@ -2,7 +2,7 @@
 //!
 //! Each test runs the built binary against a stub `brew` that records its
 //! invocations and replays recorded output, so the expected command transcript
-//! is exactly what `update-all.sh` runs.
+//! is asserted exactly.
 
 #![cfg(all(feature = "test-harness", not(windows)))]
 
@@ -182,7 +182,7 @@ fn homebrew_responses(transcript: &[StubOutput]) -> Vec<StubOutput> {
 }
 
 #[test]
-fn command_transcript_matches_the_zsh_homebrew_block() {
+fn command_transcript_matches_the_expected_homebrew_block() {
     let tools = StubTools::new(&["brew"]);
     tools.set_responses(
         "brew",

@@ -39,8 +39,13 @@ jobs:
           # guard) and can land in the "awaiting maintainer approval" queue —
           # required checks then block the release PR forever.
           token: ${{ secrets.AUTOMERGE_TOKEN || secrets.GITHUB_TOKEN }}
-          # Match your project: python | node | simple | terraform-module ...
-          release-type: simple
+          # The release type, the files that carry the version (Cargo.toml,
+          # the freshen-lib pin and Cargo.lock) and the tag format live in
+          # release-please-config.json; the last released version lives in
+          # .release-please-manifest.json. Keeping Cargo.lock in the release
+          # PR is what lets `cargo build --locked` pass on it.
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
 
   # ── Auto-merge the release PR too ────────────────────────────────────────
   # automerge-release:

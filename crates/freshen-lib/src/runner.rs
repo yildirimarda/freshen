@@ -1,13 +1,12 @@
 //! Executing a run and summarising what happened.
 //!
-//! The zsh implementation records a failed command, warns about it and keeps
-//! going, so one broken package manager never prevents the rest of the machine
-//! from being updated. This module keeps that behaviour: every step runs in
-//! order, failures are collected instead of aborting the run, and the caller
+//! A failed command is recorded, reported and the run keeps going, so one
+//! broken package manager never prevents the rest of the machine from being
+//! updated: every step runs in order, failures are collected instead of aborting the run, and the caller
 //! receives one status and duration per step.
 //!
-//! Exit-code semantics match `update-all.sh`: `0` when no step failed or
-//! timed out and `1` when at least one did. A skipped step (its tool is not
+//! The exit code is `0` when no step failed or timed out and `1` when at
+//! least one did. A skipped step (its tool is not
 //! installed) is not a failure and therefore does not change the exit code.
 
 use std::collections::HashMap;

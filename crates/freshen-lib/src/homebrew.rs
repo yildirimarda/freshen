@@ -1,7 +1,7 @@
 //! Homebrew steps: update, formulae, casks, autoremove and cleanup.
 //!
-//! The zsh implementation runs one long Homebrew block. Splitting it into
-//! steps keeps the behaviour (formulae before casks, so apps stay open during
+//! Homebrew is upgraded as one long block. Splitting it into steps keeps the
+//! behaviour (formulae before casks, so apps stay open during
 //! the slow formula upgrade) while letting the runner record a failure per
 //! command instead of aborting the rest of the block.
 //!
@@ -399,7 +399,7 @@ fn reopen_queued(queue: &ReopenQueue, system: &dyn AppSystem, message: &str, int
     }
 }
 
-/// Registers every Homebrew step, in the order the zsh script runs them.
+/// Registers every Homebrew step, in the order they run.
 ///
 /// Prerequisites make the ordering explicit: formulae after the update, casks
 /// after formulae, autoremove and cleanup last, and the quit apps are reopened
@@ -640,7 +640,7 @@ fn cask_info(cask: &Value) -> CaskInfo {
 /// Both artifact forms Homebrew emits are supported: a plain string
 /// (`"Firefox.app"`) and a mapping with a `target`
 /// (`{"target": "/Applications/Google Chrome.app"}`). Non-app artifacts and
-/// malformed entries are ignored, matching the zsh parser.
+/// malformed entries are ignored.
 ///
 /// # Errors
 ///
@@ -880,8 +880,7 @@ pub fn update_skip_message(cask: &str) -> String {
 /// Existing `.app` bundles for `apps`, searched in `roots` in order.
 ///
 /// The first existing match per app wins, so callers can pass
-/// `/Applications` before `~/Applications` and get the same app the zsh
-/// script would have found.
+/// `/Applications` before `~/Applications` and get the first app that exists.
 #[must_use]
 pub fn installed_app_paths(apps: &[String], roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut paths = Vec::new();

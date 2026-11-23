@@ -14,6 +14,9 @@ make_fixture() {
   mkdir -p "$dir/tests" "$dir/ci-proposals" "$dir/.github/workflows"
   cp "$root/tests/run-tests.sh" "$dir/tests/run-tests.sh"
   cp "$root/Cargo.toml" "$dir/Cargo.toml"
+  cp "$root/Cargo.lock" "$dir/Cargo.lock"
+  cp "$root/release-please-config.json" "$dir/release-please-config.json"
+  cp "$root/.release-please-manifest.json" "$dir/.release-please-manifest.json"
   cp "$root/rust-toolchain.toml" "$dir/rust-toolchain.toml"
   cp "$root/deny.toml" "$dir/deny.toml"
   for crate in "$root"/crates/*/Cargo.toml; do
@@ -25,15 +28,9 @@ make_fixture() {
   cp "$root/PLAN.md" "$dir/PLAN.md"
   cat > "$dir/README.md" <<'MD'
 # freshen
-
-## Migrating from update-all.sh
-
-Use freshen instead.
 MD
   cat > "$dir/CHANGELOG.md" <<'MD'
 ## [Unreleased]
-
-- Removed the zsh implementation and the compatibility shim.
 MD
 
   for helper in real-tools-workflow.sh real-tools-scheduled-workflow.sh real-tools-check.py; do
