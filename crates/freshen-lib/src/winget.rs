@@ -347,125 +347,117 @@ pub struct WingetPackage {
 /// Parses the output of `winget upgrade` into packages with name, id and
 /// version.
 ///
-/// `winget upgrade` prints a table (no `--output json` — that is rejected by
-/// real `winget` as invalid arguments). Winget translates its column headers
-/// with the Windows UI language, so the parser cannot rely on fixed column
-/// names. Instead it finds the dashed separator line, reads the header line
-/// immediately above it, and uses character offsets from that header to
-/// extract each column from every data row. Column positions are stable
-/// regardless of locale, so the parse is locale-independent.
+/// `winget upgrade` prints a table (there is no JSON output: `--output json`
+/// is rejected as invalid arguments). Winget translates its column headers
+/// with the Windows UI language, so the parser does not depend on header
+/// words. It finds the dashed separator line, reads the header line right
+/// above it and uses the character offsets of the header words as the column
+/// starts of every row. The columns are the usual `Name`, `Id`, `Version`,
+/// `Available`, `Source`; an English header is matched by name, any other
+/// language by position (name 0, id 1, available 3).
 ///
-/// The columns needed are matched by header name (case-insensitive):
-/// `name` → package name, `id` → package identifier, `available` → available
-/// version. If a header name does not match, fixed fallback positions are used
-/// (name=0, id=1, available=3).
+/// Real output has more than the table: spinner and progress lines before it
+/// (the lone `-` of the spinner must not pass for a separator), a footer such
+/// as `3 upgrades available.` and, when some packages cannot be upgraded
+/// without explicit targeting, a second table. Only the first table is read,
+/// and a row that does not fit its columns ends it. Columns are cut by
+/// character, never by byte, because winget truncates long names with `…`.
 ///
 /// Missing or malformed output yields no packages rather than a failure.
 pub fn parse_winget_packages(output: &str) -> Vec<WingetPackage> {
-    let lines: Vec<&str> = output.lines().collect();
+    let lines: Vec<Vec<char>> = output.lines().map(visible_chars).collect();
 
-    // Find the dashed separator line that marks the start of the table body.
-    let sep_idx = match lines.iter().position(|line| {
-        let trimmed = line.trim();
-        !trimmed.is_empty() && trimmed.chars().all(|c| c == '-' || c.is_ascii_whitespace())
-    }) {
-        Some(idx) => idx,
-        None => return Vec::new(),
+    let Some(separator) = lines.iter().position(|line| is_table_separator(line)) else {
+        return Vec::new();
     };
-
-    // The header line is immediately above the separator.
-    let header = match lines.get(sep_idx.saturating_sub(1)) {
-        Some(h) => h,
-        None => return Vec::new(),
-    };
-
-    // Column start positions: every non-whitespace character that begins a
-    // run (i.e. is preceded by whitespace or is the first character).
-    let col_starts: Vec<usize> = header
-        .char_indices()
-        .filter(|&(i, c)| {
-            !c.is_whitespace() && (i == 0 || header.as_bytes()[i - 1].is_ascii_whitespace())
-        })
-        .map(|(i, _)| i)
-        .collect();
-
-    if col_starts.is_empty() {
+    if separator == 0 {
         return Vec::new();
     }
 
-    // Column names from the header, used to map positions to fields.
-    let col_names: Vec<&str> = col_starts
+    let header = &lines[separator - 1];
+    let starts = column_starts(header);
+    if starts.len() < 2 {
+        return Vec::new();
+    }
+    let words: Vec<String> = starts
         .iter()
         .map(|&start| {
-            let rest = &header[start..];
-            let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
-            &rest[..end]
+            header[start..]
+                .iter()
+                .take_while(|c| !c.is_whitespace())
+                .collect()
         })
         .collect();
-
-    let name_col = col_names
-        .iter()
-        .position(|n| n.eq_ignore_ascii_case("name"))
-        .unwrap_or(0);
-    let id_col = col_names
-        .iter()
-        .position(|n| n.eq_ignore_ascii_case("id"))
-        .unwrap_or(1);
-    let version_col = col_names
-        .iter()
-        .position(|n| n.eq_ignore_ascii_case("available"))
-        .unwrap_or(3);
+    let column = |name: &str, fallback: usize| {
+        words
+            .iter()
+            .position(|word| word.eq_ignore_ascii_case(name))
+            .unwrap_or(fallback)
+    };
+    let name_column = column("name", 0);
+    let id_column = column("id", 1);
+    let version_column = column("available", 3);
 
     let mut packages = Vec::new();
-    for line in &lines[sep_idx + 1..] {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let mut name = None;
-        let mut id = None;
-        let mut version = None;
-
-        for (idx, &start) in col_starts.iter().enumerate() {
-            let end = col_starts.get(idx + 1).copied().unwrap_or(trimmed.len());
-            if start >= trimmed.len() {
-                continue;
-            }
-            let value = trimmed[start..end.min(trimmed.len())].trim();
-            if value.is_empty() {
-                continue;
-            }
-            if idx == name_col {
-                name = Some(value);
-            } else if idx == id_col {
-                id = Some(value);
-            } else if idx == version_col {
-                version = Some(value);
-            }
-        }
-
-        let name = match name {
-            Some(n) => n,
-            None => continue,
+    for line in &lines[separator + 1..] {
+        let cell = |index: usize| table_cell(line, &starts, index);
+        let (Some(name), Some(id), Some(version)) =
+            (cell(name_column), cell(id_column), cell(version_column))
+        else {
+            break;
         };
-        let id = match id {
-            Some(n) => n,
-            None => continue,
-        };
-        let version = match version {
-            Some(n) => n,
-            None => continue,
-        };
-
-        packages.push(WingetPackage {
-            name: name.to_owned(),
-            id: id.to_owned(),
-            version: version.to_owned(),
-        });
+        packages.push(WingetPackage { name, id, version });
     }
 
     packages
+}
+
+/// The text of a console line as it looks once the cursor has stopped moving:
+/// winget redraws its spinner on one line with carriage returns, and only the
+/// last non-empty segment is what stays on screen.
+fn visible_chars(line: &str) -> Vec<char> {
+    line.rsplit('\r')
+        .find(|segment| !segment.trim().is_empty())
+        .unwrap_or("")
+        .chars()
+        .collect()
+}
+
+/// Whether `line` is the dashed line between the header and the rows of a
+/// winget table. The table separator spans the whole table, so a short run of
+/// dashes (the `-` frame of the spinner) is not one.
+fn is_table_separator(line: &[char]) -> bool {
+    let dashes = line.iter().filter(|c| **c == '-').count();
+    dashes >= 5 && line.iter().all(|c| *c == '-' || c.is_whitespace())
+}
+
+/// The character offsets at which the words of a table header start.
+fn column_starts(header: &[char]) -> Vec<usize> {
+    header
+        .iter()
+        .enumerate()
+        .filter(|&(index, c)| {
+            !c.is_whitespace() && (index == 0 || header[index - 1].is_whitespace())
+        })
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// The text of column `index` in `line`, or `None` when the line does not
+/// have that column: a row starts every column at a word boundary, a footer
+/// or a stray line does not.
+fn table_cell(line: &[char], starts: &[usize], index: usize) -> Option<String> {
+    let start = *starts.get(index)?;
+    let end = starts.get(index + 1).copied().unwrap_or(line.len());
+    if start >= line.len() || line[start].is_whitespace() {
+        return None;
+    }
+    if start > 0 && !line[start - 1].is_whitespace() {
+        return None;
+    }
+    let text: String = line[start..end.min(line.len())].iter().collect();
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_owned())
 }
 
 /// Parses the output of `winget upgrade` into outdated items.
@@ -911,6 +903,74 @@ VLC     VideoLAN.VLC 3.0.18           3.0.20      winget\n",
         assert_eq!(items[1].latest(), Some("2.45.2"));
         assert_eq!(items[2].name(), "VLC");
         assert_eq!(items[2].latest(), Some("3.0.20"));
+    }
+
+    #[test]
+    fn a_name_truncated_with_an_ellipsis_does_not_break_the_columns() {
+        // Winget cuts a long name with `…`, a multi-byte character: the
+        // columns must be cut by character, not by byte.
+        let output = [
+            "Name              Id                  Version  Available  Source",
+            "----------------------------------------------------------------",
+            "Microsoft Visua…  Microsoft.VCRedist  14.0.1   14.1.0     winget",
+            "Git               Git.Git             2.45.1   2.45.2     winget",
+            "",
+        ]
+        .join("\n");
+
+        let packages = parse_winget_packages(&output);
+
+        assert_eq!(packages.len(), 2);
+        assert_eq!(packages[0].name, "Microsoft Visua…");
+        assert_eq!(packages[0].id, "Microsoft.VCRedist");
+        assert_eq!(packages[0].version, "14.1.0");
+        assert_eq!(packages[1].name, "Git");
+    }
+
+    #[test]
+    fn reads_only_the_first_table_of_real_winget_output() {
+        // The spinner and progress lines before the table (a lone `-` must
+        // not pass for the separator), the footer and the second table of
+        // packages that need explicit targeting are not packages to upgrade.
+        let output = [
+            "   - ",
+            "   \\ ",
+            "  ██████████████████████████████  100%",
+            "Name              Id                  Version  Available  Source",
+            "----------------------------------------------------------------",
+            "Git               Git.Git             2.45.1   2.45.2     winget",
+            "Mozilla Firefox   Mozilla.Firefox     130.0    131.0      winget",
+            "2 upgrades available.",
+            "The following packages have an upgrade available, but require explicit targeting for upgrade:",
+            "Name              Id                  Version  Available  Source",
+            "----------------------------------------------------------------",
+            "Pinned Tool       Vendor.Pinned       1.0      Unknown    winget",
+            "",
+        ]
+        .join("\n");
+
+        let packages = parse_winget_packages(&output);
+
+        assert_eq!(packages.len(), 2);
+        assert_eq!(packages[0].id, "Git.Git");
+        assert_eq!(packages[1].id, "Mozilla.Firefox");
+        assert_eq!(packages[1].version, "131.0");
+    }
+
+    #[test]
+    fn the_spinner_redrawn_with_carriage_returns_is_ignored() {
+        let output = [
+            "   -    \r   \\    \r   |    \rName              Id                  Version  Available  Source",
+            "----------------------------------------------------------------",
+            "Git               Git.Git             2.45.1   2.45.2     winget",
+            "",
+        ]
+        .join("\n");
+
+        let packages = parse_winget_packages(&output);
+
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].name, "Git");
     }
 
     #[test]
