@@ -13,8 +13,8 @@
 //!   keeps the messages English and the labels stable;
 //! * on Windows the console is switched to UTF-8 (code page 65001) so that
 //!   characters outside ASCII survive, and the tools that understand
-//!   `--disable-interactivity` get that flag, so a tool never waits for an
-//!   answer on a pipe.
+//!   `--disable-interactivity` get that flag after their arguments, so a tool
+//!   never waits for an answer on a pipe.
 //!
 //! The neutral locale must not cost a tool its non-ASCII output, so the
 //! encoding of the runtimes freshen starts (Python, Ruby) is pinned to UTF-8.
@@ -57,8 +57,9 @@ const UTF8_VARIABLES: [(&str, &str); 2] = [("PYTHONUTF8", "1"), ("PYTHONIOENCODI
 /// name with an accent, so the encoding is pinned to UTF-8.
 const RUBY_ENCODING: &str = "-EUTF-8:UTF-8";
 
-/// Tools that understand a global flag that turns every prompt off, and the
-/// flag itself.
+/// Tools that understand a flag that turns every prompt off, and the flag
+/// itself. The flag is added after the command's own arguments, because winget
+/// accepts it as an option of a command and rejects it in front of one.
 ///
 /// A tool that waits for an answer never gets one: freshen gives every child
 /// a closed standard input, so a prompt would only block the step until it

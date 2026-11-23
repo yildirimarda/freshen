@@ -855,7 +855,7 @@ mod tests {
                  case \"$1\" in\n\
                     --version) exit 0 ;;\n\
                  esac\n\
-                 case \"$2\" in\n\
+                 case \"$1\" in\n\
                     upgrade) printf {}; exit 0 ;;\n                   *) exit 0 ;;\n                 esac\n",
                 shell_quote(output)
             );
@@ -876,7 +876,7 @@ mod tests {
                 .unwrap_or_else(|error| panic!("write {}: {error}", output_file.display()));
             let script = "@echo off\r\n\
                  >>\"%FRESHEN_WINGET_LOG%\" echo winget %*\r\n\
-                 if \"%~2\"==\"upgrade\" type \"%~dp0upgrade-output.txt\"\r\n\
+                 if \"%~1\"==\"upgrade\" type \"%~dp0upgrade-output.txt\"\r\n\
                  exit /b 0\r\n";
             let stub = dir.join("winget.cmd");
             std::fs::write(&stub, script)
@@ -1144,8 +1144,8 @@ VLC     VideoLAN.VLC 3.0.18           3.0.20      winget\n",
         assert_eq!(
             calls,
             vec![
-                "winget --disable-interactivity source update",
-                "winget --disable-interactivity upgrade --all --silent --accept-package-agreements --accept-source-agreements",
+                "winget source update --disable-interactivity",
+                "winget upgrade --all --silent --accept-package-agreements --accept-source-agreements --disable-interactivity",
             ],
             "calls: {calls:?}"
         );
@@ -1186,11 +1186,11 @@ Git     Git.Git      2.45.1           2.45.2      winget\n";
 
         let calls: Vec<&str> = calls.lines().map(str::trim).collect();
         assert!(
-            calls.contains(&"winget --disable-interactivity source update"),
+            calls.contains(&"winget source update --disable-interactivity"),
             "source update missing: {calls:?}"
         );
         assert!(
-            calls.contains(&"winget --disable-interactivity upgrade --id 7zip.7zip --silent --accept-package-agreements --accept-source-agreements"),
+            calls.contains(&"winget upgrade --id 7zip.7zip --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"),
             "7zip should be upgraded by id: {calls:?}"
         );
         assert!(
@@ -1228,7 +1228,7 @@ Git     Git.Git      2.45.1           2.45.2      winget\n";
                     for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
                     printf '\\n'\n\
                  } >> \"$FRESHEN_WINGET_LOG\"\n\
-                 case \"$2\" in\n\
+                 case \"$1\" in\n\
                     source) exit 0 ;;\n\
                     *) exit \"${FRESHEN_WINGET_EXIT_CODE:-0}\" ;;\n\
                  esac\n";
@@ -1245,7 +1245,7 @@ Git     Git.Git      2.45.1           2.45.2      winget\n";
                  >>\"%FRESHEN_WINGET_LOG%\" echo winget %*\r\n\
                  set \"code=%FRESHEN_WINGET_EXIT_CODE%\r\n\
                  if not defined code set code=0\r\n\
-                 if \"%~2\"==\"source\" (\r\n\
+                 if \"%~1\"==\"source\" (\r\n\
                     exit /b 0\r\n\
                  ) else (\r\n\
                     exit /b %code%\r\n\
@@ -1320,8 +1320,8 @@ Git     Git.Git      2.45.1           2.45.2      winget\n";
             assert_eq!(
                 calls,
                 &[
-                    "winget --disable-interactivity source update",
-                    "winget --disable-interactivity upgrade --all --silent --accept-package-agreements --accept-source-agreements",
+                    "winget source update --disable-interactivity",
+                    "winget upgrade --all --silent --accept-package-agreements --accept-source-agreements --disable-interactivity",
                 ],
                 "calls for exit {exit_code}: {calls:?}"
             );

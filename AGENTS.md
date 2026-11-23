@@ -176,8 +176,10 @@ tests use must carry the same gate as those tests.
   or strip the quotes, instead of comparing an exact list that was written on
   Linux. The runner also checks before and after a step, so a query can run
   more than once.
-- `neutral_locale` prepends `--disable-interactivity` to winget, so a stub
-  reads the subcommand from `%~2`, not `%~1`.
+- `neutral_locale` appends `--disable-interactivity` to winget after its
+  subcommand and arguments (winget rejects it in front of the command with
+  exit code `0x8a150002`), so a stub reads the subcommand from `%~1` / `$1`
+  and the logged call ends with `--disable-interactivity`.
 - Windows output ends its lines with `\r\n`. Parsers and `sanitize_output` must
   keep the line content; add a test with `\r\n` input that runs on every OS.
 

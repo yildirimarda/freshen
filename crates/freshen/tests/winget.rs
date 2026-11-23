@@ -27,8 +27,8 @@ fn run(tools: &StubTools, upgrade_exit: i32) -> Output {
         "winget",
         &[
             StubOutput::new(),                           // detect: winget --version
-            StubOutput::new(), // check: winget --disable-interactivity upgrade
-            StubOutput::new(), // run: winget --disable-interactivity source update
+            StubOutput::new(), // check: winget upgrade --disable-interactivity
+            StubOutput::new(), // run: winget source update --disable-interactivity
             StubOutput::new().with_status(upgrade_exit), // run: winget upgrade --all ...
         ],
     );
@@ -43,9 +43,9 @@ fn run(tools: &StubTools, upgrade_exit: i32) -> Output {
 /// check, the source refresh and the upgrade itself.
 const WINGET_CALLS: &[&str] = &[
     "winget --version",
-    "winget --disable-interactivity upgrade --accept-source-agreements",
-    "winget --disable-interactivity source update",
-    "winget --disable-interactivity upgrade --all --silent --accept-package-agreements --accept-source-agreements",
+    "winget upgrade --accept-source-agreements --disable-interactivity",
+    "winget source update --disable-interactivity",
+    "winget upgrade --all --silent --accept-package-agreements --accept-source-agreements --disable-interactivity",
 ];
 
 #[test]
@@ -146,7 +146,7 @@ Git     Git.Git      2.45.1         2.45.2      winget\n";
     let calls = tools.step_calls();
     assert!(
         calls.iter().any(|call| {
-            call == "winget --disable-interactivity upgrade --id 7zip.7zip --silent --accept-package-agreements --accept-source-agreements"
+            call == "winget upgrade --id 7zip.7zip --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"
         }),
         "7zip should be upgraded by id: {calls:?}"
     );

@@ -43,9 +43,9 @@ fn run(tools: &StubTools, upgrade_exit: i32) -> Output {
 /// read-only check, the source refresh and the upgrade itself.
 const MICROSOFT_STORE_CALLS: &[&str] = &[
     "winget --version",
-    "winget --disable-interactivity upgrade --source msstore",
-    "winget --disable-interactivity source update",
-    "winget --disable-interactivity upgrade --all --source msstore --silent --accept-package-agreements --accept-source-agreements",
+    "winget upgrade --source msstore --disable-interactivity",
+    "winget source update --disable-interactivity",
+    "winget upgrade --all --source msstore --silent --accept-package-agreements --accept-source-agreements --disable-interactivity",
 ];
 
 #[test]
@@ -143,7 +143,7 @@ fn microsoft_store_holds_back_excluded_apps() {
     let calls = tools.step_calls();
     assert!(
         calls.iter().any(|call| {
-            call == "winget --disable-interactivity upgrade --id Microsoft.Teams --source msstore --silent --accept-package-agreements --accept-source-agreements"
+            call == "winget upgrade --id Microsoft.Teams --source msstore --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"
         }),
         "Microsoft.Teams should be upgraded by id: {calls:?}"
     );
