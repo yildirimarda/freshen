@@ -62,6 +62,18 @@ PACKAGE_TOKEN = re.compile(r"^[A-Za-z0-9@._+~:/-]+$")
 # Steps whose items are findings with free text, not package names.
 FINDING_STEPS = {"brew-doctor"}
 
+# Steps whose item names are product display names (`Google Chrome`,
+# `PowerShell 7-x64`), which winget prints in its `Name` column: they contain
+# spaces and punctuation, and a long one is cut with `…`.
+DISPLAY_NAME_STEPS = {"winget"}
+
+# What a parser that lost its place in the winget table would turn into an
+# item: a header word, a dashed line or the `N upgrades available.` footer.
+DISPLAY_NAME_DRIFT = re.compile(
+    r"^(?:Name|Id|Version|Available|Source|-{3,}|\d+ upgrades? available\.?)$",
+    re.IGNORECASE,
+)
+
 
 def load_report(path):
     with open(path, encoding="utf-8") as handle:
@@ -98,6 +110,18 @@ def validate_item(step_id, item, errors, noun):
         # warnings), whose names are sentences, not package names.
         if not isinstance(name, str) or not name.strip():
             errors.append(f"{step_id}: finding has no text (parser drift?)")
+    elif step_id in DISPLAY_NAME_STEPS:
+        if (
+            not isinstance(name, str)
+            or not name
+            or name != name.strip()
+            or not name.isprintable()
+            or DISPLAY_NAME_DRIFT.fullmatch(name)
+        ):
+            errors.append(
+                f"{step_id}: outdated item {name!r} does not look like a "
+                "package display name (parser drift?)"
+            )
     elif not isinstance(name, str) or not PACKAGE_TOKEN.fullmatch(name):
         errors.append(
             f"{step_id}: outdated item {name!r} does not look like a {noun} "
@@ -191,6 +215,13 @@ def main(argv=None):
         help="real tools whose steps the report must contain (default: homebrew)",
     )
     args = parser.parse_args(argv)
+
+    # Item names can hold characters outside the Windows console code page
+    # (winget cuts long names with `…`); never let printing them fail or
+    # turn into `�` in the job log.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
 
     try:
         report = load_report(args.report)
