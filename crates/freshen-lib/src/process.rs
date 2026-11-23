@@ -798,15 +798,17 @@ impl CommandSpec {
         };
         #[cfg(not(windows))]
         let mut command = Command::new(&self.program);
+        command.args(&self.args);
         if self.neutral_locale {
-            // The flag comes before the subcommand, because a tool that
-            // knows it expects it as a global option.
+            // The flag comes after the subcommand and its arguments: winget
+            // accepts `--disable-interactivity` as an option of a command and
+            // rejects it in front of the command with exit code 0x8a150002
+            // (invalid arguments).
             if let Some(flag) = crate::locale::non_interactive_flag(&self.program) {
                 command.arg(flag);
             }
         }
         command
-            .args(&self.args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

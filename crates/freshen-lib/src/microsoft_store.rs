@@ -104,7 +104,7 @@ impl Step for MicrosoftStoreStep {
         let mut failures = Vec::new();
         let mut not_applicable = false;
 
-        human!("winget --disable-interactivity source update");
+        human!("winget source update --disable-interactivity");
         if let Err(error) = CommandSpec::new("winget")
             .args(["source", "update"])
             .neutral_locale()
@@ -115,7 +115,7 @@ impl Step for MicrosoftStoreStep {
 
         if options.filters().packages().is_empty() {
             human!(
-                "winget --disable-interactivity upgrade --all --source msstore --silent --accept-package-agreements --accept-source-agreements"
+                "winget upgrade --all --source msstore --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"
             );
             let upgrade = CommandSpec::new("winget")
                 .args([
@@ -200,7 +200,7 @@ impl MicrosoftStoreStep {
 
         for id in &to_upgrade {
             human!(
-                "winget --disable-interactivity upgrade --id {id} --source msstore --silent --accept-package-agreements --accept-source-agreements"
+                "winget upgrade --id {id} --source msstore --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"
             );
             if let Err(error) = CommandSpec::new("winget")
                 .args([
@@ -343,7 +343,7 @@ mod tests {
                  case \"$1\" in\n\
                    --version) exit 0 ;;\n\
                  esac\n\
-                 case \"$2\" in\n\
+                 case \"$1\" in\n\
                    upgrade) printf {}; exit 0 ;;\n                   *) exit 0 ;;\n                 esac\n",
                 shell_quote(output)
             );
@@ -361,7 +361,7 @@ mod tests {
             std::fs::write(&output_file, table)
                 .unwrap_or_else(|error| panic!("write {}: {error}", output_file.display()));
             let script = "@echo off\r\n\
-                 if /I \"%~2\"==\"upgrade\" type \"%~dp0upgrade-output.txt\"\r\n\
+                 if /I \"%~1\"==\"upgrade\" type \"%~dp0upgrade-output.txt\"\r\n\
                  exit /b 0\r\n";
             let stub = dir.join("winget.cmd");
             std::fs::write(&stub, script)
@@ -588,8 +588,8 @@ mod tests {
         assert_eq!(
             calls,
             vec![
-                "winget --disable-interactivity source update",
-                "winget --disable-interactivity upgrade --all --source msstore --silent --accept-package-agreements --accept-source-agreements",
+                "winget source update --disable-interactivity",
+                "winget upgrade --all --source msstore --silent --accept-package-agreements --accept-source-agreements --disable-interactivity",
             ],
             "calls: {calls:?}"
         );
@@ -621,10 +621,10 @@ mod tests {
                    for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
                    printf '\\n'\n\
                  } >> \"$FRESHEN_WINGET_LOG\"\n\
-                 case \"$2\" in\n\
+                 case \"$1\" in\n\
                    source) exit 0 ;;\n\
                    upgrade)\n\
-                     if [ \"$3\" = --id ]; then\n\
+                     if [ \"$2\" = --id ]; then\n\
                        exit 0\n\
                      else\n\
                        printf 'Name Id Version Source\\n'\n\
@@ -644,8 +644,8 @@ mod tests {
         {
             let script = "@echo off\r\n\
                  >>\"%FRESHEN_WINGET_LOG%\" echo winget %*\r\n\
-                 if /I \"%~2\"==\"source\" (exit /b 0) else (\n\
-                   if /I \"%~3\"==\"--id\" (exit /b 0) else (\n\
+                 if /I \"%~1\"==\"source\" (exit /b 0) else (\n\
+                   if /I \"%~2\"==\"--id\" (exit /b 0) else (\n\
                      echo Name Id Version Source\r\n\
                      echo Microsoft Teams Microsoft.Teams 2.0.0 msstore\r\n\
                      echo WhatsApp WhatsApp.LLC 2.2345.12.0 msstore\r\n\
@@ -681,11 +681,11 @@ mod tests {
 
         let calls: Vec<&str> = calls.lines().map(str::trim).collect();
         assert!(
-            calls.contains(&"winget --disable-interactivity source update"),
+            calls.contains(&"winget source update --disable-interactivity"),
             "source update missing: {calls:?}"
         );
         assert!(
-            calls.contains(&"winget --disable-interactivity upgrade --id Microsoft.Teams --source msstore --silent --accept-package-agreements --accept-source-agreements"),
+            calls.contains(&"winget upgrade --id Microsoft.Teams --source msstore --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"),
             "Microsoft.Teams should be upgraded by id: {calls:?}"
         );
         assert!(
@@ -720,7 +720,7 @@ mod tests {
                    for arg in \"$@\"; do printf ' %s' \"$arg\"; done\n\
                    printf '\\n'\n\
                  } >> \"$FRESHEN_WINGET_LOG\"\n\
-                 case \"$2\" in\n\
+                 case \"$1\" in\n\
                    source) exit 0 ;;\n\
                    *) exit \"${FRESHEN_WINGET_EXIT_CODE:-0}\" ;;\n\
                  esac\n";
@@ -737,7 +737,7 @@ mod tests {
                  >>\"%FRESHEN_WINGET_LOG%\" echo winget %*\r\n\
                  set \"code=%FRESHEN_WINGET_EXIT_CODE%\r\n\
                  if not defined code set code=0\r\n\
-                 if /I \"%~2\"==\"source\" (\r\n\
+                 if /I \"%~1\"==\"source\" (\r\n\
                    exit /b 0\r\n\
                  ) else (\r\n\
                    exit /b %code%\r\n\
@@ -812,8 +812,8 @@ mod tests {
             assert_eq!(
                 calls,
                 &[
-                    "winget --disable-interactivity source update",
-                    "winget --disable-interactivity upgrade --all --source msstore --silent --accept-package-agreements --accept-source-agreements",
+                    "winget source update --disable-interactivity",
+                    "winget upgrade --all --source msstore --silent --accept-package-agreements --accept-source-agreements --disable-interactivity",
                 ],
                 "calls for exit {exit_code}: {calls:?}"
             );

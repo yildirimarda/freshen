@@ -397,12 +397,12 @@ pub fn zypper_restart_transcript() -> Vec<&'static str> {
 
 /// Named insertion: the winget source update step.
 pub fn winget_source_update() -> &'static [&'static str] {
-    &["winget --disable-interactivity source update"]
+    &["winget source update --disable-interactivity"]
 }
 
 /// Named insertion: the winget upgrade step.
 pub fn winget_upgrade_steps() -> &'static [&'static str] {
-    &["winget --disable-interactivity upgrade --all --silent --accept-package-agreements --accept-source-agreements"]
+    &["winget upgrade --all --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"]
 }
 
 /// Named insertion: full winget transcript (source update before the upgrade).
@@ -447,12 +447,12 @@ pub fn usoclient_transcript() -> Vec<&'static str> {
 
 /// Named insertion: the Microsoft Store source update step.
 pub fn microsoft_store_source_update() -> &'static [&'static str] {
-    &["winget --disable-interactivity source update"]
+    &["winget source update --disable-interactivity"]
 }
 
 /// Named insertion: the Microsoft Store upgrade step.
 pub fn microsoft_store_upgrade_steps() -> &'static [&'static str] {
-    &["winget --disable-interactivity upgrade --all --source msstore --silent --accept-package-agreements --accept-source-agreements"]
+    &["winget upgrade --all --source msstore --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"]
 }
 
 /// Named insertion: full Microsoft Store transcript (source update before the upgrade).
