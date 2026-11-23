@@ -94,6 +94,8 @@ cat > "$tmp/check.json" <<'JSON'
      "items": [{"name": "firefox", "current": "121.0", "latest": "122.0"}], "error": null},
     {"id": "brew-autoremove", "name": "Homebrew autoremove", "status": "up to date", "items": [], "error": null},
     {"id": "brew-cleanup", "name": "Homebrew cleanup", "status": "up to date", "items": [], "error": null},
+    {"id": "brew-doctor", "name": "Homebrew doctor", "status": "up to date", "items": [], "error": null},
+    {"id": "brew-bundle-cleanup", "name": "Homebrew bundle cleanup", "status": "up to date", "items": [], "error": null},
     {"id": "brew-reopen", "name": "Homebrew reopen", "status": "up to date", "items": [], "error": null}
   ]
 }
@@ -111,6 +113,8 @@ cat > "$tmp/dry-run.json" <<'JSON'
     {"id": "brew-casks", "name": "Homebrew casks", "status": "planned", "error": null},
     {"id": "brew-autoremove", "name": "Homebrew autoremove", "status": "planned", "error": null},
     {"id": "brew-cleanup", "name": "Homebrew cleanup", "status": "planned", "error": null},
+    {"id": "brew-doctor", "name": "Homebrew doctor", "status": "planned", "error": null},
+    {"id": "brew-bundle-cleanup", "name": "Homebrew bundle cleanup", "status": "planned", "error": null},
     {"id": "brew-reopen", "name": "Homebrew reopen", "status": "planned", "error": null}
   ]
 }

@@ -36,7 +36,7 @@ MD
 - Removed the zsh implementation and the compatibility shim.
 MD
 
-  for helper in real-tools-workflow.sh real-tools-check.py; do
+  for helper in real-tools-workflow.sh real-tools-scheduled-workflow.sh real-tools-check.py; do
     if [[ -f "$root/tests/$helper" ]]; then
       cp "$root/tests/$helper" "$dir/tests/$helper"
     fi
@@ -65,7 +65,7 @@ MD
     cp -r "$root/docs" "$dir/docs"
   fi
 
-  for name in rust ci coverage real-tools linux-containers-real-tools release-signing release-binaries release-crates-io; do
+  for name in rust ci coverage real-tools real-tools-scheduled linux-containers-real-tools release-signing release-binaries release-crates-io; do
     src="$root/ci-proposals/$name.yml"
     [[ -f "$src" ]] || src="$root/.github/workflows/$name.yml"
     if [[ "$layout" == proposals ]]; then

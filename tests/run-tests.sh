@@ -153,6 +153,21 @@ else
   bad "no real-tools workflow in ci-proposals/ or .github/workflows/"
 fi
 
+# 8a. The scheduled real-tools workflow runs the same read-only checks every
+#     night against freshly refreshed package-manager metadata. It is not
+#     required for merges, so nothing else would notice if it drifted from the
+#     validator (a step the validator now requires missing from its step list).
+if scheduled_file="$(workflow_path real-tools-scheduled)"; then
+  ok "real-tools-scheduled workflow found at $scheduled_file"
+  if [[ -f tests/real-tools-scheduled-workflow.sh ]]; then
+    bash tests/real-tools-scheduled-workflow.sh || fail=1
+  else
+    bad "tests/real-tools-scheduled-workflow.sh is missing"
+  fi
+else
+  bad "no real-tools-scheduled workflow in ci-proposals/ or .github/workflows/"
+fi
+
 # 8b. The container real-tools workflow runs freshen's read-only modes against
 #     the real package manager (apt on Ubuntu, dnf on Fedora, pacman on Arch)
 #     inside throwaway container images and validates every JSON report with
