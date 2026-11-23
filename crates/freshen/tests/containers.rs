@@ -1,8 +1,8 @@
 //! Parity tests for the Colima/lima and Docker orchestration.
 //!
 //! Every test runs the built binary against stub `brew`, `colima` and `docker`
-//! executables and asserts the exact command transcript of the corresponding
-//! block in `update-all.sh`. No real container runtime is touched.
+//! executables and asserts the exact command transcript. No real container
+//! runtime is touched.
 
 #![cfg(all(feature = "test-harness", unix))]
 

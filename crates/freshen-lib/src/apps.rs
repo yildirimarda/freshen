@@ -1,9 +1,9 @@
 //! Quitting and reopening macOS applications around a cask upgrade.
 //!
-//! The zsh implementation reads the bundle id of every installed cask app,
-//! quits the ones that are running, waits for them to exit and reopens exactly
-//! those apps afterwards. It never quits the terminal that is running the
-//! script, and only force-kills an app when the user asked for it.
+//! freshen reads the bundle id of every installed cask app, quits the ones
+//! that are running, waits for them to exit and reopens exactly those apps
+//! afterwards. It never quits the terminal that is running it, and only
+//! force-kills an app when the user asked for it.
 //!
 //! All operating-system access goes through [`AppSystem`], so the policy is
 //! tested with a fake process table instead of the real machine.
@@ -28,7 +28,7 @@ const DEFAULT_QUIT_TIMEOUT: Duration = Duration::from_secs(20);
 /// Default time between checks while waiting for an app to quit.
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
-/// Default wait after a force kill, matching the zsh script.
+/// Default wait after a force kill.
 const DEFAULT_FORCE_KILL_GRACE: Duration = Duration::from_secs(2);
 
 /// Default seconds to wait for an app that is updating itself.
@@ -493,7 +493,7 @@ impl QuitPolicy {
         }
     }
 
-    /// Reads `QUIT_TIMEOUT` (seconds) like the zsh script, falling back to 20.
+    /// Reads `QUIT_TIMEOUT` (seconds), falling back to 20.
     ///
     /// `UPDATE_TIMEOUT` (seconds) bounds the wait for an app that is updating
     /// itself, and falls back to 60.
@@ -567,9 +567,9 @@ pub enum QuitChoice {
     SkipCasks,
 }
 
-/// Parses a prompt answer with the same choices as the zsh script.
+/// Parses a prompt answer.
 ///
-/// An empty answer means yes, as pressing Return does in `update-all.sh`.
+/// An empty answer means yes, as pressing Return does.
 #[must_use]
 pub fn quit_choice(answer: &str) -> QuitChoice {
     match answer.trim().to_ascii_lowercase().as_str() {
@@ -1037,8 +1037,8 @@ fn app_kind<S: AppSystem + ?Sized>(system: &S, path: &Path) -> AppKind {
 
 /// Quits every app gracefully and returns the apps to reopen.
 ///
-/// A bundle id is recorded before the quit is attempted, exactly like the zsh
-/// script, so an app that refuses to quit is still reopened (it never closed).
+/// A bundle id is recorded before the quit is attempted, so an app that
+/// refuses to quit is still reopened (it never closed).
 /// The session state of the app is read before the quit, so it can be
 /// restored when the app comes back.
 ///
@@ -1420,7 +1420,7 @@ fn executable_prefix(app: &Path) -> String {
 /// Pids whose command line runs `app`'s main executable.
 ///
 /// Helper and agent processes that share the bundle id but live in another
-/// executable are not matched, which is why the zsh script checks
+/// executable are not matched, which is why the check looks at
 /// `Contents/MacOS/` instead of AppleScript's "is running".
 #[must_use]
 pub fn pids_from_processes(processes: &str, app: &Path) -> Vec<u32> {
@@ -1727,7 +1727,7 @@ fn open_path_command(path: &Path, hidden: bool) -> CommandSpec {
     spec.arg("-a").arg(path)
 }
 
-/// The real macOS implementation, using the same commands as the zsh script.
+/// The real macOS implementation.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MacAppSystem;
 
@@ -3162,7 +3162,7 @@ mod tests {
     }
 
     #[test]
-    fn prompt_answers_match_the_zsh_script() {
+    fn prompt_answers_are_parsed_as_expected() {
         for answer in ["", "y", "Y", "yes", "YES", " yes "] {
             assert_eq!(quit_choice(answer), QuitChoice::Quit, "answer {answer:?}");
         }
@@ -3202,7 +3202,7 @@ mod tests {
         assert_eq!(pids_from_apple_script("missing value"), Vec::<u32>::new());
     }
 
-    /// The arguments of a command in the form the zsh script writes them.
+    /// The arguments of a command in the form the transcripts write them.
     ///
     /// A path argument is joined with the separator of the platform, so it is
     /// normalized to the POSIX form before it is compared with the transcript.
@@ -3218,7 +3218,7 @@ mod tests {
     }
 
     #[test]
-    fn command_transcripts_match_the_zsh_script() {
+    fn command_transcripts_are_as_expected() {
         let app = std::path::Path::new("/Applications/Firefox.app");
 
         assert_eq!(

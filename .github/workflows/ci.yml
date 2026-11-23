@@ -18,11 +18,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The zsh implementation and its deprecated sh wrapper are gone; this
-      # guard fails if the compatibility shim is ever reintroduced by accident.
-      - name: update-all.sh shim removed
-        run: test ! -e update-all.sh
-
       - name: Bash syntax (agentloop scripts)
         run: |
           bash -n run.sh

@@ -5,7 +5,7 @@
 
 ## Context
 
-PLAN.md Milestone 2 ports `update-all.sh` to the Rust workspace. The port
+PLAN.md Milestone 2 ports the original shell script to the Rust workspace. The port
 needs a small set of well-trodden crates for the cross-cutting concerns every
 step shares: command-line parsing, configuration, error handling, signal
 handling, executable lookup and progress output. Picking them now — before
@@ -58,7 +58,7 @@ everything that was stopped on interrupt" behaviour is built on it.
 
 ### Tool detection
 
-The zsh script uses `command -v`; `which` is the cross-platform equivalent —
+A shell script uses `command -v`; `which` is the cross-platform equivalent —
 it searches `PATH` (honouring Windows `PATHEXT`) and reports where a tool
 lives, which the step `detect()` methods and the planned `--doctor` need.
 
@@ -89,8 +89,8 @@ terminal output" item in Milestone 9), and honours `NO_COLOR`.
   search `PATH` and misses `PATHEXT` handling on Windows. Not chosen.
 - **`console` instead of `indicatif`** — lower-level styling only; no bars.
   Not chosen.
-- **No progress output (`eprintln`)** — loses the live status the zsh script
-  gives; `indicatif`'s plain mode is needed for CI anyway. Not chosen.
+- **No progress output (`eprintln`)** — loses the live status a shell
+  script gives; `indicatif`'s plain mode is needed for CI anyway. Not chosen.
 
 ## Consequences
 

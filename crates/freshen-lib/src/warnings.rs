@@ -1,4 +1,4 @@
-//! Non-fatal warnings ported from `update-all.sh`.
+//! Non-fatal warnings.
 //!
 //! These situations deserve a warning, not a failure: the upgrade goes ahead,
 //! but the user has to restart something afterwards or may lose work.
@@ -92,7 +92,7 @@ pub struct StaleToolProcess {
 }
 
 impl StaleToolProcess {
-    /// The indented line the zsh script prints for this process.
+    /// The indented line printed for this process.
     #[must_use]
     pub fn display_line(&self) -> String {
         format!(
@@ -1017,7 +1017,7 @@ not a process
     }
 
     #[test]
-    fn a_display_line_matches_the_zsh_format_and_truncates_at_eighty_characters() {
+    fn a_display_line_truncates_at_eighty_characters() {
         let process = StaleToolProcess {
             pid: 4242,
             parent: "LM Studio".to_owned(),

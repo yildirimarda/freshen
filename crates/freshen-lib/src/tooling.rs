@@ -1,7 +1,7 @@
 //! uv and mise steps.
 //!
-//! The zsh implementation updates uv's installed tools and prunes its cache,
-//! then self-updates mise unless Homebrew owns it, upgrades every mise-managed
+//! freshen updates uv's installed tools and prunes its cache, then self-updates
+//! mise unless Homebrew owns it, upgrades every mise-managed
 //! tool and prunes unused versions. The uv block also self-updates uv itself
 //! unless a system package manager owns the uv installation, so the package
 //! manager's own upgrade keeps uv current instead of `uv self update` fighting
@@ -12,7 +12,7 @@
 //!
 //! mise is skipped when it is installed through Homebrew because the formula
 //! upgrade already replaced it. `brew list --formula mise` is the same probe
-//! the zsh script uses; when Homebrew itself is missing the self-update runs.
+//! used here; when Homebrew itself is missing the self-update runs.
 
 use std::env;
 use std::fs;
@@ -50,7 +50,7 @@ impl UvStep {
     /// Upgrades the installed tools, honouring the package filter.
     ///
     /// Without a filter every outdated tool is upgraded in one command, which
-    /// is what the zsh script does. With a filter each selected tool is
+    /// is the default. With a filter each selected tool is
     /// upgraded on its own, so a tool that is not in the lists stays untouched.
     fn upgrade_tools(&self, options: &RunOptions, failures: &mut Vec<StepError>) {
         let filter = options.filters().packages();
@@ -210,7 +210,7 @@ impl MiseStep {
     /// Upgrades the installed tools, honouring the package filter.
     ///
     /// Without a filter every outdated tool is upgraded in one command, which
-    /// is what the zsh script does. With a filter each selected tool is
+    /// is the default. With a filter each selected tool is
     /// upgraded on its own, so a tool that is not in the lists stays untouched.
     ///
     /// With `--bump`, tools requested as `lts` or `latest` are pinned to a

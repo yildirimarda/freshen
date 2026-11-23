@@ -16,9 +16,6 @@
 #
 # Release signing (Milestone 11, later items) is deliberately out of scope.
 #
-# Apply this proposal:
-#   git mv ci-proposals/release-binaries.yml .github/workflows/release-binaries.yml
-#
 # It needs no repository secrets beyond the default GITHUB_TOKEN
 # (contents: write). Each git tag releases exactly once; re-running for an
 # already-released tag fails until that release is removed.
@@ -43,6 +40,7 @@ on:
 permissions:
   contents: write
   id-token: write
+  attestations: write
 
 concurrency:
   group: release-binaries-${{ github.ref }}
@@ -58,6 +56,8 @@ jobs:
         target: [aarch64-apple-darwin, x86_64-apple-darwin]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
 
       - name: Install Rust toolchain (rust-toolchain.toml)
         run: rustup show active-toolchain
@@ -71,7 +71,7 @@ jobs:
       - id: stage
         name: Stage the binary archive and its checksum
         env:
-          VERSION: ${{ github.inputs.tag || github.ref_name }}
+          VERSION: ${{ inputs.tag || github.ref_name }}
         run: |
           VERSION="${VERSION#v}"
           mkdir -p "dist/${{ matrix.target }}"
@@ -88,15 +88,28 @@ jobs:
           name: freshen-${{ matrix.target }}
           path: dist/${{ matrix.target }}/
 
+      - name: Generate the SBOM of the build inputs
+        if: ${{ !github.event.repository.private }}
+        uses: anchore/sbom-action@v0.20.0
+        with:
+          path: .
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
       - name: Generate SBOM attestation
+        if: ${{ !github.event.repository.private }}
         uses: actions/attest-sbom@v1
         with:
-          subject: dist/${{ matrix.target }}/freshen-${{ steps.stage.outputs.version }}-${{ matrix.target }}.tar.gz
+          subject-path: dist/${{ matrix.target }}/freshen-${{ steps.stage.outputs.version }}-${{ matrix.target }}.tar.gz
+          sbom-path: sbom.spdx.json
 
       - name: Generate provenance attestation
+        if: ${{ !github.event.repository.private }}
         uses: actions/attest-build-provenance@v1
         with:
-          subject: dist/${{ matrix.target }}/freshen-${{ steps.stage.outputs.version }}-${{ matrix.target }}.tar.gz
+          subject-path: dist/${{ matrix.target }}/freshen-${{ steps.stage.outputs.version }}-${{ matrix.target }}.tar.gz
 
   build-linux:
     name: build freshen for ${{ matrix.target }}
@@ -107,6 +120,8 @@ jobs:
         target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, x86_64-unknown-linux-musl, aarch64-unknown-linux-musl]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
 
       - name: Install Rust toolchain (rust-toolchain.toml)
         run: rustup show active-toolchain
@@ -132,7 +147,7 @@ jobs:
       - id: stage
         name: Stage the binary archive and its checksum
         env:
-          VERSION: ${{ github.inputs.tag || github.ref_name }}
+          VERSION: ${{ inputs.tag || github.ref_name }}
         run: |
           VERSION="${VERSION#v}"
           mkdir -p "dist/${{ matrix.target }}"
@@ -149,15 +164,28 @@ jobs:
           name: freshen-${{ matrix.target }}
           path: dist/${{ matrix.target }}/
 
+      - name: Generate the SBOM of the build inputs
+        if: ${{ !github.event.repository.private }}
+        uses: anchore/sbom-action@v0.20.0
+        with:
+          path: .
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
       - name: Generate SBOM attestation
+        if: ${{ !github.event.repository.private }}
         uses: actions/attest-sbom@v1
         with:
-          subject: dist/${{ matrix.target }}/freshen-${{ steps.stage.outputs.version }}-${{ matrix.target }}.tar.gz
+          subject-path: dist/${{ matrix.target }}/freshen-${{ steps.stage.outputs.version }}-${{ matrix.target }}.tar.gz
+          sbom-path: sbom.spdx.json
 
       - name: Generate provenance attestation
+        if: ${{ !github.event.repository.private }}
         uses: actions/attest-build-provenance@v1
         with:
-          subject: dist/${{ matrix.target }}/freshen-${{ steps.stage.outputs.version }}-${{ matrix.target }}.tar.gz
+          subject-path: dist/${{ matrix.target }}/freshen-${{ steps.stage.outputs.version }}-${{ matrix.target }}.tar.gz
 
   build-windows:
     name: build freshen for ${{ matrix.target }}
@@ -168,6 +196,8 @@ jobs:
         target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
 
       - name: Install Rust toolchain (rust-toolchain.toml)
         run: rustup show active-toolchain
@@ -182,7 +212,7 @@ jobs:
         name: Stage the binary archive and its checksum
         env:
           TARGET: ${{ matrix.target }}
-          VERSION: ${{ github.inputs.tag || github.ref_name }}
+          VERSION: ${{ inputs.tag || github.ref_name }}
         run: |
           $VERSION = "${env:VERSION}".TrimStart('v')
           New-Item -ItemType Directory -Force -Path "dist\$env:TARGET" | Out-Null
@@ -198,15 +228,28 @@ jobs:
           name: freshen-${{ matrix.target }}
           path: dist\${{ matrix.target }}\
 
+      - name: Generate the SBOM of the build inputs
+        if: ${{ !github.event.repository.private }}
+        uses: anchore/sbom-action@v0.20.0
+        with:
+          path: .
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
       - name: Generate SBOM attestation
+        if: ${{ !github.event.repository.private }}
         uses: actions/attest-sbom@v1
         with:
-          subject: dist/${{ matrix.target }}/freshen-${{ steps.stage.outputs.version }}-${{ matrix.target }}.zip
+          subject-path: dist/${{ matrix.target }}/freshen-${{ steps.stage.outputs.version }}-${{ matrix.target }}.zip
+          sbom-path: sbom.spdx.json
 
       - name: Generate provenance attestation
+        if: ${{ !github.event.repository.private }}
         uses: actions/attest-build-provenance@v1
         with:
-          subject: dist/${{ matrix.target }}/freshen-${{ steps.stage.outputs.version }}-${{ matrix.target }}.zip
+          subject-path: dist/${{ matrix.target }}/freshen-${{ steps.stage.outputs.version }}-${{ matrix.target }}.zip
 
   release:
     name: create GitHub Release and upload every binary archive
@@ -214,6 +257,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
 
       - name: Download every built archive
         uses: actions/download-artifact@v4
@@ -234,24 +279,19 @@ jobs:
             freshen-aarch64-pc-windows-msvc/freshen-*-aarch64-pc-windows-msvc.zip > checksums.txt
           cat checksums.txt
 
-      - name: Generate SBOM attestation for the checksums file
-        uses: actions/attest-sbom@v1
-        with:
-          subject: dist/checksums.txt
-
       - name: Generate provenance attestation for the checksums file
+        if: ${{ !github.event.repository.private }}
         uses: actions/attest-build-provenance@v1
         with:
-          subject: dist/checksums.txt
+          subject-path: dist/checksums.txt
 
       - name: Create the GitHub Release for this tag
         id: release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.inputs.tag || github.ref_name }}
-          name: freshen ${{ github.inputs.tag || github.ref_name }}
+          tag_name: ${{ inputs.tag || github.ref_name }}
           body: |
-            ## freshen ${{ github.inputs.tag || github.ref_name }}
+            ## freshen ${{ inputs.tag || github.ref_name }}
 
             Prebuilt binaries (installable with `cargo binstall freshen`):
 
@@ -267,6 +307,7 @@ jobs:
             Verify a download against `checksums.txt`:
 
                 sha256sum -c checksums.txt
+          append_body: true
           generate_release_notes: false
           make_latest: true
         env:
@@ -275,7 +316,7 @@ jobs:
       - name: Upload archives and checksums to the release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.inputs.tag || github.ref_name }}
+          tag_name: ${{ inputs.tag || github.ref_name }}
           files: |
             dist/freshen-aarch64-apple-darwin/freshen-*-aarch64-apple-darwin.tar.gz
             dist/freshen-x86_64-apple-darwin/freshen-*-x86_64-apple-darwin.tar.gz

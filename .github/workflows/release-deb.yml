@@ -4,9 +4,6 @@
 # The package installs freshen to /usr/bin/freshen (mode 0755, owned by root)
 # for amd64 and arm64, and is built with dpkg-deb on ubuntu-latest.
 #
-# Apply this proposal:
-#   git mv ci-proposals/release-deb.yml .github/workflows/release-deb.yml
-#
 # It needs no repository secrets beyond the default GITHUB_TOKEN
 # (contents: write).
 #
@@ -45,6 +42,8 @@ jobs:
         target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
 
       - name: Install Rust toolchain (rust-toolchain.toml)
         run: rustup show active-toolchain
@@ -64,7 +63,7 @@ jobs:
       - id: stage
         name: Stage the .deb package
         env:
-          VERSION: ${{ github.inputs.tag || github.ref_name }}
+          VERSION: ${{ inputs.tag || github.ref_name }}
         run: |
           VERSION="${VERSION#v}"
           case "${{ matrix.target }}" in
@@ -83,7 +82,7 @@ jobs:
           Section: utils
           Priority: optional
           Architecture: $DEB_ARCH
-          Maintainer: freshen <freshen@yildirimarda.com>
+          Maintainer: freshen contributors <yildirimarda@users.noreply.github.com>
           Depends:
           Description: Keep a developer machine up to date
            freshen updates Homebrew, apt, dnf, winget, Chocolatey, Scoop,
@@ -107,6 +106,8 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
 
       - name: Download every built .deb
         uses: actions/download-artifact@v4
@@ -115,7 +116,7 @@ jobs:
 
       - name: Resolve the tag
         id: tag
-        run: echo "tag=${{ github.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+        run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
       # release-binaries creates the release for this tag; both workflows start
       # on the same tag push and run concurrently, so wait for it to appear.

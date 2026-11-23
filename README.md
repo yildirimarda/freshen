@@ -232,18 +232,6 @@ The exit codes are part of the command-line contract and are stable across relea
 
 `--help` prints the same table. Scripts can rely on these values, for example `freshen --check || [ "$?" -eq 2 ]` to detect pending updates.
 
-## Migrating from update-all.sh
-
-The zsh implementation and its deprecated POSIX `sh` compatibility wrapper have been removed now that the Rust port reached parity, and `freshen` is the implementation. Existing aliases and scripts should call `freshen` directly; install it with `cargo install --path crates/freshen`, `nix run github:yildirimarda/freshen#freshen` (the flake lives in `flake.nix`), `brew install yildirimarda/homebrew-tap/freshen` (the formula lives in `Formula/freshen.rb` and is published to the `homebrew-tap` tap on the first release) or use a release binary.
-
-| Old | New |
-|---|---|
-| `./update-all.sh` | `freshen` |
-| `ASSUME_YES=1 ./update-all.sh` | `freshen --yes` |
-| `FORCE_KILL=1 ./update-all.sh` | `freshen --force-kill` |
-| `QUIT_TIMEOUT=40 ./update-all.sh` | `QUIT_TIMEOUT=40 freshen` |
-| `alias update-all=.../update-all.sh` | `alias update-all=freshen` |
-
 ## Safety notes
 
 - Run it while you are at the machine: it closes and reopens GUI apps.

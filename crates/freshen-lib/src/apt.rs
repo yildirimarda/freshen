@@ -1,8 +1,8 @@
 //! The apt step: `apt-get update` followed by `apt-get upgrade -y`, and
 //! `apt-get autoremove -y` plus `apt-get autoclean` when `--cleanup` is set.
 //!
-//! The zsh implementation runs `apt-get update` and `apt-get upgrade -y`
-//! whenever `apt-get` is available. The step is skipped entirely when apt is
+//! `apt-get update` and `apt-get upgrade -y` run whenever `apt-get` is
+//! available. The step is skipped entirely when apt is
 //! absent, so it is safe to register on every machine; on macOS and Windows
 //! it is never detected.
 

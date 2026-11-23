@@ -47,6 +47,16 @@ The agent can prepare workflows and manifests, but only you can create these:
 - [ ] An AUR account and SSH key for the PKGBUILD
 - [ ] `AUTOMERGE_TOKEN` repository secret (done) and its renewal date
 
+## First release
+
+The release workflows are applied; what is left is yours:
+
+- [ ] Merge the release pull request release-please opens (`gh pr list --search release`). Its first run proposes `0.1.0` (the manifest starts at `0.0.0`); it bumps `Cargo.toml`, the `freshen-lib` pin and `Cargo.lock` together, so `cargo build --locked` passes on it.
+- [ ] Tagging `v0.1.0` starts `release-binaries`, `release-deb`, `release-rpm`, `release-signing` and `release-crates-io`. The tag only triggers them because `AUTOMERGE_TOKEN` (a PAT) creates it; with the default token run them by hand: `gh workflow run release-binaries.yml -f tag=v0.1.0`.
+- [ ] Without the signing secrets the macOS and Windows binaries are released unsigned (a notice, not a failure); without `CARGO_REGISTRY_TOKEN` the crates.io publish is skipped. Add the secrets above, then re-run the workflow for the tag.
+- [ ] Attestations (SBOM and provenance) are skipped on a private repository; they need a public one.
+- [ ] If release-please fails with a GitHub "Unicorn!" HTML page, it is a transient API error: `gh run rerun --failed`.
+
 ## Reviews
 
 - [ ] Merge `plan`-labelled pull requests yourself (`gh pr list --label plan`)

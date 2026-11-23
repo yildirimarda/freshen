@@ -11,12 +11,11 @@
 # first; this workflow downloads them, signs them in place, and re-uploads
 # them over the unsigned assets (--clobber), then refreshes checksums.txt so
 # it matches the signed artifacts. Both workflows are triggered by the same
-# `v*` tag, so the signing jobs poll until the assets show up — nothing is
-# published unsigned, and if the signing credentials are missing the jobs
-# fail instead of silently shipping unsigned binaries.
+# `v*` tag, so the signing jobs poll until the assets show up.
 #
-# Apply this proposal:
-#   git mv ci-proposals/release-signing.yml .github/workflows/release-signing.yml
+# A platform whose signing secrets are not all set is skipped with a notice,
+# so a project without certificates still releases (unsigned) instead of
+# failing every tag. Once the secrets exist, the platform is signed.
 #
 # Repository secrets that only a human can create (see HUMAN-TASKS.md):
 #   APPLE_DEVELOPER_CERTIFICATE   base64-encoded Developer ID code-signing .p12
@@ -48,29 +47,73 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Decides per platform whether every secret it needs is present. Secrets
+  # cannot be read in a job-level `if`, so they are checked here.
+  check-secrets:
+    name: check the signing secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      macos: ${{ steps.check.outputs.macos }}
+      windows: ${{ steps.check.outputs.windows }}
+    steps:
+      - id: check
+        env:
+          APPLE_DEVELOPER_CERTIFICATE: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          WINDOWS_CODE_SIGNING_CERTIFICATE: ${{ secrets.WINDOWS_CODE_SIGNING_CERTIFICATE }}
+          WINDOWS_CODE_SIGNING_PASSWORD: ${{ secrets.WINDOWS_CODE_SIGNING_PASSWORD }}
+        run: |
+          if [ -n "$APPLE_DEVELOPER_CERTIFICATE" ] && [ -n "$APPLE_CERTIFICATE_PASSWORD" ] \
+            && [ -n "$APPLE_DEVELOPER_ID" ] && [ -n "$APPLE_ID" ] \
+            && [ -n "$APPLE_TEAM_ID" ] && [ -n "$APPLE_APP_SPECIFIC_PASSWORD" ]; then
+            echo "macos=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "macos=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::the Apple signing secrets are not all set; macOS binaries stay unsigned"
+          fi
+          if [ -n "$WINDOWS_CODE_SIGNING_CERTIFICATE" ] && [ -n "$WINDOWS_CODE_SIGNING_PASSWORD" ]; then
+            echo "windows=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "windows=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::the Windows signing secrets are not all set; Windows binaries stay unsigned"
+          fi
+
   sign-macos:
     name: sign and notarize macOS binaries
+    needs: check-secrets
+    if: needs.check-secrets.outputs.macos == 'true'
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
 
       - name: Resolve the tag to sign
         id: tag
-        run: echo "tag=${{ github.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+        run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
       # release-binaries creates the release and uploads the archives; wait
-      # for both to appear before downloading (the same tag push starts both
+      # until both macOS archives are there (the same tag push starts both
       # workflows and they run concurrently).
       - name: Wait for and download the unsigned macOS archives
         run: |
           tag="${{ steps.tag.outputs.tag }}"
           ok=0
           for i in $(seq 1 60); do
-            if gh release download "$tag" \
+            rm -rf dist/macos
+            gh release download "$tag" \
               -p 'freshen-*-aarch64-apple-darwin.tar.gz' \
               -p 'freshen-*-x86_64-apple-darwin.tar.gz' \
-              -D dist/macos 2>/dev/null; then
+              -D dist/macos 2>/dev/null || true
+            if [ "$(ls dist/macos/freshen-*.tar.gz 2>/dev/null | wc -l | tr -d ' ')" -ge 2 ]; then
               ok=1; break
             fi
             sleep 20
@@ -78,16 +121,27 @@ jobs:
           [ "$ok" = 1 ] || { echo "::error::macOS release assets for $tag never appeared (is release-binaries applied?)" >&2; exit 1; }
 
       - name: Import the Apple Developer ID certificate into a keychain
+        env:
+          APPLE_DEVELOPER_CERTIFICATE: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
-          printf '%s' "${{ secrets.APPLE_DEVELOPER_CERTIFICATE }}" | base64 -D > dist/macos/cert.p12
+          printf '%s' "$APPLE_DEVELOPER_CERTIFICATE" | base64 -D > dist/macos/cert.p12
           security create-keychain -p "" build.keychain
           security default-keychain -s build.keychain
           security unlock-keychain -p "" build.keychain
           security import dist/macos/cert.p12 -k build.keychain \
-              -P "${{ secrets.APPLE_CERTIFICATE_PASSWORD }}" -T /usr/bin/codesign
+              -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
+          rm -f dist/macos/cert.p12
 
-      - name: Code sign the macOS binaries (hardened runtime, timestamped)
+      # Notarization takes a zip, pkg or dmg, not a tar.gz: sign the binary,
+      # submit it zipped, and put the signed binary back into the archive.
+      - name: Code sign and notarize the macOS binaries
+        env:
+          APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
           cat > dist/macos/entitlements.plist <<'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
@@ -102,60 +156,62 @@ jobs:
           </plist>
           EOF
           for archive in dist/macos/freshen-*-*.tar.gz; do
-            dir="$(dirname "$archive")/signed"
+            dir="dist/macos/signed-$(basename "$archive" .tar.gz)"
             rm -rf "$dir"; mkdir -p "$dir"
             tar -xzf "$archive" -C "$dir"
-            codesign --sign "${{ secrets.APPLE_DEVELOPER_ID }}" \
+            codesign --sign "$APPLE_DEVELOPER_ID" \
                 --entitlements dist/macos/entitlements.plist \
                 --options runtime --timestamp -v "$dir/freshen"
-            tar -czf "$archive" -C "$dir" freshen
-          done
-
-      - name: Notarize the macOS archives with Apple notarytool
-        run: |
-          for archive in dist/macos/freshen-*-*.tar.gz; do
-            xcrun notarytool submit "$archive" \
-              --apple-id "${{ secrets.APPLE_ID }}" \
-              --team-id "${{ secrets.APPLE_TEAM_ID }}" \
-              --password "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}" \
+            ditto -c -k --keepParent "$dir/freshen" "$dir/freshen.zip"
+            xcrun notarytool submit "$dir/freshen.zip" \
+              --apple-id "$APPLE_ID" \
+              --team-id "$APPLE_TEAM_ID" \
+              --password "$APPLE_APP_SPECIFIC_PASSWORD" \
               --wait
+            tar -czf "$archive" -C "$dir" freshen
           done
 
       - name: Upload the signed macOS archives over the unsigned assets
         run: |
           gh release upload "${{ steps.tag.outputs.tag }}" \
             dist/macos/freshen-*-*.tar.gz --clobber
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   sign-windows:
     name: sign Windows binaries
+    needs: check-secrets
+    if: needs.check-secrets.outputs.windows == 'true'
     runs-on: windows-latest
     timeout-minutes: 30
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     defaults:
       run:
         shell: pwsh
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
 
       - name: Resolve the tag to sign
         id: tag
         run: |
-          $tag = "${{ github.inputs.tag || github.ref_name }}"
-          echo "tag=$tag" >> $env:GITHUB_OUTPUT
+          $tag = "${{ inputs.tag || github.ref_name }}"
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      # Same concurrency as the macOS job: download retries until the
+      # Same concurrency as the macOS job: download retries until both
       # release-binaries archives exist for this tag.
       - name: Wait for and download the unsigned Windows archives
         run: |
           $tag = "${{ steps.tag.outputs.tag }}"
           $ok = $false
           for ($i = 1; $i -le 60; $i++) {
+            if (Test-Path dist\windows) { Remove-Item -Recurse -Force dist\windows }
             gh release download $tag `
               -p 'freshen-*-x86_64-pc-windows-msvc.zip' `
               -p 'freshen-*-aarch64-pc-windows-msvc.zip' `
               -D dist\windows 2>$null
-            if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+            $found = @(Get-ChildItem dist\windows\freshen-*.zip -ErrorAction SilentlyContinue).Count
+            if ($found -ge 2) { $ok = $true; break }
             Start-Sleep -Seconds 20
           }
           if (-not $ok) { throw "Windows release assets for $tag never appeared (is release-binaries applied?)" }
@@ -167,49 +223,48 @@ jobs:
           $bytes = [Convert]::FromBase64String($env:WINDOWS_CODE_SIGNING_CERTIFICATE)
           [IO.File]::WriteAllBytes("dist\windows\cert.pfx", $bytes)
 
+      # signtool ships with the Windows SDK but is not on PATH on the runner.
       - name: Sign the Windows binaries with signtool (timestamped)
         env:
           WINDOWS_CODE_SIGNING_PASSWORD: ${{ secrets.WINDOWS_CODE_SIGNING_PASSWORD }}
         run: |
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw "signtool.exe was not found in the Windows SDK" }
           Get-ChildItem dist\windows\freshen-*.zip | ForEach-Object {
             $dir = Join-Path $_.DirectoryName $_.BaseName
             Expand-Archive -Path $_.FullName -DestinationPath $dir -Force
-            signtool sign /f dist\windows\cert.pfx `
+            & $signtool.FullName sign /f dist\windows\cert.pfx `
               /p $env:WINDOWS_CODE_SIGNING_PASSWORD `
               /tr http://timestamp.digicert.com /td SHA256 /fd SHA256 /v `
               (Join-Path $dir freshen.exe)
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed for $($_.Name)" }
             Compress-Archive -Path (Join-Path $dir '*') -DestinationPath $_.FullName -Force
           }
+          Remove-Item -Force dist\windows\cert.pfx
 
       - name: Upload the signed Windows archives over the unsigned assets
         run: |
           $tag = "${{ steps.tag.outputs.tag }}"
-          gh release upload $tag dist\windows\freshen-*.zip --clobber
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          gh release upload $tag (Get-ChildItem dist\windows\freshen-*.zip).FullName --clobber
 
   finalize:
     name: refresh checksums.txt for the signed artifacts
-    needs: [sign-macos, sign-windows]
+    needs: [check-secrets, sign-macos, sign-windows]
+    # Only when something was signed; a skipped signing job is not a failure.
+    if: ${{ !cancelled() && !failure() && (needs.check-secrets.outputs.macos == 'true' || needs.check-secrets.outputs.windows == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
 
       - name: Resolve the tag
         id: tag
-        run: echo "tag=${{ github.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
-
-      - name: Wait for the signed release assets
-        run: |
-          tag="${{ steps.tag.outputs.tag }}"
-          for i in $(seq 1 60); do
-            count="$(gh release view "$tag" --json assets --jq '.assets | length' 2>/dev/null || echo 0)"
-            [ "${count:-0}" -gt 0 ] 2>/dev/null && exit 0
-            sleep 20
-          done
-          echo "::error::no release assets found for $tag" >&2
-          exit 1
+        run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
       - name: Download all release assets
         run: |
@@ -230,5 +285,3 @@ jobs:
 
       - name: Upload checksums.txt over the stale unsigned one
         run: gh release upload "${{ steps.tag.outputs.tag }}" dist/checksums.txt --clobber
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -22,31 +22,6 @@ workflow_path() {
   return 1
 }
 
-# 1. The legacy zsh implementation and its deprecated sh compatibility shim
-#    are gone.
-if [[ ! -e update-all.sh ]]; then
-  ok "update-all.sh compatibility shim removed"
-else
-  bad "update-all.sh compatibility shim is still present"
-fi
-
-# 2. The migration is documented where users look for it, and the docs no
-#    longer promise that the removed shim is still available.
-if grep -q '^## Migrating from update-all.sh' README.md && grep -q 'freshen' README.md; then
-  if grep -q 'remains as a deprecated' README.md; then
-    bad "README.md still advertises the removed update-all.sh shim"
-  else
-    ok "README.md documents the migration to freshen"
-  fi
-else
-  bad "README.md is missing the update-all.sh migration section"
-fi
-if grep -q '^## \[Unreleased\]' CHANGELOG.md && grep -qi 'zsh implementation' CHANGELOG.md && grep -qi 'compatibility shim' CHANGELOG.md; then
-  ok "CHANGELOG.md records the zsh and shim removal"
-else
-  bad "CHANGELOG.md is missing the zsh/shim removal entry"
-fi
-
 # 3. PLAN.md format: lines that look like tasks must match the exact format
 if [[ -f PLAN.md ]]; then
   malformed="$(grep -nE '^[[:space:]]*-[[:space:]]*\[' PLAN.md | grep -vE '^[0-9]+:- \[( |x)\] .+' || true)"
@@ -123,19 +98,6 @@ if [[ -f Cargo.toml && -n "$rust_file" ]]; then
   grep -q 'steps.msrv.outputs.version' "$rust_file" || { echo "  msrv job does not use the manifest value"; msrv_ok=0; }
   grep -q 'cargo +.*check --workspace --all-targets' "$rust_file" || { echo "  msrv job does not run cargo check --workspace --all-targets"; msrv_ok=0; }
   if (( msrv_ok )); then ok "$rust_file MSRV job (rust-version -> cargo check --workspace --all-targets)"; else bad "$rust_file missing an MSRV check job"; fi
-fi
-
-# 7. CI replaces the old zsh syntax step with a guard that the compatibility
-#    shim stays removed. Check the proposal until a human applies it, then the
-#    active workflow.
-ci_file="$(workflow_path ci)"
-if [[ -n "$ci_file" ]]; then
-  ci_ok=1
-  grep -q 'test ! -e update-all.sh' "$ci_file" || { echo "  no shim-removal guard"; ci_ok=0; }
-  if grep -qE 'zsh -n|Zsh syntax' "$ci_file"; then echo "  still runs a zsh syntax check"; ci_ok=0; fi
-  if (( ci_ok )); then ok "$ci_file checks that the update-all.sh shim is gone"; else bad "$ci_file does not replace the zsh syntax step with a shim check"; fi
-else
-  bad "no CI workflow proposal or active workflow found"
 fi
 
 # 8. The real-tools workflow runs freshen's read-only modes against the real
@@ -287,6 +249,56 @@ if crates_file="$(workflow_path release-crates-io)"; then
   fi
 else
   bad "no release-crates-io workflow in ci-proposals/ or .github/workflows/"
+fi
+
+# 13b. release-please keeps the version in step everywhere it is written. Its
+#      config must list every file that carries the version, and those files
+#      must agree today: a release PR that bumps Cargo.toml but not Cargo.lock
+#      fails `cargo build --locked` (the same trap as a stale uv.lock).
+if [[ -f release-please-config.json && -f .release-please-manifest.json ]]; then
+  if python3 - <<'PYEOF'
+import json, re, sys
+
+def toml_version(path, pattern):
+    match = re.search(pattern, open(path).read(), re.MULTILINE | re.DOTALL)
+    return match.group(1) if match else None
+
+config = json.load(open("release-please-config.json"))
+paths = []
+for entry in config["packages"]["."]["extra-files"]:
+    paths.append(entry if isinstance(entry, str) else entry["path"])
+errors = []
+for needed in ("Cargo.toml", "Cargo.lock", "crates/freshen/Cargo.toml"):
+    if needed not in paths:
+        errors.append(f"release-please-config.json does not list {needed}")
+
+versions = {
+    "Cargo.toml [workspace.package]": toml_version(
+        "Cargo.toml", r'\[workspace\.package\][^\[]*?^version = "([^"]+)"'),
+    "Cargo.lock freshen": toml_version(
+        "Cargo.lock", r'^name = "freshen"\nversion = "([^"]+)"'),
+    "Cargo.lock freshen-lib": toml_version(
+        "Cargo.lock", r'^name = "freshen-lib"\nversion = "([^"]+)"'),
+    "freshen-lib pin": toml_version(
+        "crates/freshen/Cargo.toml",
+        r'^freshen-lib = \{[^}]*version = "=([^"]+)"\s*\} # x-release-please-version'),
+}
+for name, value in versions.items():
+    if value is None:
+        errors.append(f"could not read the version of {name}")
+if len({v for v in versions.values() if v}) > 1:
+    errors.append(f"versions disagree: {versions}")
+for error in errors:
+    print(f"  {error}")
+sys.exit(1 if errors else 0)
+PYEOF
+  then
+    ok "release-please config lists every file with the version, and the versions agree"
+  else
+    bad "release-please config or the versions it manages are out of step"
+  fi
+else
+  bad "release-please-config.json or .release-please-manifest.json is missing"
 fi
 
 # 14. The AUR PKGBUILD exists, passes a bash syntax check, and declares the

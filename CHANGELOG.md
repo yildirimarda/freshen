@@ -8,12 +8,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Managed by release-please from Conventional Commits. Do not edit by hand. -->
 
 ## [Unreleased]
-
-### Changed
-
-- The Rust `freshen` binary is now the implementation; the zsh script has been retired.
-
-### Removed
-
-- The zsh implementation of the update steps. Use `freshen`; see the migration section in the README.
-- The deprecated `update-all.sh` compatibility shim.

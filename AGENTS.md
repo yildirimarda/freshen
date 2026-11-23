@@ -200,14 +200,14 @@ Leave the `PLAN.md` checkbox unchecked. Then stop.
 
 ## Project reference
 
-freshen keeps a developer machine up to date (package managers, language toolchains, containers) on macOS, Linux and Windows. The implementation is the Rust workspace under `crates/` (`freshen-lib` holds all logic, the `freshen` binary is a thin CLI wrapper); the zsh implementation and the deprecated `update-all.sh` shim have been removed.
+freshen keeps a developer machine up to date (package managers, language toolchains, containers) on macOS, Linux and Windows. The implementation is the Rust workspace under `crates/` (`freshen-lib` holds all logic, the `freshen` binary is a thin CLI wrapper).
 
 - Language:     Rust; toolchain pinned by `rust-toolchain.toml`, MSRV in `[workspace.package] rust-version`
 - Format:       `cargo fmt --all -- --check`
 - Lint:         `cargo clippy --all-targets --all-features -- -D warnings`
 - Tests:        `cargo test --all-features`
 - Windows lint: `cargo clippy --target x86_64-pc-windows-gnu --all-targets --all-features -- -D warnings` compiles the Windows-only code and tests from this Linux sandbox and fails on exactly what `windows-latest` fails on at compile time (unused imports, dead code, type errors, missing `cfg` guards). Run it before every push that touches platform-specific code, tests or helpers. It cannot RUN the tests: Windows-only runtime behaviour (`.cmd` stubs, `\r\n`) is only verified by the CI. If it reports a `ring`/C compiler error, say so in the PR instead of skipping it silently. There is no equivalent for macOS (its C dependencies need the Apple SDK): rely on the Unix lint above and on the CI
-- Repository checks: `bash tests/run-tests.sh` (also checks that the removed `update-all.sh` shim stays gone); tests in `tests/` use stub executables on PATH
+- Repository checks: `bash tests/run-tests.sh`; tests in `tests/` use stub executables on PATH
 - Layout:       library crate holds all logic, the binary crate is a thin CLI wrapper; one module per step
 - Style:        no `unwrap()`/`expect()` outside tests, errors via `thiserror`/`anyhow`, English comments and messages
 - Cross-platform: any OS-specific code lives behind `#[cfg(target_os = ...)]` in an OS abstraction module; every step declares the platforms it supports

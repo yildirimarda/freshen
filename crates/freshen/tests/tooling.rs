@@ -1,8 +1,8 @@
 //! Parity tests for the uv and mise steps.
 //!
 //! Every test runs the built binary against stub `uv`, `mise` and `brew`
-//! executables and asserts the exact command transcript of the corresponding
-//! block in `update-all.sh`. No real tool is touched.
+//! executables and asserts the exact command transcript. No real tool is
+//! touched.
 
 #![cfg(feature = "test-harness")]
 

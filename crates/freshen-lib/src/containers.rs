@@ -1,16 +1,16 @@
 //! Colima/lima and Docker orchestration.
 //!
-//! The zsh implementation stops the container runtime before Homebrew upgrades
-//! `colima` or `lima`, then starts it again and brings the containers that were
-//! running back up. Afterwards it pulls newer images for every running compose
-//! project and prunes dangling images.
+//! freshen stops the container runtime before Homebrew upgrades `colima` or
+//! `lima`, then starts it again and brings the containers that were running
+//! back up. Afterwards it pulls newer images for every running compose project
+//! and prunes dangling images.
 //!
-//! The port keeps that behaviour in three steps so the runner can record a
-//! failure per step: [`COLIMA_STOP`] runs before the formula upgrade,
+//! That behaviour is split into three steps so the runner can record a failure
+//! per step: [`COLIMA_STOP`] runs before the formula upgrade,
 //! [`COLIMA_START`] runs right after it, and [`DOCKER`] runs after the Homebrew
 //! block. The snapshot of what was stopped is shared between the first two
-//! steps, exactly like `colima_was_running`, `compose_projects` and
-//! `standalone_containers` in `update-all.sh`.
+//! steps: whether colima was running, the compose projects and the standalone
+//! containers.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -42,8 +42,7 @@ pub const DOCKER: StepId = "docker";
 
 const CONTAINER_PLATFORMS: [Platform; 2] = [Platform::Macos, Platform::Linux];
 
-/// The `docker ps --format` argument, with the literal tabs the zsh script
-/// produces with `$'...'`.
+/// The `docker ps --format` argument, with the literal tabs.
 /// Format of `docker ps` output used to list containers.
 ///
 /// The fourth tab-separated field carries the image the container was running,
@@ -2304,8 +2303,8 @@ impl StandaloneContainer {
 
 /// Parses `docker compose ls --format json`.
 ///
-/// Invalid JSON and malformed entries yield an empty list, matching the zsh
-/// parser, which silently ignores a failed `docker compose ls` or bad JSON.
+/// Invalid JSON and malformed entries yield an empty list: a failed `docker compose ls` or bad JSON is
+/// silently ignored.
 #[must_use]
 pub fn parse_compose_projects(json: &str) -> Vec<ComposeProject> {
     let Ok(value) = serde_json::from_str::<Value>(json) else {
@@ -2357,8 +2356,7 @@ fn parse_labels(labels: Option<&Value>) -> Vec<String> {
 /// containers.
 ///
 /// Rows whose compose-project label is non-empty are managed by compose and
-/// are left out, exactly like the `awk -F'\t' '$3 == ""'` filter in the zsh
-/// script. The fourth field, when present, is the image the container was
+/// are left out. The fourth field, when present, is the image the container was
 /// running (`repository@digest` when known).
 #[must_use]
 pub fn parse_standalone_containers(output: &str) -> Vec<StandaloneContainer> {
@@ -3756,7 +3754,7 @@ mod tests {
     }
 
     #[test]
-    fn docker_compose_commands_match_the_zsh_transcript() {
+    fn docker_compose_commands_match_the_expected_transcript() {
         let project = ComposeProject::new("web", ["/srv/web/compose.yml", "/srv/web/override.yml"]);
 
         assert_eq!(
@@ -3918,7 +3916,7 @@ mod tests {
     }
 
     #[test]
-    fn ps_format_contains_the_tabs_the_zsh_script_uses() {
+    fn ps_format_contains_literal_tabs() {
         assert_eq!(
             PS_FORMAT,
             "{{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.project\"}}\t{{.Image}}"
